@@ -1,0 +1,98 @@
+ND Dam Hazard Classification Helper - changes in 2.5.1
+
+2.5.1 - GDAL fix, Dmax / Vmax only, ND addresses habitable, Data & Output tab.
+
+FIX
+  * Imports (DSS-WISE, HEC-RAS plan) and other GDAL steps stopped with
+    "Cannot call gdal.DontUseExceptions() at that point since the stack of
+    error handlers is: ogr gdal" on GDAL 3.7+. helpers.gdal_exceptions()
+    switched gdal then ogr on and switched them off in the same order; GDAL
+    keeps the handlers on a stack, so they are now undone last-in first-out
+    (ExitStack), only modules that were off are switched, and a failure to
+    restore is logged instead of raised.
+  * Self-test: "Processing provider loads 4 algorithms" failed since 2.5.0
+    added the HEC-RAS plan algorithm - it now expects 5.
+
+ACER ZONES: DMAX / VMAX ONLY
+  * hazard.choose_method() always returns max depth with max velocity; the
+    dialog, Main Consolidation, the classification and the Processing
+    algorithms no longer offer the D x V bound or time-step methods.
+  * The D x V raster (Setup tab, optional) is still used for flood severity
+    in the loss-of-life estimate.
+  * Velocity is required unless the 1D (depth-only) criterion is chosen.
+    A run without a velocity raster uses the 1D criterion (noted in the
+    summary) instead of ACER at velocity 0; a DSS-WISE package without a
+    velocity raster is imported as 1D; batch runs use 1D without Vmax.
+
+HAZARD CLASSIFICATION TAB
+  * "2. Hydraulics" removed: ACER method, no-breach baseline, incremental
+    depth and the scenario table. The breach model (2D / 1D) moved to the
+    Setup & Run tab. The DSS-WISE / HEC-RAS "Add as a breach scenario"
+    options are gone. (The Processing classification still takes a
+    no-breach baseline.)
+  * Groups: 1 Criteria, 2 Report, 3 Consequences, 4 Emergency Action Plan
+    outputs. "Show advanced options" (top of the tab) shows Criteria,
+    Consequences and EAP outputs; their defaults apply while hidden.
+
+STRUCTURES
+  * A structure with an ND GIS Hub site / structure address is habitable,
+    ACER type "Habitable" (house-on-foundation curve, TM 11 Fig. 2). A
+    manufactured-home source (NSI RES2, Place_Type Mobile Home ...) keeps
+    "Mobile home" (Fig. 3, the stricter curve). When the Place_Type or the
+    other sources say otherwise (Parking, Vacant, a barn outline), the note
+    says so and the structure is listed on the Review tab. Structures without
+    an ND address follow the earlier rules. An engineer's decision still wins.
+  * FEMA_Category - FEMA USA Structures OCC_CLS / PRIM_OCC, else the NSI
+    Hazus occupancy class (e.g. "RES1 Single family dwelling") - replaces the
+    Category column in Habitable_Structures, Structure_Sample_Points,
+    Inventory_QA.csv, Access_Cut_Off, the EAP notification list, the PDF
+    report and the map tip. It is for reference only.
+  * Review tab: FEMA category, Habitable (now), ACER type (now); "Set
+    habitable" (Habitable - dwelling / occupied non-residential, Unverified,
+    Not habitable) and "Set ACER type" (Habitable, House on foundation,
+    Mobile home). Decision files written by earlier versions still apply.
+
+DATA & OUTPUT TAB (first tab)
+  * 1 Output options (from the Setup tab), 2 Download area, 3 Structures,
+    4 Roads / rail / crossings, 5 Dams / lifelines / other layers, 6 Channel
+    (EAP travel-time table). One set of choices drives Main Consolidation,
+    the classification and "Download data now" (the Setup tab's separate
+    NSI / FEMA download boxes are merged into these).
+  * "Download data now" (and Run everything, when ticked) saves each data
+    set to outputs/Data/<Dam>_<data>.gpkg with Downloaded_Data.csv, in a
+    "Downloaded data" layer group. Area: the study area (depth raster
+    extent + buffer), or the flooded area (wet depth cells + flood buffer)
+    for structures, facilities, dams and towns - roads, rail and NHD
+    flowlines keep the study area. The downloads share the dated cache in
+    outputs/_downloads, so nothing is fetched twice in a day.
+  * Layers saved in outputs/Data are never auto-detected as inputs (they may
+    be limited to the flood); pick one by name in a list to use it.
+  * "Edit data sources..." on this tab: point a download at a work-server
+    service with the same layer.
+
+REVIEW FIXES (before release)
+  * Only an ND GIS Hub address point that carries an address makes a
+    structure habitable. A building-footprint layer that happens to have a
+    NENA-like field (ST_NAME, PLACEMENT ...) no longer turns every shed into
+    a dwelling, and an ND point with blank address fields does not count.
+  * An ND-addressed building read as occupied (church, business) without NSI
+    population gets one dwelling's persons (TM 11) instead of 0, noted
+    "verify".
+  * Run everything: a failure while saving the data sets to outputs/Data is
+    logged and the run continues (the runs download what they need).
+  * Download data now needs only the depth raster (no velocity in 2D mode).
+  * A data set that cannot be saved is reported in Downloaded_Data.csv and
+    the others are still saved.
+  * Flooded-area downloads: the flood buffer reaches past the raster edge
+    (features just outside a wet edge are kept).
+  * outputs/Data is marked when created, so layers of a download that stopped
+    part-way are never auto-detected as inputs.
+  * Bridges / lifelines merged layer: empty names are blank, not "NULL".
+  * Changes_Since_Last_Run.csv: a structure category change is its own row
+    (was "Habitable: Yes -> Yes").
+
+UPGRADE NOTES
+  * Saved settings from 2.5.0 for the old Setup-tab NSI / FEMA download boxes
+    are not carried over - check the Structures group on the Data & Output
+    tab. A saved no-breach baseline or extra breach scenarios no longer apply
+    in the dialog (the Processing classification still takes a baseline).

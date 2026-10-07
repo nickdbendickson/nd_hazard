@@ -1,0 +1,102 @@
+ND Dam Hazard Classification Helper 2.6.2
+=========================================
+
+2.6.1 was released twice, from two separate lines of work: the offline
+data pack, and the fix for QGIS freezing during downloads. 2.6.2 contains
+both (CHANGES_2.6.1.txt, parts A and B), plus the fixes and improvements
+below.
+
+OFFLINE DATA PACK - FIXES (found by a review of the 2.6.1 pack code)
+  1. A data set with features that could not be read was stored as
+     "complete", and the plugin used it without a warning - a study area
+     inside a failed NSI tile or ArcGIS chunk could get no structures or
+     dams at all. Now:
+       * ArcGIS features that could not be read make the data set
+         "partial" (more than 1 % missing: it fails and is retried by the
+         next build). A partial data set is used only when the service
+         cannot be reached (or offline only), always with a warning.
+       * NSI tiles that could not be read are recorded as gaps; a study
+         area touching one is not covered by the pack (the service is
+         asked first; offline only: the pack with a warning).
+       * The pack's note for a data set is logged when it is used; the
+         builder's summary, the pack README, Check inputs and the Data &
+         Output tab list incomplete data sets.
+     Packs built with 2.6.1 are still read (they have no gaps recorded).
+  2. The builder turned a service outage into a request storm (every half
+     of a failing chunk retried five times with back-off - days for one
+     chunk) and did not stop on Cancel. Now the halves are tried once, 12
+     failed requests in a row end the data set as "service stopped
+     answering", there is no back-off after the last try, and Cancel
+     stops every worker at its next request.
+  3. NID: when the pack held only part of the study area and the USACE
+     service failed, the pack was used and the Esri mirror never tried.
+     Both services are now tried first; then the pack; then an earlier
+     download.
+  4. Building a pack from inside QGIS cleared the plugin's data-source
+     overrides (it applied the data-source file a second time). It is
+     applied only when the builder runs as a script.
+  5. A pack build takes an hour or more; opening another project meanwhile
+     dropped its end message ("Use this pack?", missing data sets). The
+     build is no longer tied to the project.
+  6. Check inputs unpacked a zip pack on the main thread - QGIS froze while
+     a large pack was extracted. It now reads the pack's manifest only.
+  7. A "#" or "%" in the pack's path cut the database path short (and left
+     an empty file); a pack whose database had gone could be recreated
+     empty. The database is opened with a proper read-only file URI, never
+     read-write.
+     Packs on a network share (\\server\share\...) open too.
+  8. Builder: a data set is fetched into a staging table and swapped in
+     only when it is finished - a failed or interrupted re-fetch keeps the
+     data set that was in the pack (it used to be deleted). NID: when the
+     USACE download is incomplete and the mirror fails, the incomplete
+     download is kept. A resumed build fetches again what is partial or has
+     gaps (it used to count NSI with gaps as done).
+  Also: files read from the pack are written atomically (under their own
+  name when the usual file is open elsewhere); an unpacked copy deleted
+  meanwhile is unpacked again instead of failing until QGIS is restarted.
+
+PERFORMANCE
+  * Roads and railroads (overtopped stretches) and the sole-access road
+    network: the depth of many lines is read from the raster in one call,
+    velocity and arrival once for all wet stretches - instead of one read
+    per line and per stretch. The same cells and values (checked against
+    2.6.0 on random networks, with and without splitting into batches).
+    In the test harness: 27,464 raster reads -> 3, about 6.6x faster.
+    Rasters read through the QGIS provider (not GDAL) keep one read per
+    line. Lines are handed on every 500 lines, so progress and Cancel keep
+    working during the road / rail analysis.
+  * The ACER zone rasters and the EAP arrival bands / contours are re-used
+    when an earlier run made them from the same rasters with this plugin
+    version and they are unchanged (outputs/Classification/_products.json,
+    outputs/EAP/_products.json). A review or settings re-run no longer
+    repeats those whole-raster passes. Changing a raster (for a VRT: also
+    any file it reads), deleting or editing a product, or updating the
+    plugin makes them again; a product that had to be written under another
+    name (the file was open) is never re-used.
+  * Saved review decisions are matched to the structures through a grid
+    (the same matches as before, ties included) instead of every structure
+    against every decision.
+
+STABILITY / DIAGNOSTICS
+  * The run log ends with TIMINGS: seconds per stage (downloads, inventory,
+    per scenario: facilities, structure sampling, roads, sole access,
+    railroads; stage B: review, classification, outputs, zone rasters, EAP,
+    summary, map book, report).
+  * Download thread pools (2.6.1 freeze fix) are cleaned up under a lock.
+    Unloading the plugin waits at most 15 s for requests of a cancelled
+    run (one waiting for a password / certificate prompt would otherwise
+    hang QGIS); a pool still busy is left to finish on its own, never
+    destroyed while running.
+  * A hand-edited review decisions file with an unreadable coordinate no
+    longer stops the matching.
+
+REVIEWS
+  Two independent reviews: of the 2.6.1 offline-pack code (items 1-7) and
+  of the whole 2.6.2 change set (item 8, the network-share path, progress
+  during road analysis, re-use of redirected products, the unload wait).
+
+TESTS
+  Test harness: 354 tests pass (298 in 2.6.0). New: the Qt thread-pool
+  rules (freeze fix), the offline-pack fixes, re-use of raster products,
+  run-log timings, and equivalence of the batched sampling and the review
+  matching with 2.6.0. Not yet run in a real QGIS.

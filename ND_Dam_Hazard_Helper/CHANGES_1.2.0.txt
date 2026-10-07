@@ -1,0 +1,78 @@
+ND Dam Hazard Classification Helper - 1.2.0 (performance and stability)
+=======================================================================
+
+ERRORS FOUND IN 1.1.0 AND FIXED
+1. Edge-buffer zones never worked. compute_edge_buffer_hazard() passed a
+   QgsGeometry to QgsCoordinateTransform.transform() (no such overload) and
+   gave changeAttributeValues() field NAMES instead of field INDICES. Every
+   outline logged a warning, the update raised, and
+   All_Consolidated_DepthVelocityArrival was always skipped.
+2. Point layers in a different CRS from the depth raster: the spatial filter
+   rectangle was transformed in the wrong direction (raster extent treated
+   as point-layer coordinates), so the run failed with a transform error or
+   matched nothing.
+3. Several layers in one group (or several groups in All_Consolidated) with
+   different CRSs were merged without reprojecting geometries, and sampled
+   with the first layer's transform.
+4. The sampling buffer labelled "ft" was applied in raster units (25 ft
+   became 25 m on a metre-based raster).
+5. POI Consolidation raised KeyError 'depth' if Main Consolidation had not
+   been run in the current session.
+6. Layer-name matching: "poi" matched "Points", "nsi" matched "Density" /
+   "Transit", "fema" matched "Female", and the plugin's own *_Consolidated
+   outputs were re-consolidated on a second run (duplicates).
+7. Merging layers whose fields differ only by case (Name/NAME) made the
+   GPKG/XLSX export fail; fields with the same name but different type or
+   a shorter text length silently dropped features.
+8. Qgis.Debug (used in the sampling error handler) does not exist in QGIS,
+   so any sampling error raised AttributeError instead of being logged.
+9. processing.py called gdal.UseExceptions() at import, changing GDAL
+   behaviour for QGIS and every other plugin for the whole session.
+10. Hazard rasters: a grid with no valid cells failed the whole run
+    (ComputeStatistics raised).
+11. Re-runs: output files still open in the project were deleted under the
+    open layer (or failed on Windows) and layers were added again
+    (duplicates). If the POI layer in the project WAS the outputs POI file,
+    it was deleted and re-written from itself.
+12. Cancel was ignored during the edge-buffer stage; the progress bar went
+    backwards (97% -> 88%); the progress dialog was not modal, so the
+    project could be changed mid-run.
+13. XLSX sheet names over 31 characters (e.g.
+    All_Consolidated_DepthVelocityArrival) make Excel ask to repair the file.
+14. Memory layers were created with crs=authid(), so rasters/layers with a
+    custom (ESRI-WKT, no EPSG) CRS produced outputs with no CRS.
+15. metadata.txt said 1.0.0 while the plugin said 1.1.0; dead duplicate code
+    and unused imports removed.
+
+PERFORMANCE
+- Hazard rasters are classified in strips of rows. Working memory is flat
+  (~50 MB) instead of ~40 bytes per cell (a 20,000 x 20,000 grid needed
+  ~16 GB before). Velocity re-gridding uses a lazy VRT instead of warping
+  the full grid into RAM. Outputs are tiled, LZW, BIGTIFF=IF_SAFER, with
+  overviews on large grids.
+- Rasters are opened once per run (RasterSampler) and each point reads one
+  small window; the nearest-valid-cell search is vectorised (it was a
+  Python loop over every cell in the buffer, per point, per raster).
+- Edge-buffer maxima rasterise each ring once with GDAL instead of one GEOS
+  intersects() call per raster cell.
+- The All_Consolidated join uses the spatial index only (the brute-force
+  fallback tested every outline for every unmatched point:
+  600 points x 300 outlines = 160,565 polygon tests, now 65) and is
+  computed once for both All_Consolidated outputs.
+- Attributes are copied by index, features are added in batches, and UI
+  refreshes are throttled to 10 per second.
+
+NEW
+- "Run Self-Test" button (Readme tab): builds a small synthetic data set in
+  a temp folder, runs every stage, and reports PASS/FAIL (31 checks).
+- The dam folder can be typed/pasted as well as browsed.
+- Unsaved edits to the POI layer are offered for saving before POI runs.
+
+BEHAVIOUR CHANGES TO BE AWARE OF
+- Sampling buffer is now true feet. On metre-based rasters the search
+  radius is ~7.6 m instead of 25 m, so a few points near the flood edge may
+  now get NULL depth where 1.1 found a value.
+- Edge-buffer zone fields are now filled, and
+  All_Consolidated_DepthVelocityArrival is now produced.
+- Layer names: "NSI"/"FEMA" must start a word; "POI" must be a whole word;
+  names containing "Consolidated" are ignored as outputs.

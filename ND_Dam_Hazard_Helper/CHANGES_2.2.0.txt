@@ -1,0 +1,53 @@
+ND Dam Hazard Classification Helper 2.2.0
+=========================================
+
+- Building outlines: the outline file is now FEMA_Structures.gpkg (or
+  {Dam}_FEMA_Structures.gpkg) in the outputs folder - it was called
+  OSM_Outlines.gpkg, but in ND it holds the FEMA USA Structures layer.
+  The old name is still read (the log asks to rename it). Outputs:
+  {Dam}_FEMA_Structures_Consolidated, {Dam}_FEMA_Structures_Sample_Points
+  (Structure_ID = BUILD_ID), All_Consolidated columns FEMA_*. The "FEMA
+  USA Structures" download only runs when that file is missing.
+- FEMA point layers are no longer processed (Main Consolidation and
+  Hazard Classification); a point layer named "FEMA ..." is ignored.
+- Dams in series (ND 5.3(c)): National Inventory of Dams points (USACE
+  service, Esri mirror as fallback) and / or your own dam layer. Dams with
+  depth > 0 within 500 ft of their point are listed (Dams_In_Series layer,
+  criteria row 5.3(c), judgment item with NID ID, hazard potential and
+  depth). The dam being classified is left out (its NID ID, or its name).
+- Lifeline facilities (ND 5.2.2) from data instead of name keywords: ND
+  GIS Hub hospitals and long-term care, HIFLD fire / EMS / EOC / law
+  enforcement / wastewater (2025 copy at NASA NCCS - HIFLD Open closed in
+  Aug 2025), EIA power plants, OpenStreetMap (substations, water plants
+  and the rest) and / or your own layer. Duplicates within 300 ft are
+  merged. Flooded lifelines (charged to the breach with a baseline) make
+  the dam at least ND Medium unless switched off; care homes are a
+  judgment item. Layer Lifeline_Facilities.
+- Model extent check: flooded cells on the edge of the depth raster (or
+  of the model boundary polygon you give) are reported per side with
+  depth, arrival and - with a baseline - how much the breach adds there
+  (Model_Boundary_Check layer, summary, judgment item).
+- Emergency Action Plan outputs (Report options): EAP_Notification_List
+  (GPKG / CSV / XLSX) - flooded or cut-off structures with address (ND
+  GIS Hub NENA first, then FEMA PROP_ADDR), persons, depth, ACER zone,
+  lifelines, other dams and road closures, sorted by arrival time with
+  lat / lon; EAP_Arrival_Bands.tif (0-0.5, 0.5-1, 1-2, 2-4, 4-8, 8-24,
+  > 24 h) and EAP_Arrival_Contours.gpkg, in an "Emergency Action Plan"
+  layer group.
+
+NEW FILES / MODULES
+- facilities.py (dams in series, lifeline facilities), boundary.py (model
+  extent check), eap.py (notification list, arrival bands / contours).
+
+DATA SOURCES CHECKED SEPTEMBER 2026
+- NID: geospatial.sec.usace.army.mil .../National_Inventory_of_Dams_Public_Service
+  /FeatureServer/0 (mirror: services2.arcgis.com .../NID_v1/FeatureServer/0).
+- ND GIS Hub: ndgishub.nd.gov All_EmergencyServices/MapServer/2 (hospitals),
+  All_PublicHealth/MapServer/0-2 (assisted living, basic care, skilled nursing).
+- HIFLD (2025 snapshot): maps.nccs.nasa.gov/mapping/rest/services/hifld_open/
+  emergency_services (fire 4, EMS 2, EOC 6), law_enforcement/1, water_supply/0.
+- EIA power plants: services2.arcgis.com .../Power_Plants_in_the_US/FeatureServer/0.
+- OpenStreetMap: overpass-api.de/api/interpreter (one request per run, cached
+  for the day in outputs/_downloads, with a User-Agent as the usage policy asks).
+- No public REST layer of the ND Department of Water Resources dam inventory
+  was found - give it as "Dam points" if you have it.

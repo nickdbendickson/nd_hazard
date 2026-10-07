@@ -1,0 +1,30 @@
+ND Dam Hazard Classification Helper - changes in 2.5.0 (includes 2.4.1)
+
+2.5.0 - EAP map book and travel-time table, HEC-RAS plan import, campgrounds,
+        classification margin, change tracking, future development.
+  * EAP outputs can each be switched off (Hazard Classification tab, group 6)
+  * EAP inundation map book (PDF): index + numbered sheets in flood order, arrival
+    bands, closed roads, numbered notification items listed beside each map
+  * EAP travel-time table: river miles from the dam, arrival / peak depth / time of
+    peak, towns, bridges, road closures; centerline layer or traced USGS NHD flowlines
+  * EAP notification list: Priority column (schools, child care, care homes, hospitals)
+  * Schools and child care from OpenStreetMap (vulnerable occupants, judgment item)
+  * Campgrounds / RV parks from OpenStreetMap as overnight-recreation structures
+    (5.2.1.1), mobile-home curve, persons from the number of sites
+  * Classification margin (5.3(f)): depth change at the controlling structure that
+    would change the class; on the summary, report page 1 and result panel
+  * The dam's own NID hazard potential compared with the result
+  * Changes since the last run: QA/Changes_Since_Last_Run.csv and a summary section
+  * Future development (5.3(b)): vacant parcels in the danger zone (parcel layer)
+  * HEC-RAS 6.x plan results (.hdf) import: depth, velocity, arrival, WSE and time of
+    peak rasters from the 2D flow areas (tab and Processing algorithm)
+  * Downloads: when a service fails, the latest earlier download of the same area is
+    used and reported with its date; NDDOT traffic counts tried when HPMS fails
+2.4.1 - Cleanup of 2.4.0.
+  * Removed enhanced_units_from_name (read metric DSS-WISE depth / velocity as feet),
+    apply_gishub_dwellings (no effect; would have bypassed the Place_Type rules) and
+    vel_at_max_depth (unused) - the 2.4.0 changelog described code that never ran
+  * DSS-WISE junk filter narrowed to ._*, .DS_Store, __MACOSX, Thumbs.db,
+    desktop.ini (a file starting with "__" is no longer skipped); also applied when
+    the zip is extracted and to folders
+  * HTTP user agent follows the plugin version

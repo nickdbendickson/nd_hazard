@@ -1,0 +1,40 @@
+ND Dam Hazard Classification Helper - 1.3.1 (ACER curves)
+=========================================================
+
+ADDED - TM 11 FIGURE 4 (PASSENGER VEHICLES)
+  vehicle_high = [-0.0001038517130001145, 0.0037321173178590287,
+                  -0.03976081868384347, 0.017266319739380753, 3.000214298404674]
+  vehicle_low  = [-6.211008775385708e-05, 0.0022273997745073724,
+                  -0.02296755584903149, -0.010291770870531423, 1.9681625256188149]
+  (order x^4 .. constant; V in ft/s, depth in ft; valid 0-16 ft/s)
+
+  Method: page 34 of the TM 11 scan rendered at 400 dpi; plot frame fitted
+  on the ft and ft/s axes (scan skew corrected) and checked against the
+  independent m/s tick marks (within +/-0.06 ft/s); the centre of each
+  drawn boundary line traced column by column; least-squares quartic over
+  0.25-15.75 ft/s. Fit residual: RMS 0.008 / max 0.023 ft (low),
+  RMS 0.012 / max 0.029 ft (high).
+  Check: the same procedure on Figure 2 reproduces the verified house
+  curves within 0.045 ft (low) and 0.065 ft (high) RMS, and gives exactly
+  5.208 ft for the house high curve at 6 ft/s.
+  Values: V = 0, 4, 8, 12, 16 ft/s -> high 3.00, 2.65, 2.08, 1.78, 1.58 ft;
+                                       low 1.97, 1.69, 1.30, 1.10, 0.98 ft.
+
+FIXED - MOBILE-HOME HIGH BOUNDARY (FIGURE 3)
+  x^4 coefficient 9.65180652684472e-05 -> 9.65180652684472e-06.
+  With the old value the threshold rose to 2.63 ft at 8 ft/s, 3.86 ft at
+  12 ft/s and 6.3 ft at 15 ft/s; Figure 3 shows 2.29, 2.08 and ~1.97 ft.
+  Result: mobile homes in fast water were rated Judgment instead of High
+  (e.g. 3 ft deep at 12 ft/s). The corrected polynomial matches the traced
+  Figure 3 line within 0.019 ft RMS (max 0.039 ft). Up to 6 ft/s the two
+  differ by about 0.1 ft or less. The mobile-home Low boundary was correct.
+  -> Regenerate Hazard_MobileHomes.tif (and re-run the classification) for
+     studies with velocities above about 6 ft/s.
+
+CHANGED - NO EXTRAPOLATION BEYOND THE FIGURES
+  Velocities above 25 ft/s (houses) or 16 ft/s (mobile homes, vehicles)
+  are evaluated at that limit. Road stretches beyond the vehicle chart are
+  noted in Roads_Inundated.
+
+The file ACER_TM11_curve_check.png (sent separately) shows the final
+curves drawn back onto the scanned Figures 2, 3 and 4.

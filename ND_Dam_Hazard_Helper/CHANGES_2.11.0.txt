@@ -1,0 +1,62 @@
+ND Dam Hazard Classification Helper 2.11.0
+==========================================
+(with ND Dam Breach Runner 3.3.1 and ND Dam Breach Screening 0.10.1)
+
+WHAT CHANGED
+  The flood danger curves for houses on foundations (ND REG_05.2026 Fig. 5.1 =
+  TM 11 Fig. 2) and mobile homes (Fig. 5.2 = TM 11 Fig. 3) are now the table the
+  engineer digitized from the REG_05.2026 figures (flood_danger_classifier.py,
+  stated accuracy +/-0.06 ft), copied verbatim into damsuite/tm11_curves.py -
+  one copy shared by all three plugins. Between tabulated velocities the line is
+  straight. Until 2.10.0 ND Dam Hazard used quartic fits to a trace of the TM 11
+  (1988) scan; ND Dam Breach Runner and Screening had no curves at all (their
+  chart file was empty).
+
+  Passenger vehicles (TM 11 Fig. 4, not in REG_05.2026) keep their quartic.
+
+CHECKS MADE
+  1. The table against screenshots of the two REG_05.2026 figures (zone colours
+     traced pixel by pixel; ~0.025 ft a pixel on Fig. 5.1, ~0.007 ft on 5.2):
+       houses        median 0.03 ft; 95 % within 0.05 ft (high line) and
+                     0.09 ft (low line). Largest gap: the low line's tail - the
+                     table is 0 ft from 19 ft/s, the figure shows a green sliver
+                     about 0.06 ft thick to about 20.5 ft/s.
+       mobile homes  median 0.008 ft (high) / 0.004 ft (low); 95 % within 0.02 ft.
+  2. The table against the older trace of the TM 11 (1988) scan (test data):
+     RMS 0.09 ft (house lines), 0.03 ft (mobile high). Largest: house low line at
+     18-19 ft/s - TM 11 ~0.3 ft, REG_05.2026 ~0.1-0.16 ft. The REG figures are
+     redrawn from TM 11 and differ from it most there; the REG figure is the one
+     the ND standards print, so it is the one used.
+  These are checks by a tool, not a person's check of the digitization.
+
+CAN THE CLASS CHANGE AGAINST 2.10.0? YES, NEAR A LINE ONLY
+  The table differs from the old quartics by up to 0.10 ft (house high line at
+  0-1 ft/s: 5.97 vs 5.86 ft) and 0.18 ft (house low line at 18-19 ft/s). About
+  1 % of the chart area between 0-6 ft and 0-10 ft/s changes zone (houses: 0.7 %
+  up, 0.4 % down; mobile homes: 0.9 % down - their table lines are 0.01-0.03 ft
+  higher than the quartics). A structure within that distance of a line can move
+  one zone; nothing else changed. A package made with 2.10.0 or earlier
+  reproduces as DIFFERENT where that happens. The run log, QA/Run_Settings and
+  the report sources name the table and its SHA-256.
+
+SMALL RULE CHANGE
+  A DRY point (depth 0) now always stays LOW. Before, a depth of 0 where the
+  low line is at or below 0 ft (houses above ~19 ft/s in the table, above
+  ~23.7 ft/s in the old quartic) was counted as JUDGMENT.
+  Unchanged: a depth exactly on a line takes the higher zone (ND 5.3) - the
+  uploaded classify() puts it in the lower zone; velocities above a figure's
+  range are read at its last value.
+
+RUNNER 3.3.1 / SCREENING 0.10.1
+  Their chart file (core/acer_tm11_charts.json) now holds the polygons from the
+  same table. Its status stays "not digitized" until it records who digitized
+  the curves and a DIFFERENT person who checked them (Chart sign-off in this
+  plugin writes it that way); until then their chart method still refuses, and
+  now says only the two names are missing. Their nd_hazard.py still counts a
+  point within 1 % of an axis of a higher zone as that zone, and a point beyond
+  a chart's axes as high danger - stricter than this plugin near the lines and
+  above 25 / 16 ft/s; the rules comparison explains such differences.
+  Suite version check: Runner / Screening report ND Dam Hazard below 2.11.0
+  (other curves).
+
+NOT RUN IN A REAL QGIS (simulated QGIS / Qt only, as every release).

@@ -1,0 +1,140 @@
+ND Dam Hazard Classification Helper 2.9.0
+=========================================
+
+WHAT THIS RELEASE IS
+  The interface changes you asked for (tab order, data-folder search, HIFLD,
+  address fields, Review tab sorting / velocity / mobile homes, a review of
+  roads, rail, bridges and lifelines, imagery under the maps, the *_Hmax /
+  *_Vmax fix) plus all sixteen items of the 2.8.0 wish list.
+
+  NOTHING WAS RUN IN A REAL QGIS. Everything was tested against the plugin's
+  simulated QGIS / Qt only (1,200+ tests, in QGIS 3.28, 3.40 and 4.0 flavours).
+  Check the first real runs, especially the items under "NOT DONE / NOT RUN".
+
+  Every threshold you can set is a screening value of YOURS - the defaults are
+  starting values, not requirements of REG_05.2026, FEMA P-333 or TM 11.
+
+CAN THE CLASS CHANGE AGAINST 2.8.0 WITH THE SAME DATA? YES, IN TWO WAYS
+  1. Mobile homes. Structures are now typed as mobile homes from more evidence:
+     NSI occtype RES2 / bldgtype H, mobile-home words, NENA place types, address
+     units "Lot / Space / Trlr", OpenStreetMap mobile-home parks (downloaded by
+     default), and - when nothing else says what it is - a single-wide footprint
+     shape (width <= 18 ft, length 30-90 ft, length / width >= 2.5; YOUR screening
+     values, switch "Type mobile homes from the footprint shape"). A mobile home
+     is read against the stricter ACER mobile-home curve, so a zone can go up.
+     Type_Basis in the structure tables says which evidence was used. An outline
+     with explicit house words is not switched by shape; it is flagged. (NSI
+     RES2 / bldgtype H already counted in 2.8.0; the other evidence is new.)
+  2. The data folder. When you search a folder, what it holds is used before
+     project layers and downloads - other data can give other structures.
+  The zone curves, the ND criteria and the TM 11 rules themselves are unchanged.
+
+INTERFACE
+  Tabs              DSS-WISE Lite, HEC-RAS plan, Setup & Run, Data & Output,
+                    Hazard Classification, Review, Review: roads & facilities,
+                    Readme. "Run everything" is on Data & Output.
+  *_Hmax / *_Vmax   Setup & Run did not find Depth_Hmax.tif / Vel_Vmax.tif: the
+                    name reader did not know Hmax / Vmax / Dmax and the time-step
+                    filter took "Depth_Hmax" for one output time. Both fixed;
+                    "Depth_x_Velocity..." rasters are no longer taken for a time
+                    step either.
+  Data folder       Data & Output > "Data folder": Browse, "Search folder". The
+                    scan opens each file once, read-only (GeoPackage, shapefile,
+                    File GDB, GeoJSON, KML/KMZ, GeoParquet when GDAL has it, CSV
+                    with coordinates, ZIP archives), and matches the data sets of groups 3-6 by name,
+                    geometry and fields. The table shows each pick and why; you
+                    can change any. Order: folder, QGIS layer tree, internet. A
+                    layer you pick by hand in a group list wins over the folder.
+                    A pick whose file is gone falls back to the download. The
+                    picks are saved with the project and written to the run log
+                    and QA/Run_Settings.json. The parcel hints use the folder's
+                    parcel layer as well.
+  HIFLD             Not downloaded any more (HIFLD Open closed Aug 2025; the NASA
+                    NCCS copy does not answer). "Get HIFLD (hsdl.org)" opens
+                    https://www.hsdl.org/hifld. Put the layers in your data folder;
+                    they are recognised by name and fields.
+  Address fields    ND GIS Hub (NENA) address points: Address, City, ZIP,
+                    ND_Site_NGUID, ND_Place_Type and ND_Address_Points (how many
+                    points joined) are in the final structure layers and tables.
+  Review tab        Click a heading to sort, again to reverse (empty cells last).
+                    "Vel ft/s" next to "Depth ft". "Open in web map" (Google Maps
+                    search pin by default; WEBMAP_URL_TEMPLATE in the data-source
+                    file changes it; only the latitude / longitude are sent).
+  Roads & facilities  New tab: road and rail stretches, bridges / culverts /
+                    low-water crossings and lifeline facilities from the last run
+                    with depth, velocity and arrival. Decisions (Confirmed,
+                    Excluded, Set AADT / trains per day / category, Overtopped:
+                    yes / no, Note) are kept in
+                    outputs/Facility_Review_Decisions.csv, matched to the next run
+                    by position and name, applied in the classification, and
+                    copied into the submittal package and a reproduction.
+  Imagery           PDF report and EAP map book maps have aerial imagery under
+                    them (USGS National Map by default; AERIAL_IMAGERY_URL in the
+                    data-source file). Offline or no answer: the map is made
+                    without it and says so. Switch: "Aerial imagery under the maps".
+
+THE SIXTEEN ADDITIONS (Hazard Classification tab, group 7, unless stated)
+  1  Parallel batch     ndhazard:batch and the creep watch: WORKERS > 1 runs that
+                        many dams at once as qgis_process children.
+  2  Fast cell selection  numpy selection of the cells of the whole area / ring /
+                        band (no GEOS per structure). Off by default; the tests
+                        compare it cell by cell with the GEOS path.
+  3  Pyramids           .ovr for ACER zone rasters (on) and large input rasters
+                        (off; it writes .ovr next to YOUR rasters). Drawing only.
+  4  Estimate run...    reads, downloads (tile cache, pack and data folder
+                        counted), disk, time range - before running.
+  5  Pack R*Tree        offline packs get a spatial index; old packs still work.
+  6  Consequence sensitivity  lives in jeopardy / loss of life with the other time
+                        of day and severity method (QA table; class unchanged).
+  7  Evacuation routes  EAP_Evacuation_Routes and EAP_Road_Closures layers from
+                        the evacuation timing (screening drawing only).
+  8  Temporal Controller  arrival contours, notification list and road closures
+                        appear at their arrival time.
+  9  KMZ / GeoJSON      copies of the EAP layers in outputs/EAP/Web.
+  10 Settings profiles  save / load / compare a JSON profile; dam-specific paths
+                        are left out; name and hash in the run log and package.
+  11 Reproduce          "Reproduce a package..." / ndhazard:reproduce: re-runs a
+                        submittal package (made with "include the input data") in
+                        an empty work folder; IDENTICAL / DIFFERENT with reasons.
+  12 Portfolio          "Portfolio dashboard..." / ndhazard:portfolio: one page
+                        for a folder of dams.
+  13 Parcel hints       from YOUR parcel layer and the fields YOU choose; a hint on
+                        the Review tab, never an automatic change.
+  14 Web-map link       see Review tab above.
+  15 Form fill          "Fill form template..." / ndhazard:fillform: fills
+                        {{KEY}} placeholders of YOUR template (.docx, .txt, .md,
+                        .html, .csv). The State's form is not built in; no field is
+                        guessed; unknown placeholders stay visible and are listed.
+  16 HEC-RAS plan       a .p##.hdf used directly as a scenario input, converted at
+                        run time with the HEC-RAS plan tab's terrain, breach start,
+                        arrival depth and cell size (cached in
+                        outputs/HECRAS_plan_cache).
+  Submittal package: new questions "include the input data" and "include the
+  flood rasters" (needed for a reproduction).
+
+FIXED IN THIS RELEASE (found by an independent review of the new code)
+  - A HEC-RAS plan used directly ignored the HEC-RAS tab's terrain, breach start,
+    arrival depth and cell size, and the re-use of the last evaluation did not
+    notice when they changed.
+  - Parcel hints did not see a parcel layer that came from the data folder.
+  - The road / facility review decisions were missing from the submittal package
+    and from a reproduction.
+  - The run estimate counted data sets the data folder supplies as downloads.
+  - "Download data now" skipped a data set whose data-folder file had been
+    deleted.
+  - Readme text still described the HIFLD NCCS copy and the old tab order.
+
+NOT DONE / NOT RUN
+  - Not run in a real QGIS: the imagery under the layouts, the Temporal
+    Controller settings, the KMZ writer (KML / LIBKML driver), the parallel
+    qgis_process workers, File GDB / KMZ reading in the data-folder scan and the
+    web-map link opening a browser were only checked against the simulation.
+  - OpenStreetMap mobile-home parks are not in the offline pack; offline runs
+    log a warning and go on without them.
+  - Opening a GeoPackage from the data folder can make QGIS / GDAL create
+    -wal / -shm files next to it (GDAL behaviour, not a plugin write).
+  - "Search the computer" means: you choose a folder and it is searched with its
+    sub-folders. The plugin does not crawl whole drives.
+  - A change inside a File GDB folder, or to a shapefile's .dbf only, is not
+    noticed by the re-use of the last evaluation - untick "Re-use the last run's
+    downloads, inventory and raster ..." for that run to force a fresh read.

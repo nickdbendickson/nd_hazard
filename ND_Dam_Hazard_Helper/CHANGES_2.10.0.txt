@@ -1,0 +1,79 @@
+ND Dam Hazard Classification Helper 2.10.0
+==========================================
+
+WHAT THIS RELEASE IS
+  The three dam plugins as one system: this plugin (the hazard classification),
+  ND Dam Breach Runner 3.2.0 (breach models) and ND Dam Breach Screening 0.9.0
+  (statewide screening). Released together; each still works alone.
+
+  NOTHING WAS RUN IN A REAL QGIS, with a real LISFLOOD-FP / ANUGA, or on real dams. All of
+  it is tested against simulated QGIS / Qt only (this plugin: see TESTED). The GeoPackages
+  of the culvert and Screening exports are written by the plugin's own writer (OGC
+  GeoPackage 1.2) and were read back only by the plugin's own reader.
+
+  Every threshold is a screening value YOU choose; defaults are starting values, not
+  requirements of REG_05.2026, FEMA P-333 or TM 11. Nothing in this release changes how a
+  structure, road or dam is classified.
+
+WHAT IS NEW (README "NEW IN 2.10.0" has the details)
+  - damsuite/ (in all three plugins, byte-identical, checked by a file list): dam.json
+    records, version checks, the model-chain fingerprints.
+  - dam.json read (name, NID) and written ("classified" status with the class; the NID
+    only when it looks like an NID ID; the name when you gave one) by every
+    classification run; not by reproductions or ensemble runs. The dam POINT is left to
+    the Runner / Screening (this plugin knows the NID point, not the breach point). A
+    broken dam.json is reported and never replaced; another tool's value is never
+    overwritten - a disagreement is listed in the file.
+  - Version checks at start (message log and bar).
+  - Model gate (opt-in per run, and ndhazard:modelgate); model chain check every run.
+  - Class probability over an ensemble (ndhazard:ensemble).
+  - Quick creep screen (ndhazard:quickcreep).
+  - Rules comparison (ndhazard:rulecompare) and chart sign-off (ndhazard:chartsignoff).
+  - Reviewer's view (ndhazard:reviewpackage, ndhazard:reviewsummary).
+  - Culvert lines for the Runner (ndhazard:runnerculverts), data package for Screening
+    (ndhazard:suiteexport).
+  - Portfolio dashboard: Screening, Runner and dam.json columns, Next action.
+  - Submittal package: run_manifest.json, Model_Chain_Check, dam.json, Model_Gate,
+    Class_Probability, Rules_Comparison when they exist.
+  - Hazard Classification tab group 8 "Dam suite".
+  - Validation set (benchmark) of known dams: in the CI kit (benchmark/), run inside QGIS
+    with 3-4 dams that have accepted HEC-RAS studies (you supply them).
+
+CORRECTION TO THE 2.9.0 NOTES
+  CHANGES_2.9.0.txt says OpenStreetMap mobile-home parks are not in the offline pack. They
+  are, in packs built with 2.9.0 or later (older packs do not have them).
+
+FIXED BEFORE RELEASE (independent review of how the three plugins fit together)
+  - Class probability: "no breach" runs of an ensemble were counted as failed runs, the
+    per-run baseline was ignored, and runs of an unfinished study could be mixed in. Now:
+    no-breach runs are their own line (the probabilities add up to 1 with them), each run
+    uses its baseline, and only the runs in Runs/index.json are classified.
+  - The Runner's hand-off gave its dam ID (e.g. DWR-5289) as the NID ID; this plugin now
+    records an NID only when it looks like one, and the Runner 3.2.0 sends dam.json's NID.
+  - This plugin wrote the NID point as the dam point in dam.json (a disagreement with the
+    Runner's crest point on every run) - no longer.
+  - Screening: repeated tool-8 runs sent classified dams back to "model"; heights were
+    rounded differently by two tools (a false disagreement).
+  - Benchmark kit: the rules step had no parameters; a local-datum top of dam was passed
+    to the Runner as an elevation; the model chain was not checked in the benchmark.
+  - The reviewer's view and the dashboard counted the Runner's preview class as the
+    classification.
+
+THINGS TO KNOW
+  - The chart sign-off file is made from THIS plugin's quartic fits of TM 11 Figs 2 and 3,
+    not an independent digitization. Their documented fit residuals are in the file's
+    notes. On a dense grid the Runner's rules on that file agree with this plugin's curves
+    except within its 1 % "digitizing tolerance" band, where it takes the higher zone.
+  - The rules comparison shows the two rule sets differ by design (footprint + 5-ft ring
+    and same-cell depth/velocity here, deepest cell and maximum velocity there;
+    habitability sources; mobile-home evidence) - it explains, it does not decide.
+  - Class probability classifies each ensemble run with the dam's recorded settings and
+    data; where the dam's run read several files for one role (AADT from HPMS, NDDOT and
+    county roads), only the first is used - the reference run shows whether the class is
+    reproduced.
+  - Culvert lines: NBI field names are assumed to be the NTAD names; NBI has no culvert
+    rise or shape, and inverts are never guessed.
+
+TESTED
+  Simulated QGIS 3.28 / 3.40 / 4.0 (see the CI kit README for the counts); the shared
+  damsuite package has its own tests, including the Runner's own provenance functions.

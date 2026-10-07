@@ -1,0 +1,31 @@
+ND Dam Hazard Classification Helper 2.9.1
+=========================================
+
+WHY
+  The ND Dam Breach Runner's "Hand the results to the hazard classification" tool
+  fills this plugin's Processing parameters by matching words. "No-breach baseline:
+  max depth" and "Breach: max depth x velocity" both contain "depth", so the breach
+  depth raster would be given as the baseline and as D x V. With the breach flood as
+  its own baseline nothing is charged to the dam: in a test the same dam came out
+  HIGH normally and LOW that way, without any error.
+
+WHAT CHANGED
+  - Stop, with the reason, when one raster file is given for two things:
+      a breach's no-breach baseline uses the same depth file (or the same HEC-RAS
+      plan) as the breach;
+      one file is given as two of depth / velocity / arrival / D x V in one scenario.
+    A baseline with its own depth but the breach's velocity or arrival raster is run,
+    with a WARNING in the run log (the baseline is then read more severe than it is,
+    so less may be charged to the dam).
+    Checked by the dialog ("Check inputs" / Run), by ndhazard:classify before anything
+    is downloaded, and by the pipeline itself.
+  - The raster search leaves out rasters of the difference between two floods
+    ("Incremental Depth (Max)", "Incremental WSE Rise (Max)", "Difference", "_diff")
+    and names them in the notes. Before, "Incremental Depth (Max).tif" could be taken
+    for the depth when "Depth (Max).tif" was missing.
+  - README: "HANDING RESULTS TO THIS PLUGIN" - call ndhazard:classify with DAM_FOLDER
+    only; how an ND Dam Breach Runner dam folder is read.
+  - Nothing else changed; the classification rules are the same as 2.9.0.
+
+TESTED
+  Only against the plugin's simulated QGIS (as 2.9.0). Not run in a real QGIS.

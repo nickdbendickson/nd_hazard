@@ -1,0 +1,100 @@
+ND Dam Hazard Classification Helper 1.4.0
+=========================================
+
+STUDY AREA = DEPTH RASTER EXTENT + 25 FT
+- New module extent.py (ExtentClip). Every structure source is limited to
+  the Depth raster's extent grown by 25 ft (Setup tab: "Study area: raster
+  extent +", 0 - 5280 ft):
+    * Main consolidation: NSI, ND GIS Hub, FEMA and POI point groups
+    * OSM_Outlines consolidation (an outline is kept if any part touches
+      the study area) and therefore the edge-buffer zones and the
+      All_Consolidated joins
+    * Hazard Classification: structure inventory (outlines and points) and
+      the NSI / ND GIS Hub / rail downloads; grade crossings are fetched
+      3 miles further out because trains/day are read up to 3 miles away
+- Features inside the study area are kept even where the rasters have no
+  value (Hmax / Vmax / Arrival left empty; "Not inundated" in
+  Habitable_Structures). Setup tab: "Keep features inside the study area
+  that have no flood values" (on by default) restores the old behaviour
+  when switched off.
+- The test runs in the raster CRS (exact for layers in any CRS); the
+  provider only gets a slightly larger box in the layer's CRS as a fast
+  pre-filter (statewide layers are not read in full).
+
+ND GIS HUB ADDRESS POINTS (verified against the live service)
+- NDGISHUB = "NDGISHUB SiteStructure Address Points" (NENA NG9-1-1 site /
+  structure address points), public FeatureServer
+  services1.arcgis.com/GOcSXpzwBHyk2nog/.../NDGISHUBSiteStructureAddressPoints.
+  Placement values in the data: Geocoding, Parcel, Property Access, Site,
+  Structure, Unknown. Place_Type is free text (65 distinct values).
+- Layer detection now also accepts "DBO_SiteStructureAddressPoints" (the
+  service layer name) and "... Address Points" names.
+- Place_Type mapped: residence / home / single family / apartment ->
+  dwelling; MOBILE HOME / MOBILE RESIDENCE -> mobile home (ACER Figure 3);
+  Business / OFFICE / CHURCH / SCHOOL / DAYCARE / FIRE / MEDICAL ... ->
+  occupied (FIRE / HOSPITAL flagged as lifelines); PARKING / PARK /
+  outdoors / UTILITY / LIFT STATION / TRUCK BARN ... -> not habitable;
+  Vacant / LOT -> unverified (an address alone is not a building).
+- Street-name fields (St_*, LSt_*) are no longer read as building
+  descriptions ("LSt_Type=TER" is not a terrace house); NENA "Building" is
+  a sub-address, not the OSM building tag; LandmkName is read.
+- Dwelling units: distinct NENA addresses (number + street + unit) in one
+  building count as separate dwellings (3 persons each, TM 11) when no NSI
+  record gives the unit count; a building-level address is not counted
+  again when unit addresses exist. OSM addr:* / FEMA PROP_ADDR only mark
+  "has an address" and never add units.
+- Points outside every outline: NENA points placed at the driveway /
+  parcel (Placement other than Structure) are moved onto their nearest
+  building outline within 100 ft; other points within 30 ft. Never onto
+  garages / sheds / small untagged outlines, never for PARKING / Vacant
+  addresses, never on to a second-nearest building. Moved points are noted
+  in Habitable_Structures.Notes.
+- Two NSI records with different fd_id at one spot are two units (were
+  merged as duplicates).
+- Hazard Classification downloads the address points for the study area
+  when no ND GIS Hub layer is loaded (option, on by default).
+
+ACCURACY
+- 5-ft edge-buffer ring built in the depth raster's CRS (was built in the
+  outline layer's CRS: ~30 % too narrow east-west for EPSG:4326 outlines).
+- Web Mercator (EPSG:3857) and geographic rasters: distances in feet are
+  corrected for latitude (x1.46 at 47 N) in the study area, structure
+  buffers, merge and snap distances; a warning recommends a projected CRS.
+- Downloads refuse an extent that is not a valid lon/lat box (depth raster
+  without CRS) instead of requesting millions of NSI tiles; NSI requests
+  are capped at 400 tiles.
+
+QGIS 3.28 - 4.x, WINDOWS / macOS
+- New compat.py resolves every version-specific name once (new spelling
+  first): Qgis.MessageLevel, Qgis.GeometryType / WkbType / DistanceUnit /
+  AreaUnit (3.30+), QgsVectorFileWriter.WriterError,
+  QgsBlockingNetworkRequest.ErrorCode, Qgis.ShaderInterpolationMethod,
+  Qt.WindowModality, QMessageBox.StandardButton, QAction (QtGui on Qt6),
+  field types (QMetaType.Type on QGIS >= 3.38 and Qt6, QVariant.Type on
+  older builds - probed at run time). PyQt6 enums are not ints: all enum
+  comparisons go through compat.enum_value.
+- metadata: qgisMaximumVersion=4.99 (without it QGIS 4 refuses the plugin),
+  supportsQt6=True for Qt6 builds of QGIS 3.x.
+- Python 3.9 syntax (QGIS 3.28 LTR on Windows / macOS), numpy 1.x / 2.x,
+  UTF-8 file I/O, case-insensitive path comparison on macOS as on Windows.
+- The QGIS / Qt / Python / GDAL / numpy versions are written to the log at
+  the start of each run.
+
+PERFORMANCE / STABILITY
+- Edge buffer and structure evaluation recognise dry outlines / structures
+  from one small raster read before any GEOS buffer / difference.
+- ArcGIS downloads page by 2000 (the services' maxRecordCount) and drop
+  features repeated across pages.
+- Inventory time grows linearly with the number of structures.
+
+TESTS
+- The fake QGIS harness now imitates three API generations (3.28 legacy
+  names; 3.40 both spellings; 4.0 Qt6 scoped non-int enums, QMetaType
+  field types, QAction in QtGui). The whole suite runs under each:
+  136 / 136 / 126 (+10 comparisons with v1.1 that cannot load on Qt6).
+- New checks: no legacy enum spelling outside compat.py; sources parse as
+  Python 3.9 (also compiled with CPython 3.9.23 and 3.12); study-area and
+  keep-dry behaviour; edge ring width in the raster CRS; address-point
+  interpretation, units, snapping rules and download paging.
+- Self-test (Readme tab): 50 checks, including the study area, Web
+  Mercator distances and ND GIS Hub address points.

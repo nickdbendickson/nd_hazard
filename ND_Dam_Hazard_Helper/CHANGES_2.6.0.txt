@@ -1,0 +1,156 @@
+ND Dam Hazard Classification Helper - changes in 2.6.0
+
+2.6.0 - One run, in the background; one-pass sampling; evaluation areas;
+        re-use of the last evaluation.
+
+ONE RUN
+  * Main Consolidation and the POI Processing tab are gone. The Hazard
+    Classification's structure inventory (NSI / ND GIS Hub points joined to
+    the FEMA USA Structures outlines, campgrounds) is the one consolidation
+    of points and outlines. Run everything = data sets to outputs/Data
+    (optional) + input checks + classification.
+  * The ACER zone rasters (Hazard_Foundations.tif, Hazard_MobileHomes.tif,
+    Hazard_Vehicles.tif) are written by the classification to
+    outputs/Classification for the governing scenario ("ACER zone rasters"
+    on the Hazard Classification tab, on by default; needs the velocity
+    raster). Copies left in outputs/Consolidation by earlier versions are
+    removed.
+  * Points of interest: give them as the lifeline facilities layer on the
+    Data & Output tab - they are sampled and listed in Lifeline_Facilities.
+  * Removed: All_Consolidated / All_Consolidated_DepthVelocityArrival, the
+    EdgeBuf_* / Zone_Hazard_* fields of the consolidated outline layer (see
+    Structure_Evaluation_Areas), <Dam>_NSI_Consolidated / _NDGISHUB_Consolidated
+    / _POI_Consolidated, the sampling-buffer and legacy-join options.
+
+BACKGROUND RUN
+  * The classification and "Download data now" run in a QGIS task. The
+    progress bar is not modal - QGIS stays usable - and its Cancel stops the
+    task at the next progress step. The dialog's buttons are disabled
+    meanwhile. When the task finishes, the layers are added, the EAP map book
+    and the PDF report are made and the summary and run log are written on
+    the main thread (a short modal step).
+  * The worker reads copies of the chosen project layers (clone), so editing
+    or removing a layer during the run does not affect it. The result layers
+    of the last run are taken out of the project before the run (the files
+    are rewritten; a loaded layer would keep them locked on Windows) and
+    added again afterwards.
+  * Processing algorithms and scripts are unchanged (they run on the calling
+    thread; pipeline.run_classification(deferred=False) does everything).
+
+DOWNLOADS SIDE BY SIDE
+  * Every download of a run is fetched at the same time (download.parallel_map):
+    NSI, address points, outlines, rail, crossings, roads with the HPMS years,
+    NDDOT and county roads, NID, every lifeline service, NBI, OSM lifelines /
+    crossings / campgrounds / places, NHD flowlines. The results are read in
+    the same order as before, so the run log and the data-source list read
+    the same. Failures still fall back to an earlier day's download.
+  * A large ArcGIS layer is fetched page by page in parallel after a count
+    query (offset order kept, ids de-duplicated); the NSI tiles likewise.
+  * One cap of DOWNLOAD_WORKERS = 6 requests in flight for the whole plugin;
+    Overpass (public API) 2. download.PARALLEL = False makes everything
+    sequential again for debugging.
+
+ONE-PASS SAMPLING (structures.evaluate_structures)
+  * A coarse wet mask (one pass over the depth raster, <= 2048 cells per side)
+    finds the structures whose surroundings reach the flood; the others are
+    dry without any GEOS or GDAL work.
+  * Every evaluation area (outline + 5-ft edge ring, or the point's disc) is
+    rasterised at once with its structure id - areas whose rings overlap in
+    separate colour classes so each keeps its own cells - over the rows the
+    areas cover, in strips; velocity, arrival and D x V are read for every
+    wet cell together. The same cells (centres inside the area) and the same
+    values as the per-structure reads; verified cell for cell in the tests.
+  * Per-type results (house-on-foundation and mobile-home curve) are kept per
+    structure, and apply_type() re-applies a changed ACER type, 1D / 2D,
+    borderline distance or borderline rule without the rasters.
+  * Falls back to the per-structure reads when the GDAL reader is not
+    available (provider-backed rasters) or fewer than 8 structures are near
+    the flood.
+
+EVALUATION-AREA LAYERS (QA folder)
+  * Structure_Evaluation_Areas.gpkg (shown, pink outlines): for every
+    structure with a wet cell, the exact polygon its maximum depth and
+    velocity were searched in, with Area_Type (footprint + 5 ft edge ring /
+    point: r ft radius + 5 ft edge ring), Reach_ft, Sampling (cells whose
+    centre lies in the area / grid coarser than the area: the cell under its
+    centre), Wet_Cells, Max_Depth_ft, Max_Vel_fps, First_Arrival_hr,
+    ACER_Zone, ACER_Zone_Label, ND_Outcome, Persons.
+  * Structure_Sampled_Cells.gpkg (hidden by default; "Layer of the raster
+    cells read" option): the raster cells behind each area as one
+    multi-polygon of cell squares per structure.
+
+RE-USE OF THE LAST EVALUATION
+  * "Re-use the last run's downloads, inventory and raster sampling when they
+    are unchanged" (Hazard Classification tab, on by default). A run hashes
+    the rasters (path, size, time and a digest of their contents), the chosen
+    layers (file layers by file, others by their features), the download
+    choices and the settings that shape the sampling and the road / rail /
+    facility analyses. When the hash equals the last run's in this QGIS
+    session, stage A (downloads, inventory, sampling, roads, rail,
+    facilities, access network) is re-used and only stage B runs: review
+    decisions, habitability rules, persons, consequences, increment,
+    classification, outputs, report. The log, summary and run log say so.
+  * Applies to: Review "Save and re-run", persons per dwelling, min. area,
+    judgment-as-probable, borderline distance and rule, 1D / 2D, loss-of-life
+    settings, lifeline / access "at least Medium", report / EAP / spreadsheet
+    options, parcels, zone rasters. Not to: raster, layer or download
+    changes, the study-area buffer, vehicle occupancy / speed, the access
+    distance, the incremental depth (they change stage A).
+  * The cache lives in memory (until QGIS closes); pipeline.forget_evaluation()
+    clears it.
+
+OTHER
+  * Sole access (access.access_analysis) places every structure on the road
+    network; the statistics and the cut-off flag count the habitable ones
+    (access_stats), so a review that makes a structure habitable gets its
+    answer without a full run.
+  * Engineer review: attach() clears earlier marks first (structures may come
+    from a re-used evaluation), so a decision removed from the review file
+    is un-applied.
+  * README.txt in the plugin folder is the one copy of the manual (the
+    Readme tab reads it); constants.py is constants.
+  * Removed code: the D x V-bound and time-step ACER methods
+    (hazard.generate_zone_rasters, classify_dv_bound, find_time_series,
+    choose_method), the time-step folder box and Scenario.series_folder,
+    the consolidation and join functions of processing.py / osm_processing.py,
+    unused helpers (sample_raster_at_point, classify_hazard_array,
+    max_raster_value_in_geometry, scenarios_to/from_json).
+
+UPGRADE NOTES
+  * Outputs of the removed Main Consolidation (outputs/Consolidation/*.gpkg,
+    <Dam>_POI.gpkg) are not touched; they are simply no longer written. The
+    Hazard_*.tif rasters move to outputs/Classification.
+  * Saved settings for the removed widgets (sampling buffer, ACER colours,
+    legacy join) are ignored.
+  * pipeline.run_classification() keeps its signature (deferred=False by
+    default). Scripts that read res["results"][name]["snap"] still can;
+    the new res["run"] holds the Run object and res["post"] is empty after
+    a non-deferred run.
+
+REVIEW FIXES (before release; two independent reviews of the change set)
+  * The FEMA USA Structures outline download from a run (no outline file
+    yet) failed silently under the parallel fetch - fixed.
+  * Runs with a no-breach baseline: each scenario keeps its own per-curve
+    results; the model-extent check runs after the increment as in 2.5.1.
+  * "Auto" point layers and the outline file are resolved on the main thread
+    before the background run (and are part of the re-use check).
+  * Only the plugin's own result layers are taken out of the project before
+    a run (imports and the user's layers under outputs stay); Run everything
+    with "save data sets" and Download data now release the Data layers too.
+  * One clone per project layer (a road layer that is also the AADT layer
+    stays one layer); layers with unsaved edits are copied feature by feature.
+  * Layouts (report, map book) reference the layers added to the project;
+    the cached evaluation keeps no layer objects.
+  * ArcGIS services with a small maxRecordCount page correctly (page size
+    from the service; sequential fallback when a page is short).
+  * Qt6: the task flag is looked up with the compat helper; a task that
+    cannot start reports an error instead of leaving the dialog busy.
+  * The 1D / 2D rule is re-derived on a re-used evaluation; results of an
+    earlier stage B (increment, margin, future development ...) are reset.
+  * Cancel: a cancelled download does not wait for its requests; the work of
+    a run completed before Cancel counts as finished.
+  * The finishing phase has its own modal progress bar; a project opened
+    during a background run receives none of its layers (the outputs are on
+    disk).
+  * "Check inputs" no longer fails with NameError after an error.
+

@@ -1,0 +1,47 @@
+ND Dam Hazard Classification Helper 2.3.0
+=========================================
+
+- Rasters found automatically in the dam folder ("Find rasters").
+- "Check inputs" and "Run everything" buttons (one progress bar).
+- Main Consolidation needs no project layers: NSI structures and ND GIS
+  Hub address points are downloaded when none are loaded, and the FEMA USA
+  Structures outlines are downloaded once and saved as
+  <Dam>_FEMA_Structures.gpkg when that file is missing (both options on
+  the Setup tab). The classification does the same.
+- Roads and traffic: without a road layer, the ND GIS Hub NG9-1-1 road
+  centerlines are downloaded with FHWA HPMS (newest year) and ND county-
+  road AADT for the traffic counts.
+- Bridges, culverts and crossings: National Bridge Inventory bridges and
+  culverts (ADT, owner, year built, scour code) and OpenStreetMap
+  culverts, fords / low-water crossings and railroad bridges in the flood
+  are listed (Bridges_Culverts_Crossings, sorted by ADT), as a criteria row
+  and a judgment item (confirm deck / road overtopping or washout), and in
+  the EAP notification list. They do not change the class by themselves.
+- Result panel instead of the pop-up; criteria and consequence settings
+  are under "Show advanced options" (ND defaults preset).
+- Tidier outputs: outputs/Classification (result layers), outputs/EAP,
+  outputs/QA (Inventory_QA, sample points, model-extent check) and
+  outputs/Consolidation (Main / POI Consolidation layers and hazard
+  rasters). FEMA_Structures.gpkg, <Dam>_POI.gpkg, the review decisions,
+  the summary, the PDF report and the run log stay in outputs. Copies left
+  in outputs by earlier versions are removed. CSV / XLSX copies are
+  optional; the pre-2.0 All_Consolidated join layers are off by default.
+- Data-source addresses can be changed without a new version: Readme tab
+  "Edit data sources..." opens ND_Dam_Hazard_Helper_data_sources.json in
+  the QGIS profile folder (restart QGIS after a change).
+- Processing toolbox: "Batch hazard classification (folder of dams)" runs
+  every dam folder in a folder and writes Batch_Hazard_Classification.csv;
+  the single-dam algorithm finds the rasters when Depth is left empty.
+
+DATA SOURCES ADDED (checked September 2026)
+- ND GIS Hub NG9-1-1 roads: services1.arcgis.com/GOcSXpzwBHyk2nog .../NDGISHUBRoadsNG911/FeatureServer/0
+- ND GIS Hub county roads (AADT, AADT_YR): .../NDGISHUB_County_Roads/FeatureServer/0
+- FHWA HPMS North Dakota: geo.dot.gov/server/rest/services/Hosted/HPMS_FULL_ND_<year>/FeatureServer/0
+- National Bridge Inventory (NTAD): services.arcgis.com/xOi1kZaI0eWDREZv .../NTAD_National_Bridge_Inventory/FeatureServer/0
+- OpenStreetMap (Overpass): tunnel=culvert, ford=yes, bridge=low_water_crossing, railway + bridge
+- No public NDDOT traffic-count, bridge or culvert service was found; NBI
+  covers culverts with spans of 20 ft or more, OpenStreetMap the smaller ones
+  where they are mapped.
+
+NEW MODULES
+- autodetect.py (raster search), checks.py (input check).

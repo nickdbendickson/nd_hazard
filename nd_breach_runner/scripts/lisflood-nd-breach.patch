@@ -1,0 +1,95 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c400e54..fc4160f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -194,10 +194,13 @@ if (OpenMP_CXX_FOUND)
+ 	target_link_libraries(lisflood-base INTERFACE OpenMP::OpenMP_CXX)
+ endif()
+ 
+-if (UNIX)
+-	find_package(NUMA REQUIRED)
+-	target_include_directories(lisflood-base INTERFACE ${NUMA_INCLUDE_DIRS})
+-	target_link_libraries(lisflood-base INTERFACE ${NUMA_LIBRARIES})
++if (UNIX AND NOT APPLE)
++	find_package(NUMA)
++	if (NUMA_FOUND)
++		target_include_directories(lisflood-base INTERFACE ${NUMA_INCLUDE_DIRS})
++		target_link_libraries(lisflood-base INTERFACE ${NUMA_LIBRARIES})
++		target_compile_definitions(lisflood-base INTERFACE LISFLOOD_HAVE_NUMA=1)
++	endif()
+ endif()
+ 
+ if (_NETCDF)
+diff --git a/iterateq.cpp b/iterateq.cpp
+index 738f1ce..42d6a9e 100644
+--- a/iterateq.cpp
++++ b/iterateq.cpp
+@@ -195,7 +195,7 @@ void IterateQ(Fnames *Fnameptr, Files *Fptr, States *Statesptr, Pars *Parptr, So
+ 				ptr = i + j*Parptr->xsz;
+ 				if (Arrptr->H[ptr] > Solverptr->DepthThresh)
+ 				{
+-					if (Arrptr->initHtm[ptr] == NULLVAL /*&& (Arrptr->H[ptr]>C(0.01)*/)
++					if (Arrptr->initHtm[ptr] == NULLVAL && Arrptr->H[ptr] > Parptr->inittm_depth)
+ 						Arrptr->initHtm[ptr] = Solverptr->t / C(3600.0);
+ 					//if (Arrptr->H[ptr]>C(0.01)) 
+ 					Arrptr->totalHtm[ptr] += Solverptr->Tstep / C(3600.0);
+diff --git a/lisflood.cpp b/lisflood.cpp
+index af13136..ee90110 100644
+--- a/lisflood.cpp
++++ b/lisflood.cpp
+@@ -118,6 +118,7 @@ int main(int argc, char *argv[])
+ 	Params.checkfreq = CHKINTERVAL;  // set default checkpointing file output interval
+ 	Params.nextcheck = C(0.0);
+ 	Params.reset_timeinit_time = 0;
++	Params.inittm_depth = 0;
+ 	Params.op_multinum = 0; // default to zero or can cause problems with checkpointing if multipass not used
+ 	Params.ch_start_h = C(2.0); // default start water depth for channel
+ 	Params.steadyQtol = C(0.0005); // tolerance for steady-state definition
+diff --git a/lisflood.h b/lisflood.h
+index 4ee56bb..85ca39e 100644
+--- a/lisflood.h
++++ b/lisflood.h
+@@ -676,6 +676,7 @@ struct Pars{
+ 	NUMERIC_TYPE InfilTotalLoss, EvapTotalLoss, RainTotalLoss; // cumulative loss
+ 	NUMERIC_TYPE checkfreq, nextcheck;
+ 	NUMERIC_TYPE reset_timeinit_time;
++	NUMERIC_TYPE inittm_depth; // arrival-depth threshold for .inittm (nd-breach-runner patch)
+ 	NUMERIC_TYPE maxelev, zlev; // Water depth dependent porosity
+ 	int zsz; // Water depth dependent porosity
+ 	int Por_Ident;
+diff --git a/lisflood2/lisflood_processing.cpp b/lisflood2/lisflood_processing.cpp
+index 68e223d..9171cbe 100644
+--- a/lisflood2/lisflood_processing.cpp
++++ b/lisflood2/lisflood_processing.cpp
+@@ -16,7 +16,7 @@ ITERATEQ and UPDATEH
+ 
+ #include "../sgc.h"
+ 
+-#ifdef __unix__
++#if defined(__unix__) && defined(LISFLOOD_HAVE_NUMA)
+ #include <sched.h>
+ #include <numa.h>
+ #endif
+@@ -1726,7 +1726,7 @@ void Fast_MainInit(Fnames *Fnameptr, Files *Fptr, States *Statesptr, Pars *Parpt
+ 	}
+ 	if (verbose == ON) printf("OMP thread count: %d\n", thread_count);
+ 
+-#ifdef __unix__
++#if defined(__unix__) && defined(LISFLOOD_HAVE_NUMA)
+ 	int* numa_nodes = (int*)memory_allocate(sizeof(int)*thread_count);
+ #pragma omp parallel default(shared)
+ 	{
+diff --git a/pars.cpp b/pars.cpp
+index c3d9c56..0485a26 100644
+--- a/pars.cpp
++++ b/pars.cpp
+@@ -572,6 +572,9 @@ void CheckParam(char* param_name, char* param_value_ptr, int line_number, Fnames
+ 		Statesptr->checkfile = ON;
+ 		return;
+ 	}
++	// nd-breach-runner patch: .inittm records the first time depth exceeds this value (m)
++	if (read_numeric_param(param_name, line_number, param_value_ptr, "inittm_depth", &Parptr->inittm_depth, verbose, mode))
++		return;
+ 	if (read_numeric_param(param_name, line_number, param_value_ptr, "resettimeinit", &Parptr->reset_timeinit_time, verbose, mode))
+ 	{
+ 		Statesptr->reset_timeinit = ON;

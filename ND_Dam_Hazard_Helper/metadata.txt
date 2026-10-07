@@ -1,0 +1,370 @@
+[general]
+name=ND Dam Hazard Classification Helper
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
+description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
+about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
+version=2.22.0
+author=N.D. Bendickson
+changelog=
+    2.22.0 - With ND Dam Breach Runner 3.12.0 and ND Dam Breach Screening 0.20.0.
+      * Shared suite code only (damsuite 1.8.0, keep the computer awake during flood runs). No
+        change to the hazard classification.
+    2.21.0 - With ND Dam Breach Runner 3.11.1 and ND Dam Breach Screening 0.19.0. Includes all of 2.20.1.
+      * A dam height or storage that dam.json records as ESTIMATED by the screening (DWR unknown
+        structures, dugouts, dams with no DWR value) is named as a warning in the run log and in the
+        summary's data sources.
+      * Suite data shows DWR unknown structures and dugouts found in the dwr/ folder.
+    2.20.1 - With ND Dam Breach Runner 3.11.0 and ND Dam Breach Screening 0.18.1 (unchanged).
+            Run in a real QGIS (Linux) on Elm River Dam 1; self-test passes.
+      * Fewer sheds, barns and grain bins counted as habitable. FEMA USA Structures copies the
+        parcel's occupancy (OCC_CLS / PRIM_OCC) and address (PROP_ADDR) to every building on the
+        parcel; these no longer make a building habitable (they are still shown).
+      * On a parcel whose ND 911 address point is on one building, a building that only the NSI
+        calls residential is Unverified (NSI 2026 often puts the parcel's RES1 record on a machine
+        shed and AGR1 on the farmhouse), and one that no source calls habitable is Not habitable
+        (listed in QA/Inventory_QA.csv). Mobile-home evidence and FEMA multi-family or
+        manufactured-home parcels keep the earlier reading. The Notes column says why.
+      * An ND 911 address point with no building outline within the address snap distance and no
+        NSI structure (field access, empty lot, tower, utility site) is Unverified, not a dwelling,
+        unless its Place_Type says what is there.
+      * Fixed: on a dam's first run (downloads made in the same run) every building outline had a
+        blank area, so the area filters and the persons by floor area did not apply. A rerun gave
+        the areas. Areas and road lengths now fall back to a planar measure if the ellipsoidal
+        one fails.
+    2.20.0 - With ND Dam Breach Runner 3.11.0 and ND Dam Breach Screening 0.18.0 (unchanged).
+      * After the classification, the flooded habitable structures (the report's structures table)
+        are written into a COPY of the depth-velocity hazard spreadsheet and plotted on its first
+        tab on the Houses on Foundation and Mobile Homes charts. The copy is
+        outputs/Classification/<template>_<dam>_<date>.xlsx; the template is never changed. The
+        spreadsheet comes with the plugin (templates/Hazard_Spreadsheet.xlsx); your own can be
+        chosen in the options (DV_TEMPLATE in Processing). Option "Plot the structures on a copy
+        of the depth-velocity spreadsheet" (on).
+      * The PDF report has a page with the same two charts, drawn from the REG_05.2026 table the
+        classification uses, and a close-up when the structures bunch up (also saved as
+        DV_Chart_*.svg).
+    2.19.0 - With ND Dam Breach Runner 3.11.0 and ND Dam Breach Screening 0.18.0.
+            NOT yet run in a real QGIS - check the first runs.
+      * No structure data is no longer "no structures". When no building outlines or address points
+        were given or downloaded, the structure criteria show "not evaluated" (?), the judgment line
+        says the class is a minimum, and a LOW result reads "LOW SO FAR ... habitable structures were
+        NOT evaluated"; before it showed 0 structures and "not met". The result has an "incomplete"
+        list of the groups that were not evaluated.
+      * The portfolio dashboard reads the height from the Screening summary.csv column height_ft
+        (0.18.0; height_m is still read from older reports).
+    2.18.0 - With ND Dam Breach Runner 3.10.0 (new: a HEC-RAS 2D dam-breach model from a run)
+            and ND Dam Breach Screening 0.17.0. Loaded with the other two in a real QGIS 3.34 (Linux).
+      * Search distances (structure matching in reviews, the series and quick creep
+        tolerances, the model gate's breach-velocity radius, raster sampling buffers) now
+        cover the same ground distance in Web Mercator and longitude/latitude rasters as in
+        projected ones; before, 1000 ft reached about 680 ft at North Dakota latitudes.
+        Projected rasters (UTM, State Plane) give the same values as before.
+    2.17.0 - With ND Dam Breach Runner 3.9.0 and ND Dam Breach Screening 0.16.0.
+            NOT yet run in a real QGIS - check the first runs.
+      * Plugins > ND Dam Suite > Suite data and servers (also in this plugin's menu and as
+        "Data and servers..." in group 8): one suite data folder and one Dams folder for the
+        three plugins, and the server of each kind of data - WMS or ArcGIS REST, add your own
+      * Get data for this dam (or all dams): fills <dam folder>/data/ and dam.json's data
+        section; also the Processing tool ndhazard:getdamdata in "Dam suite exports"
+      * Data & Output: a data set you left empty is taken from the dam folder's data/
+        "(from dam folder)" - only when it holds the whole study area; your own choices
+        always win; the run log says what was used
+      * The offline pack can live in the suite data folder; it now holds NHD waterbodies.
+        build_nd_pack.py runs again as a script (python3 build_nd_pack.py --list)
+      * Export for Screening for one dam folder adds NHD waterbodies, DWR dam lines, DWR
+        dams and the DEM path
+      * Another dam folder clears the rasters found for the previous dam and looks again;
+        DSS-WISE Lite / HEC-RAS imports in outputs/ are found
+      * The NID ID box follows the dam folder (dam.json), it no longer keeps the previous
+        dam's
+      * Downloaded NSI / address tiles are kept for a week by default, so a rerun the next
+        day does not download them again
+    2.16.0 - With ND Dam Breach Runner 3.8.0 and ND Dam Breach Screening 0.15.0.
+      * Pack GeoJSON is written as EPSG:4326. A layer that still has no CRS is assigned one.
+      * An inventory that falls entirely outside the study area stops the run. It is not Low.
+      * (Withdrawn in audit: one household per street address undercounted apartments,
+        mobile-home parks and farmsteads; every habitable building is counted, as in 2.15.0.)
+      * (Withdrawn in audit: the consequence depth stays 0.1 ft - REG_05.2026 5.2.2 counts
+        habitable structures inundated to any degree; same tolerance as the Runner / Screening.)
+      * A High that rests only on judgment-zone dwellings, all less than 1 ft past the line,
+        is reported provisional (the class stays High).
+      * A railroad with blank or zero trains/day stays Medium and is marked unknown.
+    2.10.0 - One system with ND Dam Breach Runner 3.2.0 and ND Dam Breach Screening 0.9.0.
+            NOT yet run in a real QGIS - check the first runs.
+      * dam.json: one record per dam shared by the three plugins (values, who set them,
+        disagreements, status screened / modelled / classified / reviewed, next action)
+      * Version checks between the three plugins at start
+      * Model gate before classification; model chain check (the classified rasters are the
+        Runner's own outputs, SHA-256) in the run and the submittal package
+      * Class probability over a Runner ensemble; quick statewide creep screen
+      * Rules comparison with the Runner / Screening rules; ACER TM 11 chart sign-off file
+      * Reviewer's view of a submittal package; portfolio dashboard with Screening / Runner
+        results and a Next action column
+      * Culvert / bridge lines for the Runner; data package for Screening
+      * New group 8 "Dam suite" on the Hazard Classification tab; 19 Processing algorithms
+    2.9.1 - Safety check for results handed over by other tools.
+      * A run stops when a breach raster is also given as its own no-breach baseline
+        (it would have classified a High dam as Low) or one file is given as depth and as
+        velocity / arrival / D x V
+      * "Incremental" / "difference" rasters are never taken for a flood depth
+      * README: how other tools should hand a dam to ndhazard:classify (DAM_FOLDER only)
+    2.9.0 - New tab order, data-folder search, road / facility review, imagery on maps,
+            sixteen speed and workflow additions. NOT yet run in a real QGIS - check the
+            first runs.
+      * Tabs: DSS-WISE Lite, HEC-RAS plan, Setup & Run, Data & Output ("Run everything"
+        is here), Hazard Classification, Review, Review: roads & facilities, Readme
+      * Setup & Run finds *_Hmax / *_Vmax / *_Dmax rasters (they were skipped)
+      * Data & Output: search a folder on this computer for the data sets of groups 3-6
+        (folder first, then QGIS layers, then the internet; a hand-picked layer wins)
+      * HIFLD is no longer downloaded - get it from hsdl.org/hifld into the data folder
+      * ND GIS Hub address fields (Address, City, ZIP, NGUID, Place_Type) in the results
+      * Review tab: sortable columns, max velocity column, web-map link; mobile homes
+        from NSI, place types, lot units, OSM parks and (optional) footprint shape
+      * Review of roads, railroads, bridges / crossings and lifeline facilities
+      * Aerial imagery under the PDF report and map book maps (skipped offline)
+      * Parallel batch runs, fast (numpy) cell selection, raster pyramids, pre-run
+        estimate, offline-pack R*Tree index, consequence sensitivity, evacuation route
+        layers, flood arrival in the Temporal Controller, KMZ / GeoJSON EAP copies,
+        settings profiles, reproduce a past run, portfolio dashboard, parcel hints,
+        form-template fill (your own template, no guessed fields), HEC-RAS plan used
+        directly; Processing: ndhazard:portfolio, ndhazard:reproduce, ndhazard:fillform
+    2.8.0 - Faster and more robust downloads; sensitivity, termination point, second
+            population source, evacuation timing, reviewer merge, dams in series.
+      * Offline pack build: resumes at the chunk that stopped (not the whole data set), slows
+        down and recovers when a service answers 429 / 503 / 504, shows every wait and retry
+        and keeps the progress message moving
+      * Download cache per tile (off by default; on for the creep watch): NSI / ArcGIS tiles
+        are kept with their date and only tiles older than N days are fetched again
+      * Creep watch: several dams at once in qgis_process worker processes (Workers box)
+      * Quick re-run (no PDF report / map book), Data_Vintage table (what data, what date)
+      * Sensitivity table: the class with depth / velocity scaled (QA/Sensitivity.csv)
+      * Downstream termination point of the incremental hazard (QA/Termination_Point.csv)
+      * Second population source (census polygons or a population raster) vs the structures
+      * Evacuation timing along the road network (QA/Evacuation_Timing.csv), screening only
+      * Review tab: export the decisions and merge another engineer's (backup + report)
+      * Dams in series screen for a folder of dams (button and Processing algorithm
+        ndhazard:damsinseries)
+      * Every screening value is a parameter chosen by the engineer; nothing changes the class
+    2.7.1 - Choose where the maximum depth / velocity are read around a structure.
+      * Hazard Classification tab, Criteria: "Max depth / velocity read from": whole area
+        (outline + 5-ft buffer, as before - the default), buffer ring only, or a band 5 ft
+        either side of the wall, so the maximum points lie along the buffer / outline
+    2.7.0 - Scenarios in the dialog, cross-checks, creep watch, submittal package, consequences.
+      * Breach scenarios and the no-breach baseline are set up in the dialog (Hazard
+        Classification tab, group 5) with a side-by-side results table
+      * DSS-WISE HCOM cross-check of the population at risk (QA/DSSWISE_HCOM_CrossCheck.csv)
+      * Hazard-creep watch: re-classify a folder of dams with fresh data, list the ones that
+        changed (dialog button and Processing algorithm ndhazard:creepwatch)
+      * Submittal package: report, run log, tables and EAP files copied into one dated
+        folder with a SHA-256 manifest, README and cover-letter template (optional zip)
+      * Aerial imagery under the map when zooming to a structure on the Review tab
+      * Non-residential damage from the engineer's own depth-damage curves (CSV)
+      * Population at risk for night and day, and seasonal (camp) shares
+      * The evaluation is saved to outputs/QA/_evaluation_cache.bin and re-used after QGIS
+        is restarted (same inputs and plugin version, at most 7 days old)
+      * Real-QGIS continuous-integration kit (separate download; not run by the author)
+    2.6.2 - Both 2.6.1 releases combined; offline-pack fixes; faster; timings.
+      * Contains the offline data pack and the download-freeze fix (the two 2.6.1s)
+      * Offline pack: data sets with features that could not be read are "partial" or
+        record the areas missing, and are used only as a fallback, with a warning; NID
+        tries both services before an incomplete pack; Check inputs does not unpack the
+        pack; a pack path with "#" works; a pack build stops promptly on Cancel and no
+        longer multiplies requests when a service is down; building inside QGIS keeps
+        the data-source file's addresses
+      * Faster: road / rail / sole-access raster reads batched (same values); ACER zone
+        rasters and EAP arrival maps re-used when the rasters are unchanged; review
+        decisions matched through a grid
+      * Run log: time taken by each stage (TIMINGS)
+    2.6.1 (offline pack) - Offline data pack: run without internet access.
+      * build_nd_pack.py (or Data & Output > Build offline pack...) downloads every data
+        set for all of North Dakota into one zip - NSI, ND GIS Hub, FEMA USA Structures,
+        NID, rail, traffic, NBI, lifelines, NHD, OpenStreetMap - with the fetch date of each
+      * Data & Output > 7. Offline data pack: pick the zip; data sets in it are read for
+        the study area instead of downloaded; "Offline only" makes no internet requests
+      * The run log, data-source list and Check inputs report what came from the pack
+    2.6.1 (freeze fix) - QGIS froze during downloads (Download data now, classification).
+      * A finished download thread pool was released while its last jobs were still
+        returning; in PyQt that waits holding Python's lock, which the jobs need -
+        the download never completed and QGIS stopped responding. Jobs are now kept
+        until the pool has been waited for; a cancelled pool is parked until idle
+      * Cancel also stops a data set's own tiles / pages; QGIS exit waits for them
+    2.6.0 - One run, in the background; one-pass sampling; evaluation areas; re-use.
+      * Main Consolidation and the POI tab are gone: the Hazard Classification's structure
+        inventory is the one consolidation. Run everything = data sets (optional) + checks
+        + classification. The ACER zone rasters (Hazard_Foundations / MobileHomes /
+        Vehicles) are now written by the classification (Classification folder, option)
+      * The run executes in a QGIS background task: QGIS stays usable, the progress bar's
+        Cancel stops it; layers, map book, report and summary follow on the main thread
+      * Downloads run side by side (services, ArcGIS pages after a count query, NSI
+        tiles; Overpass limited to 2), one cap of 6 requests in flight
+      * Structures are sampled in one pass: a coarse wet mask finds the structures near
+        the flood, every evaluation area is rasterised at once (colour classes for
+        overlapping areas), velocity / arrival / D x V read for all cells together -
+        the same cells and values as before, a handful of GDAL calls instead of four per
+        structure
+      * QA/Structure_Evaluation_Areas: the exact area searched for each structure's max
+        depth and velocity (outline + 5-ft edge ring, or the point disc) with the values
+        found; QA/Structure_Sampled_Cells: the raster cells read (option)
+      * Re-use: when rasters (contents), input layers, download choices and the settings
+        that shape the sampling are unchanged since the last run in the session, the
+        evaluation is re-used and only review decisions, rules, consequences,
+        classification and outputs are redone (Save and re-run, what-if changes of
+        persons per dwelling, judgment, borderline, 1D / 2D, loss-of-life settings)
+      * Sole access is placed on the network for every structure, so a structure the
+        engineer marks habitable afterwards has its answer
+      * Removed: the D x V-bound and time-step ACER methods, the time-step folder, the
+        All_Consolidated / EdgeBuf_* outputs, the POI workflow (give points of interest
+        as the lifeline facilities layer); README.txt is now the one copy of the manual
+    2.5.1 - GDAL fix, Dmax / Vmax only, ND addresses habitable, Data & Output tab.
+      * FIX: "Cannot call gdal.DontUseExceptions() ... stack of error handlers is: ogr
+        gdal" (GDAL 3.7+) - exception settings restored in reverse order
+      * ACER zones from max depth with max velocity only; no velocity raster -> 1D
+        criterion (D x V kept for flood severity)
+      * Hazard Classification tab: Hydraulics group removed (breach model moved to Setup);
+        Criteria / Report / Consequences / EAP, advanced groups behind one checkbox
+      * ND GIS Hub site-address structures habitable, ACER type "Habitable" (house
+        curve; mobile-home evidence keeps the mobile-home curve)
+      * FEMA_Category (FEMA USA Structures / NSI Hazus occupancy) for reference replaces
+        Category; Review tab "Habitable (now)" / "Set habitable"
+      * Data & Output tab first: output options and every download / project layer;
+        "Download data now" saves outputs/Data for the study area or the flooded area
+      * Self-test expects 5 Processing algorithms
+      * Review fixes: only ND GIS Hub points with an address make a structure habitable
+        (not any layer with a NENA-like field); ND-addressed occupied buildings without
+        NSI population get one dwelling's persons; Run everything continues when saving
+        the data sets fails; Download data now needs only the depth raster; flood buffer
+        reaches past the raster edge; partly saved downloads never auto-detected
+    2.5.0 - EAP map book and travel-time table, HEC-RAS plan import, campgrounds,
+            classification margin, change tracking, future development.
+      * EAP outputs can each be switched off (Hazard Classification tab, group 6)
+      * EAP inundation map book (PDF): index + numbered sheets in flood order, arrival
+        bands, closed roads, numbered notification items listed beside each map
+      * EAP travel-time table: river miles from the dam, arrival / peak depth / time of
+        peak, towns, bridges, road closures; centerline layer or traced USGS NHD flowlines
+      * EAP notification list: Priority column (schools, child care, care homes, hospitals)
+      * Schools and child care from OpenStreetMap (vulnerable occupants, judgment item)
+      * Campgrounds / RV parks from OpenStreetMap as overnight-recreation structures
+        (5.2.1.1), mobile-home curve, persons from the number of sites
+      * Classification margin (5.3(f)): depth change at the controlling structure that
+        would change the class; on the summary, report page 1 and result panel
+      * The dam's own NID hazard potential compared with the result
+      * Changes since the last run: QA/Changes_Since_Last_Run.csv and a summary section
+      * Future development (5.3(b)): vacant parcels in the danger zone (parcel layer)
+      * HEC-RAS 6.x plan results (.hdf) import: depth, velocity, arrival, WSE and time of
+        peak rasters from the 2D flow areas (tab and Processing algorithm)
+      * Downloads: when a service fails, the latest earlier download of the same area is
+        used and reported with its date; NDDOT traffic counts tried when HPMS fails
+    2.4.1 - Cleanup of 2.4.0.
+      * Removed enhanced_units_from_name (read metric DSS-WISE depth / velocity as feet),
+        apply_gishub_dwellings (no effect; would have bypassed the Place_Type rules) and
+        vel_at_max_depth (unused) - the 2.4.0 changelog described code that never ran
+      * DSS-WISE junk filter narrowed to ._*, .DS_Store, __MACOSX, Thumbs.db,
+        desktop.ini (a file starting with "__" is no longer skipped); also applied when
+        the zip is extracted and to folders
+      * HTTP user agent follows the plugin version
+    2.4.0 - DSS-WISE packages: macOS metadata files (._*, .DS_Store) skipped when scanning;
+            NDDOT_AADT_URL data-source constant added (its other helpers were never
+            called and were removed in 2.4.1).
+    2.3.1 - Data-integrity and stability fixes.
+      * Overpass: partial results (timeout / out-of-memory) now raise an error instead
+        of silently using truncated data
+      * ArcGIS paging: orderByFields added for deterministic resultOffset paging;
+        objectIdField and supportsPagination read from the service before paging
+      * Arrival time: sampled at wet cells at the facility (was at the buffer minimum)
+      * Same-family duplicate-point drop now marks the point as placed so it does not
+        become a phantom free-standing structure in the merge step
+      * DSS-WISE import: no-breach baseline rasters cleared when a new package is loaded
+      * Plugin unload: dialog destruction deferred when a run is in progress
+      * Ambiguous engineer-review decisions (one saved row matching multiple structures)
+        are now logged and not applied, rather than applied to multiple structures
+      * ND criteria and scenarios tables: repeat=True to prevent silent row clipping in PDF
+      * Hazard_Classification_Summary: csv/xlsx only (no orphan GPKG in outputs)
+      * criteria_text(): Found column widened from 22 to 30 characters
+      * _export: per-format legacy-file retirement (was retire-all-or-nothing)
+      * _on_check_inputs: generic exception handler with log and dialog
+      * _set_busy: defensive getattr for all button widgets; scen_* buttons included
+      * Downloads skipped: reason logged (no usable CRS/extent on depth raster)
+      * FEMA failure message: distinguishes download vs save failure
+      * valid_extent(): scale/offset applied before > 0 test (consistent with any_valid_in_bbox)
+      * classify_tab: warns when a scenario requests baseline but no-breach rasters are absent
+    2.3.0 - Simpler runs: rasters found, Check inputs, Run everything, downloads.
+      * Rasters found in the dam folder by RAS Mapper / DSS-WISE names
+      * Check inputs (units, WSE-as-depth, minutes, CRS, services) and Run everything
+      * NSI / ND GIS Hub / FEMA_Structures downloaded when missing (no project layers needed)
+      * ND roads + HPMS / county AADT downloaded when no road layer is chosen
+      * Bridges, culverts, low-water crossings and rail bridges (NBI, OpenStreetMap)
+      * Result panel with zoom; advanced options collapsed
+      * Output sub-folders (Classification, EAP, QA, Consolidation); spreadsheets optional
+      * Editable data-source file; batch classification of a folder of dams
+    2.2.0 - FEMA_Structures outlines, dams in series, lifelines, model extent, EAP.
+      * Outline file renamed OSM_Outlines -> FEMA_Structures (old name still read);
+        FEMA point layers no longer processed
+      * Dams in series (5.3(c)) from the National Inventory of Dams or your layer
+      * Lifeline facilities (5.2.2) from ND GIS Hub, HIFLD (NASA NCCS copy), EIA,
+        OpenStreetMap or your layer; at least ND Medium when inundated (option)
+      * Model extent check: flood reaching the raster edge / model boundary
+      * EAP notification list sorted by arrival time, arrival-time bands and contours
+    2.1.0 - Review, report, layer groups, sample locations.
+      * Review tab: reviewed structures are no longer listed (option to show them),
+        'automatic result is correct' choice, list every flooded structure, double-click zoom
+      * PDF report: ND REG_05.2026 Sec. 5.2 criteria table next to ACER TM 11 Table 1,
+        scenarios, roads / rail table, every flooded habitable structure with ND outcome
+      * Report / outputs open in another program: written under a new name and reported
+      * Layers grouped in the layer panel by dam and category (QGIS 3.28+ layer tree API)
+      * *_POI.gpkg loaded after Main Consolidation and never overwritten once it exists
+      * OSM_Sample_Points and Structure_Sample_Points: where the values were read
+      * Run log per classification; Open PDF report / outputs folder buttons; map tips
+      * Accuracy: AADT only from the same road; abandoned rail / trails left out;
+        trains/day from the same line; roof outlines join the main building;
+        1D borderline rule; D x V raster used in the time-step DxV_Max output
+      * Stability: locked CSV / PDF outputs never stop a run; settings kept on
+        Project > Save and project change; revised DSS-WISE packages never mixed
+    2.0.0 - Same-time ACER zones, scenarios, consequences, review, report, DSS-WISE Lite.
+      * ACER zones from Dmax / Vmax / (D x V)max bound or from time-step rasters
+      * No-breach baseline: incremental classification; several breach scenarios
+      * Economic loss (NSI values, EGM 01-03) and loss-of-life screening (Graham 1999)
+      * Borderline (near-threshold) structures; sole-access road screening
+      * FEMA USA Structures / extra outlines; inventory QA table
+      * Review tab with persistent engineer decisions
+      * PDF report from a print layout kept in the project
+      * DSS-WISE Lite results import (tab and Processing)
+      * Processing provider; settings saved in the project
+    1.4.0 - Study area, ND GIS Hub address points, QGIS 3.28 - 4.x on Windows / macOS.
+      * Every structure layer and download limited to the depth raster extent + 25 ft
+        (adjustable); features inside it are kept even where the rasters have no value
+      * ND GIS Hub SiteStructure Address Points: detected under their Hub / service names,
+        NENA Place_Type and Placement read, driveway points moved onto the building,
+        unit addresses counted as dwellings, optional download
+      * Edge-buffer ring built in the raster CRS (correct width for EPSG:4326 outlines)
+      * Web Mercator / geographic rasters: distances corrected for latitude
+      * Qt6 / QGIS 4 ready: scoped enums, QMetaType field types, QAction location
+      * Faster edge buffer (dry outlines skipped); download paging de-duplicated
+    1.3.1 - ACER curves.
+      * TM 11 Figure 4 passenger-vehicle curves added (vehicle zones, TM 11 motorists)
+      * FIX: mobile-home High boundary x^4 coefficient typo (non-conservative above ~6 ft/s)
+      * Velocities beyond each figure's range evaluated at the range limit
+    1.3.0 - Hazard Classification tab.
+      * Habitable structures (OSM + NSI/FEMA/GIS Hub + NSI download), house vs mobile home
+      * Worst-cell ACER zone per structure with its own curve
+      * Overtopped roads with most recent AADT; inundated rail with trains/day (FRA)
+      * ND Dam Safety Standards REG_05.2026 Sec. 5.2 and ACER TM 11 Table 1 classification
+      * Summary report with reasons and engineering-judgment items
+    1.2.0 - Performance and stability release.
+      * Hazard rasters processed in strips (bounded memory), tiled GeoTIFFs with overviews
+      * GDAL-based raster sampling with vectorised nearest-cell search
+      * Edge-buffer zones fixed (previously always failed) and rasterised per ring
+      * All_Consolidated join uses the spatial index only; computed once for both outputs
+      * Sampling buffer converted from feet to raster CRS units
+      * Correct reprojection when point, OSM and raster CRSs differ
+      * Safe re-runs: no duplicate layers, own outputs ignored, locked files handled
+      * Cancel works in every stage; modal, throttled progress
+      * No global gdal.UseExceptions() side effect
+      * Built-in self-test (Readme tab)
+    1.1.0 - OSM outlines, All_Consolidated and edge-buffer zones.
+    1.0.0 - Initial release.
+tags=dam,hazard,flood,inundation,acer,usbr,consolidation,nsi,fema,dss-wise,consequences,loss of life,processing
+category=Plugins
+experimental=False
+deprecated=False
+hasProcessingProvider=yes

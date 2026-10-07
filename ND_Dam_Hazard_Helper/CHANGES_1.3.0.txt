@@ -1,0 +1,45 @@
+ND Dam Hazard Classification Helper - 1.3.0 (hazard classification)
+===================================================================
+
+NEW: HAZARD CLASSIFICATION TAB
+- Habitable structures
+  * Sources: OSM building outlines (OSM_Outlines.gpkg), NSI / FEMA /
+    ND GIS Hub point layers in the project, and an optional USACE National
+    Structure Inventory (NSI) download for the flooded extent.
+  * Points inside an outline describe that building; points from different
+    sources within 30 ft are merged; duplicates are removed.
+  * Habitability per ND REG_05.2026 5.2.1.1; outbuildings excluded;
+    uncertain buildings reported as "Unverified" for review.
+  * Mobile home vs house on foundation from NSI RES2 / building type H,
+    OSM static_caravan, or manufactured/mobile/trailer attributes.
+  * Zone per structure from depth and velocity in the SAME cell, over the
+    outline plus the 5-ft buffer, using that structure's curve; the worst
+    cell governs. (The 1.2 edge-buffer fields combined the maximum depth
+    and maximum velocity, which can come from different cells.)
+- Roads: overtopped stretches (10-ft sampling), road class, paved status,
+  bridge flag, most recent AADT (road layer incl. AADT_yyyy columns, an
+  optional AADT layer, FRA crossing AADT), ND class, TM 11 motorists.
+- Rail: national rail network lines and FRA grade crossings downloaded for
+  the area (or your own layers); trains/day from same-railroad crossings
+  within 3 miles; passenger lines flagged.
+- Classification: ND Dam Safety Standards Policy REG_05.2026 (effective
+  04/01/2026) Section 5.2, and ACER TM 11 Table 1 by lives in jeopardy.
+  The summary lists the reasons and the items needing engineering judgment.
+- Outputs: Habitable_Structures, Roads_Inundated, Rail_Inundated
+  (GPKG/CSV/XLSX, styled), Hazard_Classification_Summary (TXT/XLSX/CSV),
+  dated download cache in outputs/_downloads.
+- Self-test extended (11 new checks).
+
+PENDING
+- ACER TM 11 Figure 4 (passenger vehicles): the curve coefficients are not
+  yet included, so road vehicle zones and TM 11 motorist counts are
+  skipped (the summary says so). ND road criteria do not need this curve.
+
+LIMITS TO KEEP IN MIND
+- AADT comes from the layers you provide plus FRA crossings; local roads
+  without counts are listed for review. The plugin does not query NDDOT's
+  servers directly - add their count layer (or HPMS) to the project.
+- A 2D depth grid shows water under bridges; bridge stretches are flagged
+  and need confirmation.
+- Sole-access roads, lifeline facilities, imminent development and dams
+  in series (ND 5.2.1.2, 5.2.2, 5.3) still need the engineer's review.

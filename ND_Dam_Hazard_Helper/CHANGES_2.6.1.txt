@@ -1,0 +1,100 @@
+ND Dam Hazard Classification Helper - changes in 2.6.1
+
+2.6.1 was released twice, from two separate lines of work. 2.6.2 contains
+both; they are listed here one after the other.
+
+=============================== PART A: OFFLINE DATA PACK
+
+2.6.1 - Offline data pack: run the plugin without internet access.
+
+BUILDING THE PACK (on a computer that is online)
+  * build_nd_pack.py in the plugin folder - plain Python 3.7+, no QGIS
+    needed - or Data & Output tab > 7. Offline data pack > Build offline
+    pack... (runs the same builder in a background task).
+  * Every data set the plugin downloads, for North Dakota's bounding box
+    plus 0.1 degree: NSI (0.2 degree tiles, as the plugin asks), ND GIS Hub
+    address points / roads / county roads, FEMA USA Structures, NID (mirror
+    when USACE fails), NTAD rail and grade crossings, the newest FHWA HPMS
+    year that answers, NDDOT traffic counts, NBI, the ten lifeline
+    services, USGS NHD flowlines (gnis_name, ftype, fcode, reachcode,
+    lengthkm - what the travel-time trace uses) and OpenStreetMap
+    lifelines, crossings, campgrounds and towns (2 degree Overpass areas,
+    split when Overpass gives up). Same services and addresses as the
+    plugin (--sources applies a data-source file).
+  * ArcGIS layers are read by object id (all ids first, then chunks of up
+    to 1000 in parallel) - no page limit; a chunk that fails is halved
+    until the single failing features are known and reported.
+  * Resumable: finished data sets are kept in <name>_work/ and skipped
+    when the build is run again; --refresh / --only update single ones.
+  * Output: one zip with manifest.json (data sets, counts, fetch dates,
+    anything missing), nd_offline_pack.sqlite and README.txt.
+
+USING THE PACK
+  * Data & Output tab > 7. Offline data pack: the pack (zip, unpacked
+    folder or .sqlite) and "Offline only". Saved in the QGIS user
+    settings (this computer), not the project; environment variables
+    ND_DAM_HAZARD_OFFLINE_PACK / ND_DAM_HAZARD_OFFLINE_ONLY override them.
+  * Every download (download.py) looks in the pack first: a data set in
+    it is read for the requested area - the features whose geometry
+    intersects it, as the service's area query returns - and written to
+    outputs/_downloads/_pack/<name>_pack-<fetch date>_<area>.geojson.
+    The dated download cache and the stale-cache fallback are unchanged;
+    a pack file is never mistaken for a dated download.
+  * Not offline only: a data set missing from the pack is downloaded; a
+    study area reaching beyond the pack's area uses the service, and the
+    pack (with a warning that features beyond it are missing) when the
+    service fails.
+  * Offline only: no internet request at all (the network layer refuses
+    them); a data set missing from the pack is logged as skipped and an
+    earlier download of the same area is used when there is one.
+  * Run log: the pack and its build date at the start, one line per data
+    set read from it (with its fetch date); the data-source list names the
+    pack; Check inputs reports the pack instead of probing the services.
+
+OTHER
+  * The OpenStreetMap queries and answer parsing moved to osm_parse.py
+    (pure Python, shared with the builder); download.py still exports the
+    same names.
+
+=============================== PART B: DOWNLOAD FREEZE FIX
+
+FIXED: QGIS froze during downloads and they never completed
+(Download data now; also the downloads of a classification run).
+
+Cause
+  2.6.0 runs downloads side by side on Qt thread pools (download.py,
+  parallel_map). When the last job of a pool reported its result, the
+  pool was released at once, while that job's thread was still returning
+  and Qt was about to delete the finished Python job. In PyQt, destroying
+  a QThreadPool waits for its running jobs while holding Python's global
+  interpreter lock (GIL), and deleting a Python job needs that lock: the
+  two threads waited for each other. Every Python call in QGIS needs the
+  same lock, so QGIS stopped responding as well. Nested pools (NSI tiles,
+  ArcGIS pages) made it more likely.
+
+Fix (download.py)
+  * Python jobs are no longer auto-deleted by Qt; the pool keeps them
+    (_PoolHandle) until it is done.
+  * Before a pool is released it is waited for with waitForDone(), which
+    PyQt runs with the lock released.
+  * A pool whose jobs may still be running (Cancel, or an error) is parked
+    in _ZOMBIE_POOLS and released only once all its threads are idle.
+  * If a job could not be started, the pool is parked instead of dropped.
+  * Cancel now also stops a data set's own tiles / pages (NSI tiles,
+    ArcGIS pages) instead of letting them download on in the background,
+    and a parked pool drops the jobs it has not started.
+  * Parked pools are cleaned up under a lock (nested downloads prune from
+    several threads) and waited for when the plugin unloads / QGIS closes,
+    so closing QGIS right after a Cancel cannot hang it.
+
+Tests
+  tests/test_v261.py adds a Qt-like thread pool to the test harness (the
+  harness had none, so the Qt path was never exercised - the reason this
+  was missed). 2.6.0 destroys the pool with jobs still active on every run;
+  2.6.1 never does; Cancel stops the nested pages; unload waits for
+  parked pools. 306 harness tests pass. Not yet run in a real QGIS.
+
+Also corrected
+  The 2.6.0 release notes said the Structure_Sampled_Cells layer is off by
+  default; it is on by default (Hazard Classification tab, "Layer of the
+  raster cells read for each structure").

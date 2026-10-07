@@ -1,0 +1,105 @@
+ND Dam Hazard Classification Helper 2.0.0
+=========================================
+
+SAME-TIME DEPTH AND VELOCITY (ACER TM 11 zones)
+- New hazard.py. Max depth and max velocity usually occur at different
+  times; pairing them (the only method before 2.0) overstates the hazard.
+    * D x V bound: with a depth x velocity maximum raster (RAS Mapper
+      "Depth x Velocity", DSS-WISE DV) the zone is the worst over every
+      (d, v) with d <= Dmax, v <= Vmax, d*v <= DVmax - never worse than
+      max/max. Velocity may be left out (then up to each figure's range).
+    * Time steps: a folder of RAS Mapper exports "Depth (<time>).tif" /
+      "Velocity (<time>).tif" (or Depth_0100 / Velocity_0100): worst zone over
+      the output times; where the exported times miss a cell's maximum
+      depth, the Dmax-based method is applied there as well (logged;
+      without a max velocity raster, velocities up to each figure's range).
+    * HEC-RAS results are used through these RAS Mapper exports; the plan
+      .hdf file is not read directly.
+- Used for the hazard GeoTIFFs (now also Hazard_Vehicles.tif, TM 11 Fig. 4),
+  structures and road vehicle zones. Arrival raster optional; velocity
+  optional with D x V, time steps or the 1D criterion.
+
+SCENARIOS AND INCREMENTAL CLASSIFICATION
+- Several breach scenarios (sunny day, PMF, DSS-WISE ...) in one run; the
+  most severe governs. Each scenario's roads and rail are searched in its
+  own flooded area. Rasters in another CRS are copied into the first breach
+  scenario's CRS (outputs/_reprojected; Float32, source CRS as set in
+  QGIS).
+- A no-breach baseline makes the classification incremental (FEMA P-333):
+  charged to the dam only when the breach floods a dry place, makes the
+  outcome worse, worsens the ACER zone, adds >= 1 ft (setting), worsens a
+  road's vehicle zone, or cuts access that exists without the breach.
+  Outcomes and zones are compared on the same basis: as found when both
+  scenarios used the same method and both (or neither) have velocity,
+  otherwise at max depth with max velocity; a side without velocity is
+  judged by depth only (logged). The summary, totals and ND / TM 11
+  classes use this incremental view; the classes without the baseline are
+  reported too.
+
+CONSEQUENCES (screening)
+- NSI value exposed and residential damage from USACE EGM 01-03 generic
+  depth-damage curves (depth above the first floor = depth - NSI foundation
+  height; content damage = content % x structure value, capped at the NSI
+  content value; basement / mobile homes / non-residential flagged).
+- Loss of life: Graham (1999) DSO-99-06 Table 7 fatality rates from flood
+  severity (DV >= 50 ft2/s or depth >= 10 ft = medium; high only by
+  setting) and warning time (arrival minus the warning time entered);
+  day or night population (an NSI population of 0 is kept; engineer-review
+  persons win).
+- Borderline structures within 0.5 ft (setting) of the next ACER boundary
+  flagged (ND 5.3(f)) or, optionally, counted in the higher zone.
+- Sole-access screening on the road network: roads cut where the flood
+  starts / ends, T-junctions without a shared vertex joined (5 ft);
+  structures whose own road is flooded or whose every mapped route out is
+  flooded -> Access_Cut_Off and ND Medium (setting); a network that never
+  leaves the model area gives "unknown". Road ends are matched against
+  nearby segments only (fast for long highways).
+
+INVENTORY, REVIEW, REPORT
+- FEMA USA Structures download and any extra outline layer (merged into
+  overlapping outlines); Inventory_QA.csv (outlines without points, points
+  without outlines).
+- Review tab and outputs/Structure_Review_Decisions.csv: decisions
+  (category, house / mobile home, persons, note, reviewer, date) applied on
+  every run; removable; ANSI (Excel) copies read; an unreadable file is
+  never overwritten; a file open in Excel is reported; unmatched decisions
+  logged; unchanged decisions keep their reviewer and date; zoom works for
+  point structures.
+- Hazard_Classification_Report.pdf from a print layout kept in the project
+  (overview, zoom maps, legend, scale bar in ft / mi, summary, table); the
+  depth layer shown is added to the project so the saved layout keeps it.
+
+DSS-WISE LITE IMPORT (tab and Processing)
+- Zip or folder; zip-slip safe; nested zips. Roles and units from the file
+  names (e.g. NAXXXXX_FloodDepth_in_Ft-..._UTM.tif, _in_M_per_Sec, _in_Hrs);
+  "time of max / peak" (not "...DepthTimesVelocity") and hazard-zone
+  polygons recognised; duplicate roles resolved (units stated, UTM copy)
+  and reported; units that are not stated must be confirmed (tab table;
+  Processing unit parameters or "accept US units"); units that do not fit
+  the role are rejected.
+- Converted to ft, ft/s, ft2/s, hours; HCOM population and discharge
+  tables summarised; used as the Setup rasters (fields without a raster in
+  the package are cleared, so two data sets are never mixed) or as a
+  scenario.
+
+PROCESSING AND SETTINGS
+- "ND Dam Hazard" provider: ACER zone rasters (background thread; project
+  layers are never touched off the main thread), hazard classification
+  (main thread), DSS-WISE import. Outputs declared for the modeller;
+  "save to temporary folder" works; errors reported as Processing errors.
+- Settings (rasters, options, scenarios) saved in the QGIS project,
+  written only when changed, and re-read when another project is opened.
+
+REVIEW AND TESTS
+- An independent review of 2.0 found 11 computation and 7 QGIS / UI
+  defects (plus minor items); a second review of the fixes found 9 more,
+  the most serious a crash when roads were sampled without a velocity or
+  arrival raster (1D model). All are fixed and covered by
+  tests/test_v20_review.py; unexpected errors in the Processing
+  algorithms are reported as Processing errors with the traceback in the
+  log. The Processing output "METHOD" is now "METHOD_USED" (it clashed
+  with the METHOD parameter in the modeller).
+- Test harness: 208 tests pass on the QGIS 3.28 and 3.40 imitations, 198
+  (+10 comparisons with v1.1 that cannot load on Qt6) on the QGIS 4 / Qt6
+  imitation. Self-test (Readme tab): 60 checks, including roads sampled
+  without velocity / arrival rasters.

@@ -1,0 +1,19 @@
+[general]
+name=ND Data Updater
+qgisMinimumVersion=3.28
+description=Keeps an offline copy of North Dakota structure and building-footprint data on this computer and downloads new versions when the sources change.
+about=Downloads and maintains local North Dakota copies of the National Structure Inventory (NSI API; NSI 2026 and NSI 2022 merged into one layer by default), Microsoft building footprints, OpenStreetMap (Geofabrik), optionally FEMA/ORNL USA Structures, and optionally the USACE-NSI/nsi-generator source code. Each dataset is checked cheaply (checksum, ETag or latest commit) and only re-downloaded when it changed. Updates are staged and verified before replacing the local copy, so the data stays usable offline and an interrupted update never leaves partial files. Layers already in the project are reloaded after an update.
+version=1.1.0
+author=ND Data Updater
+email=nd-data-updater@example.com
+repository=https://example.com/nd-data-updater
+tracker=https://example.com/nd-data-updater/issues
+homepage=https://example.com/nd-data-updater
+category=Plugins
+tags=north dakota,nsi,structures,building footprints,offline,update
+icon=icon.svg
+experimental=False
+deprecated=False
+changelog=1.1.0 - NSI now names its version (the API default switched to NSI 2026). By default NSI 2026 and NSI 2022 are merged into one layer: a 2022 point within 30 m of a 2026 point is folded into it (2026 wins; the 2022 id, occupancy, building type and a mobile-home flag are kept in nsi22_* fields), and 2022 points with no 2026 point nearby are kept with nsi_version = 2022. Settings choose merged / 2026 only / 2022 only and the match distance. nsi_summary.json in the nsi folder gives counts per county.
+  1.0.1 - OpenStreetMap now downloads as a GeoPackage (north-dakota-latest-free.gpkg.zip); only its buildings layer is added to the project.
+  1.0.0 - First release.

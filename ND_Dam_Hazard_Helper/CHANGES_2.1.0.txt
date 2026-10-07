@@ -1,0 +1,112 @@
+ND Dam Hazard Classification Helper 2.1.0
+=========================================
+
+REVIEW TAB
+- Why reviewed structures came back: the list showed every flagged
+  structure after a re-run, reviewed ones only sorted last. Now a
+  structure with a saved decision is hidden after the next run ("Show
+  structures already reviewed" shows it again, pre-filled from the file).
+- Columns renamed: "Set category" (habitability: dwelling, occupied,
+  unverified, not habitable), "Set house / mobile home" (ACER curve),
+  "Set persons"; "Reviewed" shows who / when / what was decided.
+- "Automatic result is correct" records a check without changing anything.
+- "List every flooded structure" (not only the flagged ones).
+- Double-click a row to zoom; unsaved edits survive ticking an option;
+  rows show the decision as saved in the file; unchanged decisions keep
+  their reviewer and date; a decisions file saved by Excel with ";" and
+  decimal commas is read, columns added in Excel are kept, and a file with
+  unknown columns is never overwritten.
+
+PDF REPORT
+- Rebuilt on every run (layout replaced in the Layout Manager).
+- Page 1: ND Dam Safety Standards REG_05.2026 Sec. 5.2 criteria table
+  (5.2.1.1 probable loss of life / judgment zone, 5.2.1.2 roads and sole
+  access, 5.2.1.3 railroads, 5.2.2 economic loss / lifelines, 5.3(f)
+  borderline, result) beside ACER TM 11 Table 1 (lives in jeopardy), the
+  scenarios and the items requiring judgment. The same criteria table is
+  in Hazard_Classification_Summary.txt / .xlsx.
+- Then overview map, zoom maps, overtopped roads / rail table (ND class,
+  AADT or trains/day, vehicle zone) and every flooded habitable structure
+  with its ND outcome and ACER zone (and "Charged" with a baseline).
+- Tables: column widths sized to the page (including QGIS's cell margins
+  and grid lines), wrapped text, headers on every page.
+- A PDF (or CSV / XLSX) open in another program: this run's file gets a
+  time-stamped name and the completion message says so. "Open PDF report"
+  opens the file just written; "Open outputs folder".
+
+LAYER PANEL
+- All plugin layers in "ND Dam Hazard - <dam folder>" with sub-groups:
+  Classification results, Sample locations, Points of interest,
+  Consolidated structures, ACER hazard zones, Hydraulic rasters,
+  DSS-WISE Lite (QGIS layer-tree API, QGIS 3.28 - 4.x, no macros). A
+  re-run replaces layers instead of adding them again; results that are
+  empty this run (e.g. no overtopped roads) are removed with their files;
+  empty groups are removed.
+- <dam>_POI.gpkg is loaded after Main Consolidation. Once it exists it is
+  never overwritten (loaded or not), so edits cannot be lost; delete it to
+  copy the source POI layer again.
+- OSM outlines (with edge-buffer zones) are loaded too.
+
+SAMPLE LOCATIONS
+- <dam>_OSM_Sample_Points.gpkg / .csv: where each OSM outline's Hmax_ft,
+  Vmax_ftps and Arrival_hr were read - the outline's point, or the nearest
+  valid cell within the sampling buffer (Offset_ft, Method) - and where
+  the EdgeBuf_Hmax_ft / EdgeBuf_Vmax_ftps maxima were in the 5-ft ring.
+  Values equal the outline attributes.
+- Structure_Sample_Points.gpkg: the cells behind each flooded structure's
+  maximum depth, velocity, depth x velocity, earliest arrival and
+  controlling ACER zone.
+
+OTHER ADDITIONS
+- Hazard_Classification_Run_Log.txt for every run (also a failed one):
+  settings, scenarios, messages, result, data sources.
+- Map tips / identify names on the output layers.
+- Settings also saved on Project > Save, when the dialog is hidden, and
+  the custom output folder is kept; opening another project refreshes the
+  layer lists before its settings are restored.
+
+ACCURACY (independent review)
+- AADT: only from the road itself - an AADT line must run along the
+  flooded stretch (50 ft, >= half its length) in the same direction; a
+  count station within 100 ft; one FRA crossing. Names reject a candidate
+  only when they clearly differ (different route numbers, or different
+  street names); all name / ref / route fields are compared, so a highway
+  through town ("Main Street" / "US 2") keeps its AADT. Before, a
+  parallel highway or a crossing street could give a county road
+  AADT > 2,000 (High). A US / State highway without AADT is now a
+  judgment item (High if AADT > 2,000).
+- Railroads: NARN lines coded abandoned, removed or trail (NET A, R, T)
+  are not railroads; out-of-service lines (X) are a judgment item.
+  Trains/day only from crossings on the same line or subdivision; a
+  crossing of the same railroad whose line is not confirmed makes it a
+  judgment item.
+- A roof outline over a house and a separately mapped garage joins the
+  house (largest overlap), so persons are no longer counted twice.
+- 1D model: borderline = within the near-threshold below the 2-ft rule;
+  "count borderline in the higher class" now raises the outcome.
+- The class "without baseline" counts sole-access cut-offs shared with
+  the baseline.
+- Road / rail search distances corrected for Web Mercator / degrees.
+- Time steps: DxV_Max.tif uses the D x V max raster where given; unknown
+  values are NoData instead of 0.
+- Hazard rasters: -9999 without a NoData tag is NoData; velocity outside
+  the velocity raster is NoData, not 0 ft/s.
+- Judgment items: roads / rail aggregated into one line each, structure
+  items first (they were pushed off the report page by long road lists).
+
+STABILITY (independent review)
+- A locked Inventory_QA.csv / summary / run log no longer stops the run.
+- DSS-WISE: each zip extracted into its own folder (a revised package
+  under the same name is never mixed with the old one); importing clears
+  the time-step folder and sets 1D / 2D from the package; cancelling is
+  not an error.
+- GDAL exception mode is not switched from Processing worker threads.
+- Partial DxV file released before deletion on failure (Windows).
+- Scenario names like "Inundated" no longer break the report's layers.
+- Self-test releases its rasters so its temp folder is removed (Windows).
+
+TESTS
+- Crossing / road / AADT auto-detection ignores the plugin's own layers.
+- Test harness: 246 tests pass on the QGIS 3.28 and 3.40 imitations, 236
+  (+10 v1.1 comparisons that cannot load on Qt6) on the QGIS 4 / Qt6
+  imitation. Self-test (Readme tab): 64 checks.

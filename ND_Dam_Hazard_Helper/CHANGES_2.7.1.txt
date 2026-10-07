@@ -1,0 +1,43 @@
+ND Dam Hazard Classification Helper 2.7.1
+=========================================
+
+REPORTED: the Depth / Velocity Max points (layer Structure_Sample_Points) were
+not along the created buffer outline.
+
+WHY
+  Up to 2.7.0 the maximum depth and velocity of a structure were read from EVERY
+  raster cell whose centre lies anywhere in the building outline grown by the
+  5-ft edge ring - a filled area (Structure_Evaluation_Areas). The highest cell
+  is often inside the building, so the point is not on the buffer edge. That was
+  the design (water against the wall AND inside counts), not a mis-placed point,
+  but the choice was not visible or changeable.
+
+WHAT CHANGED
+  Hazard Classification tab > 1. Criteria > "Max depth / velocity read from":
+    Whole area (default)  as before - every result is unchanged
+    Buffer ring only      cells between the wall and the 5-ft buffer edge; no
+                          cell inside the building is read
+    Band along the outline  cells within 5 ft of the wall on both sides (inside
+                          and outside); the middle of the building is not read
+  The Depth / Velocity Max points, the evaluation-area layer, the cells-read
+  layer, ND / TM 11 results and consequences all follow the choice. The run log
+  lists sample_area. Changing it re-reads the rasters (it is part of the
+  re-use key). Point-only structures use the ring / band around their assumed
+  disc. A structure with no cell centre in the ring or band (grid coarser than
+  the ring) is read over the whole area and says so in Structure_Evaluation_Areas
+  (Area_Type).
+
+READ THIS BEFORE CHOOSING
+  Ring and band read fewer cells, so the maxima can only be lower or equal to the
+  whole-area values. A structure flooded inside but dry along its wall reads as
+  dry in ring mode. Which reading matches the ND standard / TM 11 for your
+  submittal is an engineering decision - the default is unchanged so that
+  results stay comparable with earlier runs. Compare a few structures in both
+  modes before switching.
+
+NOT DONE / NOT RUN
+  Nothing was run in a real QGIS (fake QGIS / Qt tests only). A ring / band
+  through GEOS geometry (negative buffers, differences) is only imitated by the
+  test fake. The Processing "classify" algorithm has no parameter for this
+  (it uses the default). There is no "outer buffer line only" mode.
+  Tests: 406 pass (3.28, 3.40); 397 pass and 9 skipped (4.0).

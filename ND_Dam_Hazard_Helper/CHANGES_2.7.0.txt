@@ -1,0 +1,119 @@
+ND Dam Hazard Classification Helper 2.7.0
+=========================================
+
+Contents
+  A. Breach scenarios and the baseline in the dialog
+  B. DSS-WISE HCOM cross-check
+  C. Hazard-creep watch
+  D. Submittal package
+  E. Aerial imagery on the Review tab
+  F. Consequences: non-residential damage, night / day / seasonal population
+  G. Saved evaluation (survives a QGIS restart)
+  H. Tests and the real-QGIS CI kit
+  I. What was NOT done, and what has NOT been run
+
+A. BREACH SCENARIOS AND THE NO-BREACH BASELINE IN THE DIALOG
+  Hazard Classification tab, group "5. Breach scenarios and no-breach baseline
+  (advanced)". The main scenario (Depth / Velocity / Arrival from the Setup tab)
+  has a name and an optional no-breach baseline. Further breach scenarios and
+  baselines are rows of a table: name, role, baseline, depth, velocity, arrival,
+  D x V. Buttons: Add scenario, Add from a folder..., Find baseline in the dam
+  folder, Remove selected. Checked before a run: unique names (and file-name
+  safe), a baseline that exists, files that exist. The table is saved with the
+  project settings. DSS-WISE import has a tick box that adds the imported package
+  as a scenario row. After a run the results table lists every scenario side by
+  side (ND and TM 11 class, lives in jeopardy, habitable structures flooded,
+  population at risk, estimated fatalities, roads, rail; with a baseline only
+  what the breach adds). The pipeline itself is unchanged: baselines run first and the FEMA
+  P-333 incremental analysis is applied as in 2.6.
+
+B. DSS-WISE HCOM CROSS-CHECK
+  Consequences group: "DSS-WISE HCOM table(s)" (';' separated; filled
+  automatically after a DSS-WISE import). The plugin's population at risk is
+  compared with the HCOM table's, like with like (night with night, day with
+  day). Ratio 0.75 - 1.33 = consistent; otherwise the run log says what to
+  check (structures outside the census blocks, campgrounds, persons per
+  dwelling, missing structure layers). Written to QA/DSSWISE_HCOM_CrossCheck.csv
+  and to the summary. It NEVER changes the classification. The HCOM column
+  layout is not formally documented, so columns are matched by name loosely and
+  the columns used are printed - look at them the first time.
+
+C. HAZARD-CREEP WATCH
+  "Creep watch..." button, or the Processing algorithm "Hazard creep watch"
+  (ndhazard:creepwatch). Re-classifies every dam folder directly inside a chosen
+  folder with FRESH data, compares each with its previous run and writes
+  Hazard_Creep_Watch.csv and Hazard_Creep_Watch_<date>.csv / .html: FAILED,
+  CLASS UP, CLASS CHANGE, CREEP (more flooded habitable structures / roads /
+  lifelines), REVIEW, BASELINE (first run), "-". It is a list of dams to look
+  at, not a classification.
+  It runs on the main thread (a dialog button blocks QGIS while it runs). For
+  many dams or a schedule use QGIS's command line:
+      qgis_process run ndhazard:creepwatch --PARENT=C:/dams
+  from Windows Task Scheduler or cron.
+
+D. SUBMITTAL PACKAGE
+  "Make submittal package" (Hazard Classification tab): copies the last run's
+  files into outputs/Submittal/<Dam>_<date>[_n]/ - 01_Report, 02_Method_and_record
+  (run log, settings, sources), 03_Results_tables, 04_EAP, optional 05_GIS - with
+  MANIFEST.csv (SHA-256 of every file), README.txt and Cover_Letter_TEMPLATE.txt
+  (blanks for you to fill; nothing is signed or certified), and optionally a
+  zip. It works from files on disk and cleans up if it fails. It does not
+  re-run anything.
+
+E. AERIAL IMAGERY ON THE REVIEW TAB
+  "Aerial imagery when zooming" (on by default): the first zoom to a structure
+  adds an XYZ tile layer "Aerial imagery (base map)" at the BOTTOM of the layer
+  tree, so you can see what the structure is. Once added it is left as you set
+  it; unticking the box hides it and stops adding it. Needs internet. Default
+  service: USGS National Map imagery. Change it with AERIAL_IMAGERY_URL in the
+  data-source file (must contain {z}/{y}/{x}). If the layer cannot be added the
+  zoom continues and the run log says why.
+
+F. CONSEQUENCES
+  Non-residential damage: the plugin ships NO curves. Give a CSV (occupancy,
+  kind structure/content, depth_ft, percent; "Template" button writes a format
+  example with no real values) in Consequences > "Non-residential depth-damage
+  curves". Longest occupancy prefix wins (COM1 does not match COM10); linear
+  interpolation, 0 below the first point, the last value held above the top
+  point. Result: Damage_NonRes_USD on the structure layer and a line in the
+  summary; units without a curve keep the value-exposed figure. The residential
+  EGM 01-03 damage is unchanged. Choosing and citing the curves is the
+  engineer's job.
+  Population: night and day population at risk (PAR_Night, PAR_Day; loss of life
+  for both) and seasonal (camp) shares are reported next to the setting you
+  chose for the classification. The classification still uses the setting
+  chosen in the dialog.
+
+G. SAVED EVALUATION
+  After the data / sampling stage, the evaluation is written to
+  outputs/QA/_evaluation_cache.bin (compressed; plain values, numpy arrays and
+  QGIS geometries only - no executable content is read back). Re-used after a
+  restart when: same inputs and settings (the same key as the in-session
+  re-use), same plugin version, at most 7 days old (setting
+  evaluation_max_age_days), and the raster files still exist. Otherwise the run
+  is done in full. The classification from a re-used evaluation is identical to
+  a fresh one (tested). Unticking "Re-use" in the dialog turns off both the in-session and the saved
+  re-use; a script can pass save_evaluation = False to stop the file being
+  written. Delete the file at any time.
+
+H. TESTS AND CI
+  Harness (fake QGIS): 396 tests pass under the 3.28 and 3.40 flavors; 387 pass
+  and 9 are skipped under 4.0. New: cache, scenarios, consequences, HCOM,
+  submittal, watch, aerial imagery. The in-plugin self-test now expects 6
+  Processing algorithms.
+  CI kit (separate download, CI_kit/): a GitHub Actions workflow with a harness
+  job and a job that runs the plugin self-test plus ci/real_qgis_checks.py in
+  the official qgis/qgis Docker images; see README_CI.txt in the kit.
+
+I. NOT DONE, NOT RUN
+  - NOTHING HAS BEEN RUN IN A REAL QGIS. All tests use a fake QGIS/Qt that
+    imitates the API. Expect surprises in the dialog layout (the new group 5,
+    the buttons), the tile layer, and the background / main-thread split. Try a
+    known dam first and compare with the last version's result.
+  - The CI workflow and the real-QGIS checks have never been executed.
+  - The Processing "classify" algorithm has no parameters for the damage curves
+    or HCOM files (dialog only).
+  - Live data services were not contacted; the aerial imagery service was not
+    requested.
+  - The creep watch reads fresh data through the same downloaders as a normal
+    run; a service outage shows as FAILED for that dam.

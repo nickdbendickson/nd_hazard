@@ -1,0 +1,136 @@
+ND Dam Hazard Classification Helper 2.8.0
+=========================================
+
+WHAT THIS RELEASE IS
+  Everything from the 2.7.1 wish list except reading HEC-RAS results directly:
+  faster and more robust downloads, and seven screening analyses that sit next
+  to the classification. NOTHING WAS RUN IN A REAL QGIS - all of it is tested
+  against a fake QGIS / Qt only (see "NOT DONE / NOT RUN").
+
+  None of the new analyses changes a class. They are all OFF by default (the
+  download cache too), so a 2.8.0 run with the default settings gives the same
+  classification as 2.7.1. Every threshold you can set is a screening value of
+  YOURS - the defaults are starting values, not requirements of REG_05.2026,
+  FEMA P-333 or TM 11.
+
+WHERE THE OPTIONS ARE
+  Hazard Classification tab > tick "Show advanced options" > group
+  "6. Extra analyses and speed". Buttons: "Dams in series..." (next to "Creep
+  watch..."). Review tab: "Export decisions..." and "Merge from other engineer...".
+
+ANALYSES (outputs in outputs/QA unless stated)
+  Sensitivity table            Sensitivity.csv, Sensitivity_Structures.csv + a
+    section in the summary. Re-classifies the run with the depth and velocity
+    of every cell scaled by your factors (default 0.8, 0.9, 1.0, 1.1, 1.2;
+    optionally depth alone and velocity alone) from the cell values already read
+    - no raster is read again. Shows the ND and TM 11 class, structures with
+    probable loss of life and the ones that change zone for each factor, and one
+    verdict line. NOT scaled: other dams, lifelines and crossings, sole access,
+    economic damage / life loss, and a no-breach baseline. Turning it on keeps
+    the per-cell values (more memory) and re-reads the rasters once.
+  Termination point            Termination_Point.csv, Termination_Stations.csv,
+    layer EAP_Termination_Point. Walks the channel (the travel-time stations)
+    and reports where the breach flood - or its RISE over the no-breach baseline
+    - stays below your threshold for N stations in a row (2 ft / 2 ft / 3
+    stations to start with). If the model ends before the flood does it says so
+    and gives the last station instead of a made-up point. Needs a centerline
+    layer or the NHD flowlines (downloaded when this option is on, even with the
+    travel-time table off).
+  Second population source     Population_Source_CrossCheck.csv, _Polygons.csv.
+    A census polygon layer (you name the population field, optionally a day
+    field and housing units) or a population raster (per cell, per sq mi or per
+    sq km; centre or fraction-of-cell method) that YOU supply - nothing is
+    downloaded. People at risk = population x flooded share, spread evenly over
+    the polygon / cell, compared with the plugin's structure count. A reason to
+    look, not a classification input. The field pickers only SUGGEST fields by
+    name.
+  Evacuation timing            Evacuation_Timing.csv. Latest safe departure vs
+    flood arrival along the mapped roads (roads close where the depth reaches
+    your passable depth), for the flooded structures (or near / all). A
+    SCREENING table: one speed, one preparation delay, no traffic model, no
+    bridges above water, no people on foot. Needs the arrival raster and a road
+    layer that is a file (or the downloaded roads).
+  Data vintage                 Data_Vintage.csv + summary section (always
+    written). Plugin version, each raster's file date, offline-pack data sets,
+    tile-cache vintage, earlier-day downloads used because a service failed. The
+    services report no data version, so the date fetched is the vintage.
+  Dams in series               Dams_In_Series_Screen.csv / _Dams.csv / .html in
+    the chosen folder and in each dam's QA folder; Processing algorithm
+    ndhazard:damsinseries (the 7th). Which dam's breach flood reaches which
+    other dam, at what depth and arrival time, cascade candidates (depth above
+    your threshold), and dams whose own class is higher. Dam locations come from
+    dam_location.json / .csv in the dam folder (a classification run leaves the
+    NID subject dam's point there unless you already have a file of your own) or
+    an NID layer. A SCREENING table: it reads each upstream dam's own flood at
+    the downstream dam's point and does not compute a combined breach.
+  Reviewer export / merge      Export decisions... writes a portable CSV + header
+    (reviewer, date, SHA-256). Merge from other engineer... compares their file
+    with yours WITHOUT writing anything, lists additions, identical rows and
+    conflicts (both sides with reviewer and date), asks how to settle conflicts
+    (keep mine / take theirs / newest date wins), makes a backup copy of your
+    decisions and writes Review_Merge_Report.csv. Decisions are matched by
+    location. A file for another dam, or edited after the export, is refused
+    unless you confirm. Re-run the classification to apply merged decisions.
+    Removals need a common base file (available in review_exchange.import_plan
+    (base=...), not in the dialog).
+
+SPEED AND ROBUSTNESS
+  Offline pack build           Resumes at the chunk that stopped (not the whole
+    data set) after Cancel, a crash or a failed data set. On HTTP 429 / 503 / 504
+    or a timeout the number of requests at once is halved, all workers wait
+    together (Retry-After honoured), and it recovers slowly. Every wait and retry
+    is in the log and the progress message keeps changing (heartbeat at least
+    every 5 s). Diagnosed from the report that the bar stopped at 30,000 of
+    223,677 structures. A changed NSI tile size restarts a resumed NSI data set.
+  Download cache per tile      "Keep downloaded data tiles ..." (default OFF for
+    a normal run; the creep watch turns it on with 7 days). NSI and ArcGIS
+    downloads are kept per 0.1 degree tile in the QGIS profile with their date;
+    only tiles older than N days are fetched again. "Refresh every tile this run"
+    and "Clear tile cache". The offline pack still has priority. A stale tile is
+    used with a warning when the service does not answer.
+  Creep watch workers          Workers box: more than 1 classifies that many dams
+    at once, each in its own qgis_process child (needs qgis_process; set
+    ND_QGIS_PROCESS if it is not found; the plugin must be enabled in that QGIS
+    profile; a per-dam time limit; Cancel stops the children). It falls back to
+    one dam at a time and says why. The classify Processing algorithm has a new
+    CONFIG_JSON parameter for the fresh-data settings. The parallel watch does
+    not write Batch_Hazard_Classification.csv.
+  Quick re-run                 Skips only the PDF report and the EAP map book
+    (the ones from the last full run stay and the run says so). Everything else,
+    including the review decisions, is redone as before.
+
+FIXED IN THIS RELEASE (found by an independent review of the new code)
+  * A classification run deleted the dams-in-series QA file (both used the base
+    name Dams_In_Series); the screen's files are now Dams_In_Series_Screen*.
+  * A classification run overwrote an engineer's own dam_location.json.
+  * Data_Vintage.csv of a re-used evaluation could show the downloads of another
+    dam (or none after a restart); it is now saved with the evaluation.
+  * The termination point could not run with the travel-time table off (no
+    flowlines were downloaded); it is now part of the re-use key.
+  * "Refresh every tile" was ignored when a same-day download file existed.
+  * Old sensitivity / termination / population / evacuation files stayed after
+    the option was turned off; they are now removed at the start of a run.
+  * Review merge: not while a run is working; decisions typed into the table are
+    saved first; a renamed dam folder can be confirmed.
+  * A field you deliberately set to "(none)" is no longer replaced by a suggested
+    name when the layer lists refresh; the evacuation step re-opens the road layer
+    with its GeoPackage table / filter (a memory layer is never re-created empty).
+  * The dams-in-series Processing algorithm no longer fails when a per-dam copy
+    cannot be written.
+
+NOT DONE / NOT RUN
+  * NOTHING WAS RUN IN A REAL QGIS. Tests use a fake QGIS / Qt; real GEOS
+    geometry, real Qt signals and dialogs, the Processing framework,
+    qgis_process child processes, live services and real network throttling are
+    imitated or untested. The new dialog group, the merge dialogs and the parallel
+    watch deserve a manual pass first.
+  * Direct HEC-RAS result reading was left out on request.
+  * Vectorised ring / band sampling was deliberately NOT done (unmeasured; the
+    2.7.1 result is unchanged and identical to per-structure sampling).
+  * The Processing "classify" algorithm still has no parameters for damage curves,
+    HCOM or "read max depth / velocity from"; the new analyses reach it only
+    through CONFIG_JSON scalar settings.
+  * A run's worker thread still asks the project for its transform context once
+    (as in 2.6); left alone.
+  * Vintage of the NID / lifeline services is the date fetched only.
+  Tests: 730 pass (3.28 and 3.40 flavours); 721 pass and 9 skipped (4.0).
