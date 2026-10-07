@@ -13,7 +13,7 @@ The three suite plugins share a vendored `damsuite/` package (1.8.0) that is byt
 
 ## Install
 
-Download the plugin zips from the latest [release](../../releases) and use
+Download the plugin zips from [`releases/1.11/`](releases/1.11) (click a zip, then the download button) and use
 QGIS > Plugins > Manage and Install Plugins > Install from ZIP.
 Each folder here is the unzipped plugin, so you can also copy a folder straight into your QGIS profile's `python/plugins/` directory.
 
