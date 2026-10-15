@@ -4,7 +4,7 @@ QGIS plugins for North Dakota dam hazard classification and breach analysis.
 
 | Folder | Plugin | Version |
 |---|---|---|
-| `ND_Dam_Hazard_Helper/` | ND Dam Hazard Classification Helper | 2.32.0 |
+| `ND_Dam_Hazard_Helper/` | ND Dam Hazard Classification Helper | 2.32.1 |
 | `nd_breach_runner/` | ND Breach Runner (LISFLOOD-FP / ANUGA / HEC-RAS export) | 3.22.0 |
 | `nd_dam_screening/` | ND Dam Screening | 0.30.0 |
 | `nd_data_updater/` | ND Data Updater (NSI 2026 + 2022 merge) | 1.6.0 |

@@ -231,7 +231,15 @@ def mobile_rules_from_cfg(cfg):
         if v is None:
             continue
         try:
-            out[k] = bool(v) if isinstance(dflt, bool) else float(v)
+            if isinstance(dflt, bool) and isinstance(v, str):
+                # 2.32.1: text from a settings file / CONFIG_JSON - bool("false") is True
+                t = v.strip().lower()
+                if t in ("1", "true", "yes", "on"):
+                    out[k] = True
+                elif t in ("0", "false", "no", "off", ""):
+                    out[k] = False
+            else:
+                out[k] = bool(v) if isinstance(dflt, bool) else float(v)
         except (TypeError, ValueError):
             pass
     return out
@@ -2296,15 +2304,20 @@ def collapse_dwellings(structs):
         for rec in group[1:]:
             _mark_dwelling_extra(rec, keep, key)
             n_extra += 1
+    # 2.32.1 (the function is not called since 2.16.0; kept safe for a re-use): a
+    # campground / RV park is an area, not a footprint - a house inside it is not
+    # a second footprint of the campground, nor the campground of the house - and a
+    # footprint already found extra is no host
     kept = [r for r in structs if r.get("habitable") == "Yes" and not r.get("dwelling_extra")
-            and r.get("geom") is not None]
+            and r.get("geom") is not None and not r.get("camp")]
     for rec in structs:
-        if rec.get("habitable") != "Yes" or rec.get("dwelling_extra"):
+        if rec.get("habitable") != "Yes" or rec.get("dwelling_extra") or rec.get("camp"):
             continue
         if normalize_street(address_of(rec)[0]):
             continue
         for host in kept:
-            if host is rec or not _footprints_overlap(rec, host):
+            if host is rec or host.get("dwelling_extra") or \
+                    not _footprints_overlap(rec, host):
                 continue
             _mark_dwelling_extra(rec, host, "overlapping footprint")
             n_extra += 1

@@ -815,10 +815,10 @@ class ReviewTabMixin(object):
                 # two refusals can be overridden by an engineer who knows the file is right:
                 # a folder that was renamed, or a file that was edited after the export
                 texts = [t for lv, t in plan.issues if lv == "error"]
-                allow = {"allow_other_dam": any(t.startswith("the file is for another dam")
-                                                for t in texts),
-                         "accept_modified": any(t.startswith("the rows do not match")
-                                                for t in texts)}
+                # 2.32.1: by the plan's own record, not by the start of the message text
+                over = getattr(plan, "overridable", set())
+                allow = {"allow_other_dam": "allow_other_dam" in over,
+                         "accept_modified": "accept_modified" in over}
                 if (allow["allow_other_dam"] or allow["accept_modified"]) and \
                         len(texts) == sum(allow.values()) and QMessageBox.question(
                             self, "Review merge", "\n".join(RX.plan_lines(plan)) +

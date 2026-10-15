@@ -39,8 +39,9 @@ v2.9 - a plan HDF used DIRECTLY as a classification input (no Import step):
   plan_settings(settings)    the import options as a dict (defaults as the
                              HEC-RAS plan tab): dem, breach_hr, arrival_ft,
                              cell_ft
-  plan_key(path, settings)   cache key: plan size / mtime / first + last MB,
-                             the options, the terrain file, the import code
+  plan_key(path, settings)   cache key: plan content digest (SHA-256, no
+                             date), the options, the terrain file, the
+                             import code
   plan_to_rasters_cached()   import_plan() into <cache_root>/<plan>_<key12>/,
                              re-used while the key matches (manifest.json;
                              written in a temporary folder and renamed, so a
@@ -645,7 +646,6 @@ MANIFEST = "manifest.json"
 CACHE_VERSIONS_KEPT = 3            # cache folders kept per plan (other settings / runs)
 _TMP_PREFIX, _OLD_PREFIX = ".tmp_", ".old_"
 _TMP_MAX_AGE_S = 12 * 3600         # a temporary folder this old is a crashed conversion
-_HASH_BYTES = 1 << 20              # first and last MB of the plan / terrain file
 RESULT_KEYS = ("depth", "vel", "arr", "dv", "wse", "peak")
 # the import options (same defaults as the HEC-RAS plan tab and the
 # 'hecrasplan' Processing algorithm):
@@ -728,22 +728,24 @@ def plan_settings(settings=None):
 
 
 def _content_sig(path):
-    """[size, mtime (ns), md5 of the first and last MB]."""
-    st = os.stat(path)
-    h = hashlib.md5()
-    with open(path, "rb") as fh:
-        h.update(fh.read(_HASH_BYTES))
-        if st.st_size > 2 * _HASH_BYTES:
-            fh.seek(-_HASH_BYTES, os.SEEK_END)
-            h.update(fh.read(_HASH_BYTES))
-        elif st.st_size > _HASH_BYTES:
-            h.update(fh.read())
-    return [int(st.st_size), int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))),
-            h.hexdigest()]
+    """[size, SHA-256 of the content] (fingerprint.content_digest: the whole
+    file, sampled above 2 GB). 2.32.1: no time stamp any more - until 2.32.0
+    this was size, mtime and an MD5 of the first and last MB, so a re-saved but
+    unchanged plan was converted again and a plan rewritten in its middle with
+    the same size and date was taken from the cache (the rule the evaluation key
+    dropped in 2.12). Raises OSError when the file cannot be read."""
+    from . import fingerprint as FP
+    if not os.path.isfile(path):
+        raise OSError("file not found")
+    d = FP.content_digest(path)
+    if d.get("missing"):
+        raise OSError("the file cannot be read")
+    return [int(d["size"]), d["sha256"]]
 
 
 def _vrt_sources_sig(path):
-    """Size / mtime of the files a VRT terrain mosaic points at."""
+    """Size / mtime of the files a VRT terrain mosaic points at (a terrain
+    mosaic can hold tens of GB of tiles: they are not hashed)."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read(8 << 20)
@@ -764,7 +766,7 @@ def _vrt_sources_sig(path):
 
 def plan_key(path, settings=None):
     """Stable cache key (sha256 hex) of a plan conversion: the plan file's
-    size, time stamp and first / last MB, the import options (the terrain
+    size and content digest (2.32.1, _content_sig), the import options (the terrain
     raster by its content signature, not its path; the pixel size only
     without terrain) and the import code version. The plan's path is not
     part of it: a copied or moved plan keeps its cache."""

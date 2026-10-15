@@ -867,11 +867,21 @@ class Extras290TabMixin(object):
         self._remember_dir290(path)
         self._profile_state290 = state
         self._profile_meta290 = meta
+        # 2.32.1: what really took (a choice this project's list does not offer is
+        # not applied; settings of a newer plugin have no widget here)
+        missed = []
         try:
+            missed = ST.not_applied(self._current_state(), state, meta, ids)
             self._profile_status = ST.profile_status(self._current_state(), state, meta, ids)
         except Exception as e:                               # noqa
             log_message("Profile status: {}".format(e), MSG_WARNING)
             self._profile_status = None
+        n_unknown = len(meta.get("unknown_keys") or [])
+        applied = max(0, meta["keys"] - n_unknown - len(missed))
+        if missed:
+            meta["warnings"] = list(meta.get("warnings") or []) + [
+                "not applied (not offered in this project, or out of range): {}".format(
+                    ", ".join(missed))]
         self._say290(">>> Settings profile loaded: '{}' ({} settings, sha256 {})".format(
             meta["name"], meta["keys"], meta["sha256"][:16]))
         for w in meta.get("warnings") or []:
@@ -879,7 +889,8 @@ class Extras290TabMixin(object):
         if meta.get("dropped_keys"):
             self._say290(">>> Profile entries left out: " + ", ".join(
                 "{} ({})".format(k, v) for k, v in sorted(meta["dropped_keys"].items())))
-        text = "Loaded '{}': {} setting(s) applied.".format(meta["name"] or "?", meta["keys"])
+        text = "Loaded '{}': {} of {} setting(s) applied.".format(meta["name"] or "?", applied,
+                                                                meta["keys"])
         if meta.get("note"):
             text += "\n\nNote of the profile: {}".format(meta["note"])
         if meta.get("warnings"):

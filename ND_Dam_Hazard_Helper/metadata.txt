@@ -5,9 +5,32 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.32.0
+version=2.32.1
 author=N.D. Bendickson
 changelog=
+    2.32.1 (2026-10-15)
+      * Fixes from a check of an earlier code audit against this source. No classification
+        number moves.
+      * Evaluation re-use: the offline data pack and the "offline only" switch are now part of
+        the evaluation key. Before, turning "offline only" off, choosing another pack or
+        rebuilding it could re-use an evaluation made without those downloads.
+      * HEC-RAS plan cache: a plan is known by its content (SHA-256), not its date - a re-saved
+        but unchanged plan is no longer converted again, and a plan rewritten with the same
+        size and date is no longer taken from the cache. Existing plan caches convert once.
+      * Settings profiles: a profile saved by a newer plugin no longer marks every run
+        "MODIFIED after loading"; loading says how many settings were really applied and
+        names the ones that could not be (a choice this project does not offer).
+      * Estimate run: uses the run's own download list (new downloadplan.py), so it no longer
+        counts FEMA USA Structures when the outline layer is that file, or mobile-home parks
+        and places that the data folder supplies.
+      * A data-folder places layer without "name" / "place" fields no longer stops the run.
+      * While a run works: the web-map, field-check sheet, scenario table and tile-cache
+        buttons are switched off (the field-sheet import could write review decisions the
+        run was reading).
+      * Text "false" in a settings file now reads as off for the manufactured-home switches;
+        the motorist count has one formula for the run and the sensitivity table; the
+        review merge, tab lookups and version check no longer depend on message / caption
+        text or fail silently.
     2.32.0 (2026-10-15)
       * With ND Dam Breach Runner 3.22.0, ND Dam Breach Screening 0.30.0 and ND Data Updater
         1.6.0 (damsuite 1.18.0). The shared suite-settings file is now written safely: the new

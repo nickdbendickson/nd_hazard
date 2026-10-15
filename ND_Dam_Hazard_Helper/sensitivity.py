@@ -405,9 +405,8 @@ def _persons(r, vz, opts):
         return None
     if r.get("persons"):
         return r["persons"]                      # the run's own figure (its speed / occupancy)
-    vehicles = r["aadt"] / 24.0 * (r.get("length_ft", 0.0) / 5280.0) / \
-        max(opts["speed_mph"], 1.0)
-    return vehicles * opts["occupancy"]
+    from .linear import motorists
+    return motorists(r["aadt"], r.get("length_ft", 0.0), opts["speed_mph"], opts["occupancy"])
 
 
 # ------------------------------------------------------------------ classification --

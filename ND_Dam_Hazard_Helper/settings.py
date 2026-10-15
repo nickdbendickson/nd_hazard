@@ -421,13 +421,25 @@ def diff_lines(a, b):
             for k in diff_profiles(sa, sb)]
 
 
+def not_applied(current_state, profile_state, meta=None, layer_ids=None):
+    """2.32.1: the profile's settings this dialog knows but does not hold now -
+    right after loading: the ones that could not be applied (a choice this
+    project's list does not offer, a value out of range). Settings the dialog
+    does not know (meta["unknown_keys"], a newer plugin's) are not counted."""
+    unknown = set((meta or {}).get("unknown_keys") or [])
+    shared, _d = shareable_state(current_state, layer_ids)
+    return [k for k in diff_profiles(profile_state, shared)
+            if k in profile_state and k not in unknown]
+
+
 def profile_status(current_state, profile_state, meta, layer_ids=None):
     """What the run record keeps about the profile a run was made with
     (cfg["settings_profile"]): {"name", "sha256", "modified", "changed_keys"}.
     `modified`: the dialog's settings no longer equal the profile (the engineer
-    changed something after loading it)."""
-    shared, _d = shareable_state(current_state, layer_ids)
-    changed = [k for k in diff_profiles(profile_state, shared) if k in profile_state]
+    changed something after loading it). 2.32.1: settings of the profile this
+    dialog does not know (a newer plugin's, meta["unknown_keys"]) are left out -
+    the dialog never holds them, so they made every run "MODIFIED"."""
+    changed = not_applied(current_state, profile_state, meta, layer_ids)
     return {"name": (meta or {}).get("name") or "", "sha256": (meta or {}).get("sha256") or
             profile_hash(profile_state), "modified": bool(changed), "changed_keys": changed,
             "path": (meta or {}).get("path") or ""}

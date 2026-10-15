@@ -570,6 +570,10 @@ class MergePlan(object):
     def __init__(self):
         self.items = []
         self.issues = []              # (level "error" | "warning" | "info", text)
+        # 2.32.1: the refusals an engineer may override, by the import_plan keyword
+        # that overrides them ("allow_other_dam", "accept_modified") - the review tab
+        # used to find them by the start of their text
+        self.overridable = set()
         self.header = None
         self.theirs_path = ""
         self.theirs_rows = []
@@ -707,6 +711,8 @@ def import_plan(mine, theirs_path, dam_name=None, crs=None, base=None, tol_ft=No
                 plan.add_issue("warning" if accept_modified else "error",
                                "the rows do not match the SHA-256 in the header - the file was "
                                "changed after it was exported{}".format(why))
+                if not accept_modified:
+                    plan.overridable.add("accept_modified")
         else:
             plan.add_issue("warning", "the header has no SHA-256 - rows could not be verified")
         plan.their_dam = str(hdr.get("dam") or "")
@@ -714,6 +720,8 @@ def import_plan(mine, theirs_path, dam_name=None, crs=None, base=None, tol_ft=No
             plan.add_issue("warning" if allow_other_dam else "error",
                            "the file is for another dam ('{}', this is '{}')".format(
                                plan.their_dam, plan.dam))
+            if not allow_other_dam:
+                plan.overridable.add("allow_other_dam")
         elif not plan.dam or not plan.their_dam:
             plan.add_issue("info", "dam name not checked ({})".format(
                 "unknown here" if not plan.dam else "not in the header"))

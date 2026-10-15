@@ -217,68 +217,50 @@ def _eap_on(cfg, part):
 def planned_downloads(cfg, area):
     """[(name, label, kind, url, extent)] the run would download - the job list
     of pipeline.py ("what to download"), from the cfg keys. kind: "nsi",
-    "arcgis" or "overpass"; name: the download / pack / tile-cache name."""
-    from . import constants as C
-    from . import download as DL
+    "arcgis" or "overpass"; name: the download / pack / tile-cache name.
+    2.32.1: the same rule as the run (downloadplan.download_plan)."""
+    from .downloadplan import download_plan, AREA_CROSSINGS, AREA_PLACES
     ext = area.get("extent_4326")
     if ext is None:
         return []
-    xing = area.get("crossings_4326") or ext
-    big = area.get("places_4326") or ext
-    none = object()
-    jobs = []
-
-    def arc(name, label, url, e=ext):
-        jobs.append((name, label, "arcgis", url, e))
+    areas = {AREA_CROSSINGS: area.get("crossings_4326") or ext,
+             AREA_PLACES: area.get("places_4326") or ext}
     loc = _local_roles(cfg)          # v2.9: what the data folder supplies (as the run does)
-    if _on(cfg, "download_nsi") and "nsi" not in loc:
-        jobs.append(("NSI_structures", "NSI structures", "nsi", DL.NSI_API_URL, ext))
-    if _on(cfg, "download_address") and "address" not in loc:
-        arc("NDGISHUB_address_points", "ND GIS Hub address points", C.ND_ADDRESS_POINTS_URL)
-    if _on(cfg, "download_usa_structures") and "usa" not in loc:
-        arc("USA_Structures", "FEMA USA Structures", C.USA_STRUCTURES_URL)
-    if cfg.get("rail_layer", none) in (None, none) and "rail" not in loc and \
-            _on(cfg, "download_rail"):
-        arc("NARN_rail_lines", "Rail lines", C.NARN_URL)
-    if cfg.get("crossing_layer", none) in (None, none) and "crossings" not in loc and \
-            _on(cfg, "download_crossings"):
-        arc("FRA_grade_crossings", "Grade crossings", C.CROSSINGS_URL, xing)
-    if cfg.get("road_layer", none) in (None, none) and "roads" not in loc and \
-            _on(cfg, "download_roads"):
-        arc("ND_roads_NG911", "ND GIS Hub roads", C.ND_ROADS_URL)
-        if cfg.get("aadt_layer", none) in (None, none) and "aadt" not in loc:
-            for url in C.HPMS_ND_URLS:
-                year = "".join(ch for ch in url.split("HPMS_FULL_ND_")[-1][:4] if ch.isdigit())
-                arc("HPMS_ND_{}".format(year), "HPMS {}".format(year), url)
-            if C.NDDOT_AADT_URL:
-                arc("NDDOT_traffic_counts", "NDDOT traffic counts", "{}/{}".format(
-                    C.NDDOT_AADT_URL.rstrip("/"), C.NDDOT_AADT_LAYERS.get("aadt", 0)))
-            arc("ND_county_roads", "ND county roads (AADT)", C.ND_COUNTY_ROADS_URL)
-    if _on(cfg, "download_dams") and "dams" not in loc:
-        arc("NID_dams", "National Inventory of Dams", C.NID_URL)
-    if _on(cfg, "download_lifelines"):
-        for key, label, url, _cat in C.lifeline_downloads():
-            arc("lifeline_" + key, label, url)
-        jobs.append(("OSM_lifelines", "OpenStreetMap lifelines", "overpass", C.OVERPASS_URL,
-                     ext))
-    if _on(cfg, "download_crossings_structures") and "bridges" not in loc:
-        arc("NBI_bridges", "National Bridge Inventory", C.NBI_URL)
-        jobs.append(("OSM_crossings", "OpenStreetMap crossings", "overpass", C.OVERPASS_URL,
-                     ext))
-    if _on(cfg, "download_camps") and "camps" not in loc:
-        jobs.append(("OSM_campgrounds", "OpenStreetMap campgrounds", "overpass",
-                     C.OVERPASS_URL, ext))
-    if _on(cfg, "download_trailer_parks"):
-        jobs.append(("OSM_trailer_parks", "OpenStreetMap mobile-home parks", "overpass",
-                     C.OVERPASS_URL, ext))
-    travel = _eap_on(cfg, "travel")
-    if travel and _on(cfg, "download_places"):
-        jobs.append(("OSM_places", "OpenStreetMap places", "overpass", C.OVERPASS_URL, big))
-    if (travel or _on(cfg, "termination", False)) and \
-            cfg.get("centerline_layer", none) in (None, none) and "centerline" not in loc \
-            and _on(cfg, "download_flowlines"):
-        arc("3DHP_flowlines", "USGS 3DHP flowlines", C.NHD_FLOWLINE_URL)
-    return jobs
+    plan = download_plan(cfg, loc, _have_hub(cfg, loc), _outlines_are_usa(cfg))
+    return [(name, label, kind, url, areas.get(where, ext))
+            for _key, name, label, kind, url, where in plan]
+
+
+def _have_hub(cfg, roles):
+    """ND GIS Hub address points already among the run's point sources (then the
+    run does not download them): the data folder's, a chosen layer or, with
+    point_sources "auto", a project layer the run would find (as
+    pipeline._collect_inputs)."""
+    if "address" in roles:
+        return True
+    ps = cfg.get("point_sources", "auto")
+    try:
+        if ps == "auto":
+            from .processing import discover_project_layers
+            return bool(discover_project_layers().get("NDGISHUB"))
+        return any(fam == "NDGISHUB" for fam, _l in (ps or []))
+    except Exception:                                 # noqa - unknown: counted
+        return False
+
+
+def _outlines_are_usa(cfg):
+    """The building-outline layer the run would use already is the FEMA USA
+    Structures file (then the run does not download it again)."""
+    try:
+        from .osm_processing import get_osm_candidates, is_fema_structures_layer
+        out = cfg.get("output_folder") or ""
+        dam = cfg.get("dam_folder") or ""
+        osm = cfg.get("osm_layer", "auto")
+        if osm == "auto":
+            osm = get_osm_candidates(out, dam) if out else None
+        return bool(is_fema_structures_layer(osm, out, dam))
+    except Exception:                                 # noqa - unknown: counted
+        return False
 
 
 def _local_roles(cfg):

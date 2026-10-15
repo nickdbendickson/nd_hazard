@@ -20,13 +20,12 @@ import time
 from qgis.core import QgsProject, QgsVectorLayer, QgsRasterLayer
 
 from .constants import (
-    NARN_URL, CROSSINGS_URL, TM11_PERSONS_PER_DWELLING, DEFAULT_MIN_UNVERIFIED_AREA_FT2,
+    TM11_PERSONS_PER_DWELLING, DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     DEFAULT_VEHICLE_OCCUPANCY, DEFAULT_VEHICLE_SPEED_MPH, RAIL_CROSSING_SEARCH_MI,
     DEFAULT_EXTENT_BUFFER_FT, DEFAULT_NEAR_THRESHOLD_FT, DEFAULT_INCREMENTAL_DEPTH_FT,
     DEFAULT_ACCESS_SEARCH_FT, DEFAULT_WARNING_ISSUED_HR, ND_RANK, lifeline_downloads, DAM_SEARCH_FT,
-    ND_ROADS_URL, HPMS_ND_URLS, ND_COUNTY_ROADS_URL,
     GRP_RESULTS, GRP_ZONES, GRP_SAMPLES, GRP_HYDRAULICS, GRP_EAP, STRUCTURES_FAMILY, SUBDIR_CLASSIFICATION, SUBDIR_EAP, SUBDIR_QA, OUTPUT_SUBDIRS, MAPBOOK_DEFAULT_SCALE, TRAVEL_STATION_MI, DEFAULT_PARCEL_MAX_ACRES,
-    NHD_FLOWLINE_URL, NDDOT_AADT_URL, NDDOT_AADT_LAYERS, ZONE_LABELS,
+    ZONE_LABELS,
 )
 from .compat import MSG_WARNING, environment_summary
 from .helpers import (
@@ -460,30 +459,6 @@ def _layer_sig(lyr):
         return [repr(lyr)]
 
 
-def _vrt_sources_sig(path, limit=2000):
-    """Size and time of the files a VRT reads (a tile rewritten behind an
-    unchanged VRT is a changed raster)."""
-    import re
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-    except OSError:
-        return None
-    out = []
-    base = os.path.dirname(path)
-    for rel, name in re.findall(
-            r'<SourceFilename[^>]*?relativeToVRT="(\d)"[^>]*>([^<]+)</SourceFilename>',
-            text)[:limit]:
-        src = os.path.join(base, name.strip()) if rel == "1" else name.strip()
-        try:
-            st = os.stat(src)
-            out.append([name.strip(), st.st_size, getattr(st, "st_mtime_ns",
-                                                          int(st.st_mtime))])
-        except OSError:
-            out.append([name.strip(), None])
-    return out
-
-
 def _file_sig(path):
     """v2.12: path, size and CONTENT digest (damsuite.chain.file_digest -
     SHA-256, sampled above 2 GB; fingerprint.file_sig) - no modification
@@ -605,6 +580,39 @@ def _plan_sig(sc):
             _file_sig(ps.get("dem")) if ps.get("dem") else None]
 
 
+def _offline_sig():
+    """2.32.1: the offline data pack and the "offline only" switch shape what the
+    evaluation downloads (download.offline_config - the suite's data source, the
+    pack location, the environment variables), so they are part of the
+    evaluation key: turning "offline only" off, choosing another pack or
+    rebuilding the pack is a new evaluation. The pack is identified by its path
+    and the size and time stamp of its files (a pack holds hundreds of MB - it
+    is not hashed; a rebuild always writes the files again)."""
+    try:
+        from .download import offline_config
+        path, only = offline_config()
+    except Exception as e:                                   # noqa
+        return {"error": str(e) or e.__class__.__name__}
+    files = []
+    if path:
+        p = os.path.abspath(path)
+        try:
+            names = [os.path.join(p, n) for n in sorted(os.listdir(p))] \
+                if os.path.isdir(p) else [p]
+        except OSError:
+            names = []
+        for f in names:
+            try:
+                if os.path.isfile(f):
+                    st = os.stat(f)
+                    files.append([os.path.basename(f), st.st_size,
+                                  getattr(st, "st_mtime_ns", int(st.st_mtime))])
+            except OSError:
+                continue
+    return {"pack": os.path.normcase(os.path.abspath(path)) if path else "", "files": files,
+            "offline_only": bool(only)}
+
+
 def evaluation_key(cfg):
     """Hash of everything that shapes the evaluation stage (rasters, input
     layers, download choices, the settings the sampling and the road / rail
@@ -613,7 +621,7 @@ def evaluation_key(cfg):
     report and EAP options) are not part of it."""
     import hashlib
     import json
-    parts = {"version": 2}
+    parts = {"version": 3}         # 2.32.1: + the offline pack / "offline only"
     parts["scenarios"] = [[sc.name, sc.role, sc.baseline] + [
         _file_sig(pth) for pth in (sc.depth, sc.velocity, sc.arrival, sc.dv) if pth]
         + _plan_sig(sc) for sc in cfg.get("scenarios") or []]
@@ -632,6 +640,7 @@ def evaluation_key(cfg):
     parts["dam_folder"] = os.path.normcase(os.path.abspath(cfg.get("dam_folder") or ""))
     from .constants import SOURCE_OVERRIDES
     parts["sources"] = sorted((k, str(v)) for k, v in SOURCE_OVERRIDES.items())
+    parts["offline"] = _offline_sig()
     try:
         blob = json.dumps(parts, sort_keys=True, default=str)
     except Exception:
@@ -1964,70 +1973,35 @@ def _collect_inputs(run, clip):
     dam_folder = cfg.get("dam_folder") or ""
     road, aadt = cfg["road_layer"], cfg["aadt_layer"]
     rail, cross = cfg["rail_layer"], cfg["crossing_layer"]
-    travel = _eap_on(cfg, "travel")
 
     # ---- what to download ------------------------------------------------------
+    # 2.32.1: the rule is downloadplan.download_plan, shared with the pre-run estimate
+    from .downloadplan import download_plan, AREA_CROSSINGS, AREA_PLACES
     jobs = []           # (key, label, fn, args)
 
     def want(key, label, fn, *args):
         jobs.append((key, label, fn, args))
     if ext4326 is not None:
-        if cfg["download_nsi"] and "nsi" not in loc:
-            want("nsi", "NSI", fetch_nsi, ext4326, out)
-        if not have_hub and cfg["download_address"]:
-            want("address", "ND GIS Hub address points", fetch_nd_address_points, ext4326, out)
-        if cfg["download_usa_structures"] and "usa" not in loc \
-                and not is_fema_structures_layer(osm, out, dam_folder):
-            if osm is None:
-                # no outline file yet: download it once and keep it as the file
-                want("usa_file", "FEMA USA Structures", download_structures_file, out,
-                     dam_folder, ext4326, run.ctx)
+        areas = {AREA_CROSSINGS: xing4326, AREA_PLACES: big4326}
+        fetchers = {"nsi": fetch_nsi, "address": fetch_nd_address_points, "nid": fetch_dams,
+                    "life_osm": fetch_osm_lifelines, "nbi": fetch_nbi,
+                    "xosm": fetch_osm_crossings, "camps": fetch_osm_camps,
+                    "parks": fetch_osm_trailer_parks, "places": fetch_osm_places}
+        plan = download_plan(cfg, run.local_roles, have_hub,
+                             is_fema_structures_layer(osm, out, dam_folder))
+        for key, name, label, _kind, url, area in plan:
+            e = areas.get(area, ext4326)
+            if key == "usa":
+                if osm is None:
+                    # no outline file yet: download it once and keep it as the file
+                    want("usa_file", label, download_structures_file, out, dam_folder, e,
+                         run.ctx)
+                else:
+                    want("usa", label, fetch_usa_structures, e, out)
+            elif key in fetchers:
+                want(key, label, fetchers[key], e, out)
             else:
-                want("usa", "FEMA USA Structures", fetch_usa_structures, ext4326, out)
-        if rail is None and cfg["download_rail"]:
-            want("rail", "Rail lines", fetch_arcgis_layer, NARN_URL, ext4326, out,
-                 "NARN_rail_lines")
-        if cross is None and cfg["download_crossings"]:
-            want("cross", "Grade crossings", fetch_arcgis_layer, CROSSINGS_URL, xing4326, out,
-                 "FRA_grade_crossings")
-        if road is None and cfg.get("download_roads"):
-            want("road", "ND GIS Hub roads", fetch_arcgis_layer, ND_ROADS_URL, ext4326, out,
-                 "ND_roads_NG911")
-            if aadt is None:
-                for url in HPMS_ND_URLS:
-                    year = "".join(ch for ch in url.split("HPMS_FULL_ND_")[-1][:4]
-                                   if ch.isdigit())
-                    want("hpms_" + year, "HPMS {}".format(year), fetch_arcgis_layer, url,
-                         ext4326, out, "HPMS_ND_{}".format(year))
-                if NDDOT_AADT_URL:
-                    want("nddot", "NDDOT traffic counts", fetch_arcgis_layer,
-                         "{}/{}".format(NDDOT_AADT_URL.rstrip("/"),
-                                        NDDOT_AADT_LAYERS.get("aadt", 0)),
-                         ext4326, out, "NDDOT_traffic_counts")
-                want("county", "ND county roads (AADT)", fetch_arcgis_layer,
-                     ND_COUNTY_ROADS_URL, ext4326, out, "ND_county_roads")
-        if cfg.get("download_dams") and "dams" not in run.local_roles:
-            want("nid", "National Inventory of Dams", fetch_dams, ext4326, out)
-        if cfg.get("download_lifelines"):
-            for key, label, url, _cat in lifeline_downloads():
-                want("life_" + key, label, fetch_arcgis_layer, url, ext4326, out,
-                     "lifeline_" + key)
-            want("life_osm", "OpenStreetMap lifelines", fetch_osm_lifelines, ext4326, out)
-        if cfg.get("download_crossings_structures") and "bridges" not in loc:
-            want("nbi", "National Bridge Inventory", fetch_nbi, ext4326, out)
-            want("xosm", "OpenStreetMap crossings", fetch_osm_crossings, ext4326, out)
-        if cfg.get("download_camps") and "camps" not in loc:
-            want("camps", "OpenStreetMap campgrounds", fetch_osm_camps, ext4326, out)
-        if cfg.get("download_trailer_parks", True) and "parks" not in loc:
-            want("parks", "OpenStreetMap mobile-home parks", fetch_osm_trailer_parks, ext4326,
-                 out)
-        if travel and cfg.get("download_places") and "places" not in loc:
-            want("places", "OpenStreetMap places", fetch_osm_places, big4326, out)
-        # v2.8: the termination point needs the channel too, with or without the travel table
-        if (travel or cfg.get("termination")) and cfg.get("centerline_layer") is None \
-                and cfg.get("download_flowlines"):
-            want("flow", "USGS 3DHP flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext4326,
-                 out, "3DHP_flowlines")
+                want(key, label, fetch_arcgis_layer, url, e, out, name)
     labels = {k: lbl for k, lbl, _f, _a in jobs}
     got = {}
     if jobs:
@@ -2291,14 +2265,24 @@ def _read_places(layer, crs, ctx):
     """[{"x", "y", "name", "place"}] of OSM places in the analysis CRS."""
     from qgis.core import QgsCoordinateTransform
     xf = QgsCoordinateTransform(layer.crs(), crs, ctx)
+    # 2.32.1: a data-folder places layer may spell the fields otherwise or lack
+    # them - matched case-blind, missing ones read as "" (they used to stop the run)
+    fields = {f.name().lower(): f.name() for f in layer.fields()}
+    name_f, place_f = fields.get("name"), fields.get("place")
+
+    def text(f, fld):
+        try:
+            return str(f[fld] or "") if fld else ""
+        except Exception:                                    # noqa
+            return ""
     out = []
     for f in layer.getFeatures():
         try:
             p = xf.transform(f.geometry().asPoint())
         except Exception:
             continue
-        out.append({"x": p.x(), "y": p.y(), "name": str(f["name"] or ""),
-                    "place": str(f["place"] or "")})
+        out.append({"x": p.x(), "y": p.y(), "name": text(f, name_f),
+                    "place": text(f, place_f)})
     return out
 
 
@@ -2615,7 +2599,14 @@ def _result_items(run, gov, governing):
     for c in nd.get("criteria", []):
         if c["section"] == "Result":
             continue
-        g = next((v for k, v in geo.items() if c["criterion"].startswith(k)), [])
+        found = [v for k, v in geo.items() if c["criterion"].startswith(k)]
+        if not found:
+            # 2.32.1: the criteria are matched by the start of their text
+            # (classification.py) - a reworded criterion is named here instead of
+            # silently losing its zoom-to features
+            log_message("Result card: no map features are tied to the criterion '{}' "
+                        "(pipeline._result_items)".format(c["criterion"]))
+        g = found[0] if found else []
         items.append({"section": c["section"], "item": c["criterion"], "found": c["found"],
                       "result": c["result"], "geoms": g if c["result"] not in (
                           "not met", "?") else []})

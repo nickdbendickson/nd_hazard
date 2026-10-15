@@ -138,7 +138,15 @@ class NDdamHazardHelperPlugin(QObject):
             from .damsuite import versions as VS
             msgs = VS.check("ndhazard", versions=versions)
             lines = VS.report_lines("ndhazard", versions=versions)
-        except Exception:
+        except Exception as e:
+            # 2.32.1: a version check that fails silently cannot warn about a mismatch
+            try:
+                from .helpers import log_message
+                from .compat import MSG_WARNING
+                log_message("Dam suite: the plugin versions could not be checked ({})".format(
+                    e), MSG_WARNING)
+            except Exception:                                    # noqa
+                pass
             return []
         try:
             from .helpers import log_message
@@ -168,13 +176,20 @@ class NDdamHazardHelperPlugin(QObject):
     def run_settings(self, *args):
         """Open the window on its Suite settings tab (v2.13)."""
         self.run_plugin()
+        from .helpers import log_message
+        from .compat import MSG_WARNING
         try:
             dlg = self.dialog
-            for i in range(dlg.tab_widget.count()):
-                if dlg.tab_widget.tabText(i) == "Suite settings":
-                    dlg.tab_widget.setCurrentIndex(i)
-        except Exception:                                        # noqa
-            pass
+            page = getattr(dlg, "suite_settings_page", None)
+            i = dlg.tab_widget.indexOf(page) if page is not None else -1
+            if i < 0:
+                # 2.32.1: say so instead of opening the window on another tab silently
+                log_message("The Suite settings tab is not in the window (it could not be "
+                            "built - see the earlier message)", MSG_WARNING)
+            else:
+                dlg.tab_widget.setCurrentIndex(i)
+        except Exception as e:                                   # noqa
+            log_message("Suite settings tab not opened: {}".format(e), MSG_WARNING)
 
     def run_home(self, *args):
         """v2.12: the Dam suite home window (suite_home.py, the same in all three plugins)."""

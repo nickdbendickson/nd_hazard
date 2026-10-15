@@ -228,10 +228,14 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._setup_tab_index = self.tab_widget.count() - 1
 
         # --- Data & Output tab (data_tab.py); the "Run everything" button is here (v2.9) ---
-        self.tab_widget.addTab(_scroll_tab(self._build_data_tab()), "Data & Output")
+        data_page = _scroll_tab(self._build_data_tab())
+        self.tab_widget.addTab(data_page, "Data & Output")
 
         # --- Hazard classification tab (classify_tab.py) ---
-        self.tab_widget.addTab(_scroll_tab(self._build_classification_tab()), "Hazard Classification")
+        classify_page = _scroll_tab(self._build_classification_tab())
+        self.tab_widget.addTab(classify_page, "Hazard Classification")
+        # 2.32.1: the tabs whose layer lists refresh when opened - by page, not by caption
+        self._layer_tab_pages = (data_page, classify_page)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         # --- Review tabs: structures, then roads / rail / bridges / lifelines ---
@@ -243,8 +247,11 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.tab_widget.addTab(_scroll_tab(self._build_ras_tab()), "HEC-RAS plan")
 
         # --- v2.13: the suite settings file as a grid (suite_settings_tab.py) ---
+        self.suite_settings_page = None      # 2.32.1: plugin.run_settings opens it by page
         try:
-            self.tab_widget.addTab(_scroll_tab(self._build_suite_settings_tab()), "Suite settings")
+            page = _scroll_tab(self._build_suite_settings_tab())
+            self.tab_widget.addTab(page, "Suite settings")
+            self.suite_settings_page = page
         except Exception as e:                                   # noqa - the grid must never stop the window
             log_message("Suite settings tab not built: {}".format(e))
 
@@ -299,7 +306,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _on_tab_changed(self, index):
-        if self.tab_widget.tabText(index).replace("&&", "&") in ("Hazard Classification", "Data & Output"):
+        page = self.tab_widget.widget(index)
+        if any(page is p for p in getattr(self, "_layer_tab_pages", ())):
             self._refresh_layer_combos()
 
     def _inline_row(self, edit, btn):
@@ -858,6 +866,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                      "dv_browse_btn", "review_zoom_btn",
                      "review_save_btn", "review_rerun_btn", "sources_btn",
                      "review_export_btn", "review_merge_btn", "series_btn",
+                     # 2.32.1: were left live during a run (the field-sheet import
+                     # writes review decisions the running classification reads)
+                     "review_webmap_btn", "field_sheet_btn", "field_import_btn",
+                     # ... and the scenario table and the tile cache the run is reading
+                     "scn_add_btn", "scn_remove_btn", "scn_folder_btn", "scn_baseline_btn",
+                     "cache_clear_btn",
                      "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
                      "data_download_btn", "data_sources_btn", "open_data_btn",
                      # v2.9

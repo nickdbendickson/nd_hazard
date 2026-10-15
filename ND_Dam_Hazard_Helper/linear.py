@@ -534,6 +534,15 @@ def nd_road_class(road_class, aadt):
     return ND_LOW, "no AADT found - verify traffic", True
 
 
+def motorists(aadt, length_ft, speed_mph, occupancy):
+    """Persons in vehicles on a flooded road stretch: the hourly traffic
+    (AADT / 24) that is on the stretch at once (length / speed), times the
+    persons per vehicle. 2.32.1: one formula for the run (analyze_roads) and
+    the sensitivity table (sensitivity._persons), which kept a copy."""
+    vehicles = aadt / 24.0 * (length_ft / 5280.0) / max(speed_mph, 1.0)
+    return vehicles * occupancy
+
+
 def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect=None,
                   aadt_layers=(), crossing_index=None, occupancy=DEFAULT_VEHICLE_OCCUPANCY,
                   speed_mph=DEFAULT_VEHICLE_SPEED_MPH, progress_cb=None):
@@ -596,8 +605,7 @@ def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect
                 vzone = int(classify_values(st["depth"], st["vel"], *curves).min())
         persons = None
         if veh and aadt and paved != "No" and vzone in (CLASS_HIGH, CLASS_JUDGMENT):
-            vehicles = aadt / 24.0 * (st["length_ft"] / 5280.0) / max(speed_mph, 1.0)
-            persons = vehicles * occupancy
+            persons = motorists(aadt, st["length_ft"], speed_mph, occupancy)
         results.append({
             "fid": feat.id(), "name": rname, "road_class": rclass,
             "class_basis": cbasis, "paved": paved, "paved_basis": pbasis,

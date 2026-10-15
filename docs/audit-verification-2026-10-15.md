@@ -9,7 +9,32 @@ An earlier audit of this plugin was made in a chat with another AI assistant. It
 
 Every verdict below cites a file and line in this repository. Nothing has been fixed yet; this is a report only.
 
+## Status: fixed in 2.32.1
+
+Every finding in the next table is now fixed. The plugin version is 2.32.1; see the `metadata.txt` changelog. The checks are in `ND_Dam_Hazard_Helper/tests/test_v2321.py` (9 tests). Run them with `python3 -m ND_Dam_Hazard_Helper.tests.run_tests` from the repository root.
+
+| ID | Fix |
+|---|---|
+| NEW-1 | `pipeline._offline_sig()` is now part of `evaluation_key`: the pack path, the size and time of its files, and the "offline only" switch. The key version goes from 2 to 3, so every saved evaluation is re-made once. |
+| NEW-2 | `settings.profile_status` leaves out settings the dialog doesn't know. A new `settings.not_applied` lists choices that didn't take. The load message now says "N of M setting(s) applied" and names the ones not applied. |
+| NEW-3 | New `downloadplan.py` is the one download list, used by both `pipeline._collect_inputs` and `estimate.planned_downloads`. A test of 3,000 random settings shows it reproduces the 2.32.0 run rules exactly. |
+| D.2 | `review_webmap_btn`, `field_sheet_btn` and `field_import_btn` are now off while a run works. So are the scenario-table buttons and `cache_clear_btn`, found when every dialog button was checked against the busy list. Read-only buttons (history, open folder or report, dam record) stay live. |
+| P.8 | `_read_places` matches `name` / `place` regardless of case; a missing field reads as "". |
+| RS.1 | The HEC-RAS plan cache key uses `fingerprint.content_digest` (SHA-256, no date). VRT terrain tiles are still known by size and date: a mosaic can hold tens of GB, too much to hash on every run. Existing plan caches are converted once. |
+| LN.1 | `linear.motorists()` is the one formula for motorists; `sensitivity._persons` calls it. |
+| P.7 | The unused `pipeline._vrt_sources_sig` is removed. |
+| ST.6 | `mobile_rules_from_cfg` reads text "true" / "false" (and yes / no, on / off). Text it can't read keeps the default. |
+| CL.1 | The criteria are still matched by text. A criterion row that matches no map features is now logged, so a reworded criterion no longer loses its zoom-to features silently. |
+| R.1 | `MergePlan.overridable` records which refusals may be overridden; the review tab reads that record instead of the message text. |
+| EX.1 | The dialog keeps its Suite settings and layer-list tab pages and looks them up by page, not by caption. `run_settings` and the plugin version check now log a failure instead of passing silently. |
+| ST.3 | `collapse_dwellings` (still unused) now ignores campgrounds and never uses an already-extra footprint as a host, so it is safe if it is switched back on. |
+
+Left as they are: the `dv_template_edit` profile note (excluding it would add a "left out" warning to every existing profile), the `DIALOG_KEYS` copy, and `estimate.DEFAULT_MAX_AGE_DAYS`. All three are info-level and have no effect on the run.
+
+Test suite: 87 tests, 82 pass. The 5 failures are the same before and after these changes. Four need GDAL, which this container lacks, to write GeoPackages. The fifth (`the_suite_menu_holds_each_shared_entry_once`) fails the same way on the 2.32.0 code. The release zip in `releases/1.24/` is still 2.32.0; it has not been rebuilt.
+
 ## Findings that hold up
+
 
 | ID | Severity | File | Finding |
 |---|---|---|---|
