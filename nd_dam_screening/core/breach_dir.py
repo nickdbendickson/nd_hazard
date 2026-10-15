@@ -16,6 +16,9 @@ Logic
      toe is lowest, i.e. where the embankment is tallest (the old channel).
      Falls back to the point on the line nearest the dam's reference point.
   4. Flow direction = the downstream normal of the axis, as a compass bearing.
+  5. 0.26.0: when neither the waterbody test nor the side test gives a vote, the steepest drop of
+     the DEM from the dam midpoint (8 compass directions at 200 m, else 40 m) is the downstream
+     direction ("terrain trace", low confidence, to be verified).
 """
 import math
 
@@ -110,6 +113,46 @@ def _mean_dem(dem_fn, p, n, d0, d1, step=10.0):
     return float(np.mean(vals)) if vals else float("nan")
 
 
+# 0.26.0: the last-resort trace from the dam midpoint
+TRACE_DIRS = tuple((math.sin(math.radians(a)), math.cos(math.radians(a))) for a in range(0, 360, 45))
+TRACE_DISTANCES = (200.0, 40.0)         # metres; the shorter ring only when the longer has no data
+TRACE_MIN_DROP = 0.2                    # metres over the distance; less is "flat": no answer
+
+
+def midpoint(line, length=None):
+    """The point half way along the polyline."""
+    length = polyline_length(line) if length is None else length
+    if length <= 0:
+        return tuple(line[0])
+    return tuple(resample(line, length / 2.0)[1])
+
+
+def steepest_drop(dem_fn, p, distances=TRACE_DISTANCES, min_drop=TRACE_MIN_DROP):
+    """0.26.0: the compass direction in which the ground falls most from point p: the DEM is
+    sampled in the 8 compass directions at the first of `distances` that has any data (200 m,
+    else 40 m) and the direction with the largest drop per metre wins when that drop is at least
+    `min_drop` over the distance. Returns (unit vector, drop_m, distance_m), or None when the
+    midpoint has no elevation, no ring has data, or the ground is flat."""
+    z0 = dem_fn(p[0], p[1])
+    if z0 is None or not np.isfinite(z0):
+        return None
+    for dist in distances:
+        best = None
+        for d in TRACE_DIRS:
+            z = dem_fn(p[0] + d[0] * dist, p[1] + d[1] * dist)
+            if z is None or not np.isfinite(z):
+                continue
+            drop = float(z0) - float(z)
+            if best is None or drop > best[1]:
+                best = (d, drop)
+        if best is None:
+            continue                                   # no data on this ring: try the shorter one
+        if best[1] >= min_drop:
+            return best[0], best[1], dist
+        return None                                    # data, but flat: no answer
+    return None
+
+
 # ----------------------------------------------------------------- main API
 def resolve_breach(line, ref_pt, water_dist_fn=None, dem_fn=None,
                    known_height_m=None, offset=40.0):
@@ -148,11 +191,21 @@ def resolve_breach(line, ref_pt, water_dist_fn=None, dem_fn=None,
         if s != 0:
             votes["terrain"] = n1 if s > 0 else n2
 
+    if not votes and dem_fn is not None:
+        # 0.26.0: last resort - the steepest fall of the ground from the dam midpoint (the station
+        # vote above is untouched; this only runs when it and the waterbody test gave nothing)
+        tr = steepest_drop(dem_fn, midpoint(line, length))
+        if tr is not None:
+            votes["trace"] = tr[0]
+            notes.append("downstream side from the steepest DEM drop at the dam midpoint; the waterbody "
+                         "and side tests gave no answer; verify")
     if not votes:
         return {"ok": False, "reason": "cannot tell upstream from downstream",
                 "length_m": length, "axis_az": bearing(*axis) % 180}
     conf = "medium" if len(votes) == 1 else "high"
-    if len(votes) == 2 and votes["waterbody"] != votes["terrain"]:
+    if "trace" in votes:
+        down, dir_method, conf = votes["trace"], "terrain trace", "low"
+    elif len(votes) == 2 and votes["waterbody"] != votes["terrain"]:
         conf = "low"
         down, dir_method = votes["terrain"], "terrain"
         notes.append("waterbody and terrain disagree on downstream side; the terrain was used")

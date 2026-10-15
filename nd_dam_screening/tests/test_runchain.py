@@ -69,6 +69,15 @@ res = alg.run_mock({"WORK": W, "SETTINGS": json.dumps(own), "INCLUDE": [1], "DRY
                     "LOG": os.path.join(work, "dry.txt")}, ctx, fb)
 assert res["OK"] is True and res["RAN"] == "" and res["RESULT"] == "dry run" and not calls
 assert "Plan: 1, 2, 3, 4, 5, 6, 7, 8, 10" in open(res["LOG"]).read()
+# 0.22.1: qgis_process with no --INCLUDE: QGIS answers parameterAsEnums with [0] (step 0); the
+# chain must not take that as "include step 0"
+_real_enums = alg.parameterAsEnums
+alg.parameterAsEnums = lambda params, k, context: [0] if k == "INCLUDE" and not params.get(k) \
+    else _real_enums(params, k, context)
+res = alg.run_mock({"WORK": W, "SETTINGS": json.dumps(own), "DRY_RUN": True,
+                    "LOG": os.path.join(work, "dry0.txt")}, ctx, fb)
+assert "Plan: 1, 2, 3, 4, 5, 7, 8, 10" in open(res["LOG"]).read(), open(res["LOG"]).read()
+alg.parameterAsEnums = _real_enums
 # the real thing (stubbed steps): 6 included, 7b / 11-15 never
 res = alg.run_mock({"WORK": W, "SETTINGS": json.dumps(own), "INCLUDE": [1], "DRY_RUN": False,
                     "LOG": os.path.join(work, "run.txt")}, ctx, fb)
@@ -86,14 +95,28 @@ assert res["OK"] is True and res["RAN"] == "" and "nothing to run" in res["RESUL
 W2 = os.path.join(work, "w2"); os.makedirs(W2)
 W, calls = W2, []
 # with the preflight on, the missing water-body layer stops the chain before anything starts (0.13)
-res = alg.run_mock({"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg", "crit": 2}), "INCLUDE": [], "DRY_RUN": False,
-                    "LOG": ""}, ctx, fb)
+P2 = {"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg", "crit": 2}), "INCLUDE": [],
+      "DRY_RUN": False, "LOG": ""}
+res = alg.run_mock(dict(P2, FAIL_ON_ERROR=False), ctx, fb)
 assert res["OK"] is False and res["RAN"] == "" and res["RESULT"].startswith("preflight: not ready") and not calls
 assert "Water bodies" in res["RESULT"] or "ND DWR dams" in res["RESULT"], res
+# 0.28.3: by default the tool FAILS instead, so qgis_process exits non-zero
+try:
+    alg.run_mock(dict(P2), ctx, fb)
+    raise AssertionError("a chain stopped by the preflight did not fail the tool")
+except QgsProcessingException as e:
+    assert "the chain did not finish: preflight: not ready" in str(e) and "none" in str(e), str(e)
+assert not calls
 # with it off, the chain's own check stops at the step that lacks the input
-res = alg.run_mock({"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg"}), "INCLUDE": [], "DRY_RUN": False,
-                    "LOG": "", "PREFLIGHT": False}, ctx, fb)
+P3 = {"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg"}), "INCLUDE": [], "DRY_RUN": False,
+      "LOG": "", "PREFLIGHT": False}
+res = alg.run_mock(dict(P3, FAIL_ON_ERROR=False), ctx, fb)
 assert res["OK"] is False and res["RAN"] == "1,2" and "Step 3 (Estimate reservoir storage) cannot run" in res["RESULT"]
+try:                                                    # 0.28.3: and it fails the tool
+    alg.run_mock(dict(P3), ctx, fb)
+    raise AssertionError("a chain that stopped at a step did not fail the tool")
+except QgsProcessingException as e:
+    assert "Step 3 (Estimate reservoir storage) cannot run" in str(e), str(e)
 W3 = os.path.join(work, "w3"); os.makedirs(W3)
 W, calls = W3, []
 
@@ -105,14 +128,16 @@ def failing_run(aid, params, context=None, feedback=None, is_child_algorithm=Fal
 
 
 rc.processing.run = failing_run
-res = alg.run_mock({"WORK": W3, "SETTINGS": json.dumps(own), "INCLUDE": [], "DRY_RUN": False, "LOG": ""}, ctx, fb)
+res = alg.run_mock({"WORK": W3, "SETTINGS": json.dumps(own), "INCLUDE": [], "DRY_RUN": False,
+                    "LOG": "", "FAIL_ON_ERROR": False}, ctx, fb)
 assert res["OK"] is False and res["RAN"] == "1,2,3" and "did not finish: no dam line within 300 m" in res["RESULT"]
 rc.processing.run = real_run
-try:
-    alg.run_mock({"WORK": os.path.join(work, "nope"), "SETTINGS": "", "INCLUDE": [], "DRY_RUN": True, "LOG": ""}, ctx, fb)
-    raise AssertionError("missing work folder")
-except QgsProcessingException as e:
-    assert "Work folder not found" in str(e)
+# item 6: work folder is auto-created when it doesn't exist
+nope = os.path.join(work, "nope")
+assert not os.path.isdir(nope)
+res = alg.run_mock({"WORK": nope, "SETTINGS": "", "INCLUDE": [], "DRY_RUN": True, "LOG": ""}, ctx, fb)
+assert os.path.isdir(nope), "work folder not created"
+assert res["RESULT"] == "dry run"
 print("OK (tool 15 headless chain)")
 
 # ---------------------------------------------------------------- tool 13: inventory diff

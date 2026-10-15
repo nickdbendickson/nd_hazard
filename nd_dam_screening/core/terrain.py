@@ -8,7 +8,12 @@ import os
 import threading
 import time
 import urllib.parse
-import urllib.request
+
+try:                                                    # 0.28.2: QGIS's proxy setting applies
+    from ..damsuite import netproxy
+except ImportError:                                     # core/ itself on sys.path (tests)
+    import importlib
+    netproxy = importlib.import_module("damsuite.netproxy")
 
 EXPORT_URL = ("https://elevation.nationalmap.gov/arcgis/rest/services/"
               "3DEPElevation/ImageServer/exportImage")
@@ -16,8 +21,13 @@ MAX_PX = 8000          # service maxImageWidth / maxImageHeight
 TARGET_EPSG = 5070
 
 
-def tile_extents(xmin, ymin, xmax, ymax, cell, max_px=4000):
-    """Split an extent into tiles no larger than max_px on a side."""
+def tile_extents(xmin, ymin, xmax, ymax, cell, max_px=None):
+    """Split an extent into tiles no larger than max_px on a side. 0.21.0: default
+    damsuite.solvegate.TILE_PX (1,200; was 4,000 - a 10-mile box at 10 m in one 3DEP export
+    request timed out in the DamSafety audit)."""
+    if max_px is None:
+        from ..damsuite.solvegate import TILE_PX
+        max_px = TILE_PX
     step = max_px * cell
     x = xmin
     while x < xmax:
@@ -45,7 +55,7 @@ def fetch_3dep_tile(extent, cell, out_path, retries=3, timeout=120):
     last = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(url, timeout=timeout) as r:
+            with netproxy.urlopen(url, timeout=timeout) as r:       # QGIS's proxy (0.28.2)
                 data = r.read()
             if data[:4] not in (b"II*\x00", b"MM\x00*"):
                 raise IOError("response is not a TIFF: %r" % data[:120])

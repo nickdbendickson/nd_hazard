@@ -106,7 +106,7 @@ class SubmittalReportAlgorithm(_ToolBase):
                                      "{}".format(f["name"], f["source"], f["note"]),
                                      fatalError=False)
         for w in res.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         if res.missing:
             feedback.pushInfo("Not found in the dam folder (sections skipped or marked in the "
                               "checklist): " + ", ".join(res.missing))

@@ -107,8 +107,10 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
     # the checkpoint key of a default run is the 3.1.x key (resume keeps working); the
     # v3.4.0 settings (near-dam refine, solver) are left out while at their defaults too
     # (v3.11.0: the raise-the-dam-line setting is on by default, so it is in the key)
+    # (3.20.0: the inventory-crossing settings are left out while the gaps are not cut)
     old = {k: v for k, v in st.as_dict().items() if k not in (
-        "resume", "eap_map", "dam_record", "lisflood_solver", "close_upstream_edges")
+        "resume", "eap_map", "dam_record", "lisflood_solver", "close_upstream_edges",
+        "crossings", "crossing_gaps")
         and not k.startswith("class_stop")
         and k not in workflow._REFINE_KEYS}          # refine_lines (ANUGA, 3.0) stays
     assert workflow.key_settings(st) == old
@@ -118,6 +120,9 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
     assert "refine_near" not in workflow.key_settings(workflow.RunSettings(refine_near=True))
     assert "lisflood_solver" in workflow.key_settings(workflow.RunSettings(lisflood_solver="fv1"))
     assert "class_stop" in workflow.key_settings(workflow.RunSettings(class_stop=True))
+    # 3.20.0: cutting the crossings changes the terrain, so then they ARE in the key
+    assert "crossing_gaps" in workflow.key_settings(workflow.RunSettings(crossing_gaps=True))
+    assert "crossings" not in workflow.key_settings(workflow.RunSettings())
     assert "eap_map" not in workflow.key_settings(workflow.RunSettings(eap_map="svg"))
 
 
@@ -560,7 +565,7 @@ def damjson_never_overwrites_another_tools_value_and_reports_both():
             "set by ndhazard 2.10.0" in w, w
         rec = dr.load(d)
         assert rec.get("height_ft") == 26.0 and rec.sources["storage_acft"]["tool"] == "ndbreach"
-        assert rec.sources["storage_acft"]["version"] == damjson.plugin_version() == "3.12.0"
+        assert rec.sources["storage_acft"]["version"] == damjson.plugin_version()
         st = rec.latest("modelled")
         assert st["tool"] == "ndbreach" and st["result"]["final_rasters"] == ["Depth (Max).tif"]
         lines = "\n".join(damjson.report_lines(info))
@@ -591,12 +596,17 @@ def a_run_records_what_it_used_in_dam_json():
         assert rec.get("height_ft") == 26.0                      # another tool's: kept
         assert rec.get("storage_acft") == 500.0 and rec.sources["storage_acft"]["tool"] == \
             "ndbreach"
-        assert rec.get("top_of_dam_datum") == "DEM" and "DEM" in \
-            rec.sources["top_of_dam_ft"]["note"]
+        # 3.20.3: the run estimated the top of dam from the DEM, so the record says so and a
+        # later run estimates it again instead of reading this back as a given crest
+        from nd_breach_runner.core import damjson as _dj0
+        assert rec.get("top_of_dam_datum") == _dj0.DEM_ESTIMATE_DATUM
+        assert "estimated by this plugin from the DEM" in rec.sources["top_of_dam_ft"]["note"]
+        assert _dj0.dem_estimate(rec) and _dj0.fill({"TOP_FT": None}, rec)[0]["TOP_FT"] is None
         assert rec.get("lon") == -100.5 and rec.get("crs") == "EPSG:26914"
         m = rec.latest("modelled")
         res = m["result"]
-        assert m["tool"] == "ndbreach" and m["version"] == "3.12.0"
+        from nd_breach_runner.core import damjson as _dj
+        assert m["tool"] == "ndbreach" and m["version"] == _dj.plugin_version()
         assert "Depth (Max).tif" in res["final_rasters"] and res["breach_occurs"]
         assert res["manifest"] == "_breach_model/run_manifest.json"
         assert os.path.exists(os.path.join(folder, res["manifest"]))
@@ -936,7 +946,7 @@ def release_is_3_2_0_and_loads_without_nd_dam_hazard():
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
     assert cp.get("general", "version") == workflow.VERSION == versions.RELEASE["ndbreach"] \
-        == "3.12.0"
+        == workflow.metadata_version()
     assert damsuite.selfcheck() == []
     assert versions.installed("ndhazard") is None           # outside QGIS: not installed
     readme = open(os.path.join(PLUGIN, "README.md"), encoding="utf-8").read()

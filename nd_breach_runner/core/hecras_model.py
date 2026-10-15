@@ -1884,6 +1884,24 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             "structures": sinfo}                # v3.12.0
     paths["readme"] = write_readme(os.path.join(out, "README_HECRAS.md"), m, info, notes, dam,
                                    params)
+    # 3.13.0: roads crossing the flow path with no culvert or bridge in the run (candidates)
+    cands = report.get("culvert_candidates") or []
+    if cands and to_model is not None:
+        xy = to_model([(c["x"], c["y"]) for c in cands])
+        paths["culvert_candidates"] = os.path.join(out, "GIS", "culvert_candidates.csv")
+        with open(paths["culvert_candidates"], "w") as f:
+            f.write("name,x,y,along_mi,angle_deg,surveyed\n")
+            for c, (x, y) in zip(cands, xy):
+                f.write('"{}",{:.2f},{:.2f},{},{},no\n'.format(c["name"], x, y, c["along_mi"],
+                                                              c["angle_deg"]))
+        with open(paths["readme"], "a") as f:
+            f.write("\n## Culvert candidates (not in the model)\n\n"
+                    "{} road crossing(s) of the run's flow path have no culvert or bridge in the "
+                    "run: `GIS/culvert_candidates.csv` ({}). They are candidates for you to "
+                    "check, not surveyed structures, and no connection was written for them. Add "
+                    "the real ones in the Geometric Data editor, or give them to the Runner as "
+                    "STRUCTURES and export again.\n".format(len(cands), info["crs"]))
+        info["culvert_candidates"] = len(cands)
     progress(100, "done")
     return {"folder": out, "paths": paths, "model": m, "info": info, "notes": notes}
 

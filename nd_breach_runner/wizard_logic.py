@@ -19,6 +19,7 @@ from .core import flood as floodmod
 from .core import gdal_io
 from .core import nd_data
 from .core import workflow
+from . import popup_logic as pl                 # 3.18.0: the Runner window's DEM download rules
 
 ALGORITHM_ID = "ndbreach:rundam"
 
@@ -125,7 +126,22 @@ def dam_values_from_attrs(attrs, mapping):
             x = clean_number(raw)
             if x is not None:
                 out[param] = x
+    if not out.get("DAM_ID"):
+        did = dwr_dam_id(attrs)
+        if did:
+            out["DAM_ID"] = did
     return out
+
+
+def dwr_dam_id(attrs):
+    """3.13.0: 'DWR-<structure_id>' for a row of the ND DWR dam inventory (many DWR dams have no
+    NID ID; the suite names their folders this way), else ''."""
+    raw = _get(attrs, "structure_id")
+    if raw is None or (hasattr(raw, "isNull") and raw.isNull()):
+        return ""
+    x = clean_number(raw)
+    t = "{:d}".format(int(x)) if x is not None and x == int(x) else str(raw).strip()
+    return "DWR-" + t if t and t.lower() != "null" else ""
 
 
 def point_text(x, y, authid=""):
@@ -189,6 +205,51 @@ def apply_dam_record(a):
     return lines
 
 
+def apply_screening_handoff(a):
+    """3.20.0: pre-select the breach method, the scenario and the cell size ND Dam Breach
+    Screening actually ran for this dam, and say where they came from.
+
+    Only values the wizard still holds at its own starting value are replaced - a wizard the
+    user has clicked through keeps what they chose - and only once per dam
+    (a["handoff_applied"] remembers which dam it was done for). The note for the page is in
+    a["handoff_note"]; a["handoff_missing"] is what the screening has not recorded yet.
+    Returns the lines that were applied."""
+    folder = dam_folder_of(a)
+    did = str((a.get("dam") or {}).get("DAM_ID") or "").strip()
+    if not folder or a.get("handoff_applied") == did:
+        return []
+    try:
+        from .core import screenhandoff as SH
+        info = SH.read(folder)
+    except Exception:                                            # noqa - never stop the wizard
+        return []
+    a["handoff_applied"] = did
+    a["handoff_note"] = ""
+    a["handoff_missing"] = SH.missing_text(info)
+    if not SH.from_screening(info):
+        return []
+    start = default_answers()
+    lines = []
+    where = SH.source_text(info)
+    if info.get("method") and a.get("method") == start["method"]:
+        a["method"] = info["method"]
+        lines.append("Breach {} {}".format(brmod.METHOD_LABELS.get(info["method"],
+                                                                   info["method"]), where))
+    if info.get("scenario") and a.get("scenario") == start["scenario"]:
+        a["scenario"] = info["scenario"]
+        lines.append("Scenario {} {}".format(SCENARIO_LABELS.get(info["scenario"],
+                                                                 info["scenario"]), where))
+    if info.get("cell_m") and float(a.get("cell_m") or 0.0) == float(start["cell_m"]):
+        a["cell_m"] = float(info["cell_m"])
+        lines.append("Cell size {:g} m {}".format(float(info["cell_m"]), where))
+    a["handoff_note"] = ("The screening ran {} - {}.".format(SH.values_text(info), where)
+                         if lines else
+                         "The screening recorded {} {}; the values here are unchanged because "
+                         "they were chosen in this wizard.".format(SH.values_text(info), where))
+    a["handoff_lines"] = lines
+    return lines
+
+
 def dam_folder_dem(dams_folder, dam_id):
     """3.9.0: the DEM recorded in <Dams folder>/<Dam ID>/dam.json's data section ("Get data for
     this dam", the window's DEM download) when its file exists, else ""."""
@@ -219,6 +280,164 @@ def apply_dam_folder_dem(a):
     elif a.get("dem_from_dam_folder"):                           # another dam, without a DEM
         a["dem_id"], a["dem_name"], a["dem_from_dam_folder"] = "", "", False
     return dem
+
+
+# ------------------------------------------------------------- the DEM download (3.18.0) --
+# The terrain page's "Download DEM for this dam" runs ND Dam Breach Screening's DEM download
+# (tool 20, nddam:downloaddem) as the Runner window's DEM box does (dialog.py): USGS 3DEP around
+# the dam point, into <dam folder>/data/. The tool writes <stem>_10m_5070.tif or
+# <stem>_1m_5070.tif (EPSG:5070, metres, float32 GeoTIFF); popup_logic.finish_dem_download then
+# renames it to data/dem_<cell>m.tif and records it in dam.json's data section, and
+# apply_dam_folder_dem picks it as the wizard's DEM. Everything here is plain Python; the page
+# gives QGIS's coordinate transform and GDAL as callables.
+DEM_DOWNLOAD_ALG = "nddam:downloaddem"
+DEM_RESOLUTIONS = ((10.0, "10 m"), (1.0, "1 m"))       # the tool's RESOLUTION enum, in order
+DEM_SOURCE_NOTE = "DEM download of the wizard (ND Dam Breach Screening tool 20)"
+DEM_NOT_INSTALLED = ("ND Dam Breach Screening is not installed, so the DEM download is "
+                     "unavailable. Choose a DEM loaded in QGIS instead.")
+
+
+def dem_cell_m(resolution_idx):
+    """The cell (m) of a RESOLUTION index (0 = 10 m, 1 = 1 m; anything else = 10 m)."""
+    try:
+        return DEM_RESOLUTIONS[int(resolution_idx)][0]
+    except (IndexError, TypeError, ValueError):
+        return DEM_RESOLUTIONS[0][0]
+
+
+def dem_stem(dam_id, lonlat=None):
+    """The download tool's file stem for a dam (its local_tif_stem rule, area Dam): the dam ID
+    with every character but letters, digits, - and _ replaced by _, without leading or
+    trailing _; a dam without an ID is dam_<lon>_<lat> (- as m, . as p, 4 decimals); else dam."""
+    name = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(dam_id or "").strip())
+    if not name.strip("_") and lonlat is not None:
+        name = "dam_{:.4f}_{:.4f}".format(lonlat[0], lonlat[1]).replace("-", "m").replace(
+            ".", "p")
+    return name.strip("_") or "dam"
+
+
+def dem_file_name(dam_id, cell_m, lonlat=None):
+    """<stem>_10m_5070.tif or <stem>_1m_5070.tif: the file the download tool writes."""
+    return "{}_{}m_5070.tif".format(dem_stem(dam_id, lonlat), int(round(float(cell_m))))
+
+
+def dam_folder_of(a):
+    """<Dams folder>/<dam ID folder> of the wizard's answers (the tools' folder rule), or ""."""
+    dams = str(a.get("dams_folder") or "").strip()
+    did = str((a.get("dam") or {}).get("DAM_ID") or "").strip()
+    if not dams or not did:
+        return ""
+    return os.path.join(dams, damjson.folder_name(did))
+
+
+def dam_lonlat(a, to_lonlat=None):
+    """(lon, lat) of the wizard's dam: its point (x, y, authid) as it is when it is already
+    lon / lat, else through `to_lonlat(x, y, crs)` (QGIS's transform; the page gives it), else
+    the dam folder's dam.json (popup_logic.dam_lonlat). None when it is not known."""
+    pt = a.get("point")
+    if pt and len(pt) >= 2:
+        x, y = clean_number(pt[0]), clean_number(pt[1])
+        crs = str(pt[2] if len(pt) > 2 and pt[2] else "").strip()
+        if x is not None and y is not None:
+            if crs.upper() in ("", "EPSG:4326") and abs(x) <= 180.0 and abs(y) <= 90.0:
+                return x, y
+            if crs and to_lonlat is not None:
+                try:
+                    lon, lat = to_lonlat(x, y, crs)
+                    lon, lat = clean_number(lon), clean_number(lat)
+                except Exception:                                # noqa - an unknown CRS
+                    lon = lat = None
+                if lon is not None and lat is not None and abs(lon) <= 180.0 and \
+                        abs(lat) <= 90.0:
+                    return lon, lat
+    return pl.dam_lonlat(dam_folder_of(a), to_lonlat)
+
+
+def dem_download_params(a, resolution_idx=0, to_lonlat=None, buffer_mi=None):
+    """The download tool's parameters for the wizard's dam -> (params, problems). The Runner
+    window's choices: USGS 3DEP, area Dam, the buffer half the run tool's largest domain side
+    (popup_logic.dem_box_half_mi, 30 mi for 60 mi), the resolution chosen next to the button,
+    the output <dam folder>/data with the Dams folder and dam ID so the tool records the DEM
+    in dam.json. `problems` are sentences for what is still missing (then params is {})."""
+    problems = []
+    dams = str(a.get("dams_folder") or "").strip()
+    did = str((a.get("dam") or {}).get("DAM_ID") or "").strip()
+    if not dams:
+        problems.append("Choose the Dams folder on the dam page: the DEM goes into the dam's "
+                        "folder there.")
+    if not did:
+        problems.append("Give the dam ID on the dam page: it names the DEM file and the dam "
+                        "folder.")
+    lonlat = dam_lonlat(a, to_lonlat)
+    if lonlat is None:
+        problems.append("The dam point is not known: pick the dam from the layer or type its "
+                        "location on the dam page.")
+    if problems:
+        return {}, problems
+    if buffer_mi is None:
+        buffer_mi = pl.dem_box_half_mi(pl.settings_max_extent_mi())
+    params = {"SOURCE": 0, "SCOPE": 0, "DAM_POINT": pl.lonlat_text(lonlat),
+              "BUFFER_MI": float(buffer_mi), "COUNTY": "", "RESOLUTION": int(resolution_idx),
+              "DWR_PATH": "", "ASCII_FT": False, "IMAGINE": True,
+              "OUT": pl.dam_data_dir(dam_folder_of(a)), "DAMS_FOLDER": dams, "DAM_ID": did}
+    return params, []
+
+
+def dem_download_result(result):
+    """The DEM file of the tool's result (its VRT output: a GeoTIFF since Screening 0.24.0), or
+    "" (the dialog was cancelled, or an older QGIS returned nothing)."""
+    if isinstance(result, dict):
+        return str(result.get("VRT") or "").split("|")[0]
+    if isinstance(result, str):
+        return result.split("|")[0]
+    return ""
+
+
+def find_downloaded_dem(a, cell_m, since=None):
+    """The DEM a download left for the wizard's dam when the tool's result does not say: the
+    newest of data/dem_<cell>m.tif (after finish_dem_download) and data/<stem>_<cell>m_5070.tif
+    (the tool's own name), changed at or after `since` (a time.time()). "" when there is none."""
+    folder = dam_folder_of(a)
+    if not folder:
+        return ""
+    did = (a.get("dam") or {}).get("DAM_ID")
+    cands = (pl.dem_download_target(folder, cell_m),
+             os.path.join(pl.dam_data_dir(folder), dem_file_name(did, cell_m)))
+    best, best_t = "", None
+    for p in cands:
+        try:
+            t = os.path.getmtime(p)
+        except OSError:
+            continue
+        if since is not None and t < since - 1.0:
+            continue
+        if best_t is None or t > best_t:
+            best, best_t = p, t
+    return best
+
+
+def finish_dem_download(a, result, cell_m, translate=None, since=None):
+    """After the download tool's dialog closed: the DEM becomes data/dem_<cell>m.tif and is
+    recorded in dam.json (popup_logic.finish_dem_download, as the Runner window does), then it
+    is the wizard's DEM (a["dem_id"], "(from dam folder)"). Returns (path, notes); ("", notes)
+    when there is no DEM (the dialog was cancelled): the wizard's choice is left as it was."""
+    src = dem_download_result(result)
+    if not src or not os.path.isfile(src):
+        src = find_downloaded_dem(a, cell_m, since)
+    if not src:
+        return "", ["The download gave no DEM file."]
+    path, notes = pl.finish_dem_download(src, dam_folder_of(a), cell_m, translate=translate,
+                                         source=DEM_SOURCE_NOTE)
+    if not path:
+        return "", notes
+    a["dem_id"], a["dem_name"], a["dem_from_dam_folder"] = "", "", False
+    got = apply_dam_folder_dem(a)
+    if not got or os.path.normcase(os.path.abspath(got.split("|")[0])) != \
+            os.path.normcase(os.path.abspath(path)):
+        a["dem_id"] = path                   # dam.json did not take it: the file itself
+        a["dem_name"] = "{} (downloaded)".format(os.path.basename(path))
+        a["dem_from_dam_folder"] = True
+    return path, notes
 
 
 # ------------------------------------------------------------------------------- the answers
@@ -329,7 +548,7 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
         if top is not None and bottom is not None and h and bottom >= top:
             errors.append("The breach bottom elevation must be below the top of dam.")
         if dam.get("TOP_FT") is None:
-            warnings.append("No top of dam elevation: the highest DEM point within 30 m of "
+            warnings.append("No top of dam elevation: the crest read from the DEM near "
                             "the dam point will be used. Check it in the run report.")
         if dam.get("AREA_AC") is None:
             warnings.append("No surface area: the breach is taken from storage alone.")

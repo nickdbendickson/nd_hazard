@@ -90,6 +90,39 @@ res = bd.resolve_breach(diag, (60.0, 60.0), lambda x, y: 0.0 if (y - x) > 5 else
 print("diagonal: flow %.1f, axis %.1f" % (res["flow_az"], res["axis_az"]))
 assert 120 < res["flow_az"] < 150         # SE-ish, away from the NW reservoir
 
+# 9. (0.26.0) neither test answers - the ground falls ALONG the dam line, so both sides are alike
+# and there is no water function - the steepest DEM drop from the dam midpoint decides, low
+# confidence, to be verified
+ns_line = [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)]
+north_fall = lambda x, y: 100.0 - 0.01 * y                    # 2 m lower 200 m to the north
+res = bd.resolve_breach(ns_line, (0.0, 5.0), None, north_fall)
+check(res, 0.0, "terrain trace")
+assert res["dir_method"] == "terrain trace" and res["dir_conf"] == "low", res
+assert any("steepest DEM drop at the dam midpoint" in n and "verify" in n for n in res["notes"]), res["notes"]
+assert res["breach_method"] == "lowest downstream toe"
+tr = bd.steepest_drop(north_fall, (0.0, 0.0))
+assert tr is not None and tr[2] == 200.0 and abs(tr[1] - 2.0) < 1e-9 and abs(bd.bearing(*tr[0]) - 0.0) < 1e-9
+assert bd.midpoint(ns_line) == (0.0, 0.0) and bd.midpoint([(0.0, 0.0), (10.0, 0.0), (10.0, 30.0)]) == (10.0, 10.0)
+# a NW-SE line on ground falling to the south-east (along the line again): the diagonal wins
+se_line = [(-100.0, 100.0), (0.0, 0.0), (100.0, -100.0)]
+res = bd.resolve_breach(se_line, (0.0, 5.0), None, lambda x, y: 100.0 - 0.01 * x + 0.01 * y)
+check(res, 135.0, "terrain trace SE")
+assert res["dir_method"] == "terrain trace"
+# too flat (0.1 m over 200 m): still no answer, and the station vote is untouched
+res = bd.resolve_breach(ns_line, (0.0, 5.0), None, lambda x, y: 100.0 - 0.0005 * y)
+assert not res["ok"] and res["reason"] == "cannot tell upstream from downstream"
+assert bd.steepest_drop(lambda x, y: 100.0, (0.0, 0.0)) is None
+# no data 200 m out (a small DEM): the 40 m ring is used
+small = lambda x, y: north_fall(x, y) if abs(x) < 100.0 and abs(y) < 120.0 else float("nan")
+res = bd.resolve_breach(ns_line, (0.0, 5.0), None, small)
+check(res, 0.0, "terrain trace 40 m")
+assert bd.steepest_drop(small, (0.0, 0.0))[2] == 40.0
+assert bd.steepest_drop(lambda x, y: float("nan"), (0.0, 0.0)) is None      # no ground at the midpoint
+# with a water body answer the trace is not used (the station vote wins as before)
+res = bd.resolve_breach(line, (0.0, 5.0), water_north, None)
+assert res["dir_method"] == "waterbody" and res["dir_conf"] == "medium"
+print("terrain trace: steepest drop from the midpoint, low confidence; flat ground still no answer")
+
 # 8. fallback with no dam line
 assert abs(bd.fallback_direction((0.0, 0.0), (0.0, 50.0)) - 180.0) < 1e-6
 assert bd.names_match("Lake Ashtabula Dam", "lake  ashtabula dam.")

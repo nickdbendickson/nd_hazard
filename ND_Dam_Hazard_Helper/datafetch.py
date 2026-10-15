@@ -7,7 +7,7 @@ Area of each data set:
   "study" - the study area (depth raster extent + the study-area buffer)
   "flood" - structures, facilities and other point / area data only where
             the flood is (wet depth cells + the flood buffer); lines (roads,
-            rail, NHD flowlines) keep the whole study area because the road
+            rail, 3DHP flowlines) keep the whole study area because the road
             network beyond the flood decides sole access and the travel-time
             trace
 
@@ -72,7 +72,7 @@ DATASETS = [
     ("dams", "NID_Dams", "National Inventory of Dams", "download_dams", True),
     ("lifelines", "Lifeline_Facilities", "Lifeline facilities (ND GIS Hub, EIA, OSM)",
      "download_lifelines", True),
-    ("flowlines", "NHD_Flowlines", "USGS NHD flowlines", "download_flowlines", False),
+    ("flowlines", "3DHP_Flowlines", "USGS 3DHP flowlines (streams)", "download_flowlines", False),
     ("places", "Towns", "OpenStreetMap cities / towns / villages", "download_places", True),
 ]
 
@@ -349,8 +349,8 @@ def _fetch(key, ext, xing, big, out, progress):
                                                     fetch_osm_lifelines, ext, out)[0]))
         return _merge(parts)
     if key == "flowlines":
-        return try_download("USGS NHD flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext,
-                            out, "NHD_flowlines")[0]
+        return try_download("USGS 3DHP flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext,
+                            out, "3DHP_flowlines")[0]
     if key == "places":
         return try_download("OpenStreetMap places", fetch_osm_places, big, out)[0]
     return None
@@ -360,7 +360,7 @@ def _fetch(key, ext, xing, big, out, progress):
 LOCAL_ROLE_OF_DATASET = {"nsi": "nsi", "address": "address", "usa": "usa", "camps": "camps",
                          "roads": "roads", "traffic": "aadt", "rail": "rail",
                          "xing": "crossings", "bridges": "bridges", "dams": "dams",
-                         "flowlines": "centerline"}
+                         "flowlines": "centerline", "places": "places"}
 
 
 def download_data(cfg, clip, depth_layer, output_folder, dam_folder="", progress=None,

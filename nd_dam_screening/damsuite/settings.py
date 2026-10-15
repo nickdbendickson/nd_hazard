@@ -30,6 +30,8 @@ import csv
 import datetime
 import os
 import re
+import shutil
+import time
 
 from . import xlsx_lite
 
@@ -271,6 +273,10 @@ class Settings(object):
         self.meta.update(meta or {})
         self.path = path
         self.problems = []           # (plugin, tool, key, problem) found while reading
+        # the values as read from (or last written to) self.path: save() writes only what
+        # changed since then, merged into what is in the file now (another plugin may have
+        # written it in the meantime)
+        self._base = None
 
     # -- values
     def get(self, plugin, tool, key, default=None):
@@ -318,15 +324,18 @@ class Settings(object):
                       and (plugin is None or i[0] == plugin))
 
     # -- table
-    def rows(self, catalog=None, plugin=None):
+    def rows(self, catalog=None, plugin=None, only_set=False):
         """The Settings sheet: every catalog entry (its stored value, empty = default) and every
-        stored value the catalog does not know, as lists in COLUMNS order."""
+        stored value the catalog does not know, as lists in COLUMNS order. `only_set`: catalog
+        entries without a stored value are left out."""
         out = [list(COLUMNS)]
         seen = set()
         for s in sorted(catalog or [], key=lambda s: (s.plugin, s.group, s.tool, s.order)):
             if plugin and s.plugin != plugin:
                 continue
             v = self.values.get(s.id)
+            if only_set and (v is None or v == ""):
+                continue
             out.append([s.plugin, s.tool, s.key, s.label, s.unit, display_value(v, s),
                         display_value(s.default, s), "YES" if s.your else "", (s.help or "").strip()])
             seen.add(s.id)
@@ -345,34 +354,94 @@ class Settings(object):
         return rows
 
     # -- save / load
-    def save(self, path=None, catalog=None, name=None, note=None, versions=None, extra_sheets=()):
-        """Write the file (.xlsx by xlsx_lite, .csv otherwise). Returns the path."""
+    def save(self, path=None, catalog=None, name=None, note=None, versions=None, extra_sheets=(),
+             replace=False):
+        """Write the file (.xlsx by xlsx_lite, .csv otherwise). Returns the path.
+
+        Safe for files the three plugins share:
+        - an existing file is re-read first and only this object's changes since its own load
+          (or last save) are merged into it; a row another plugin wrote meanwhile is kept;
+        - an existing file that cannot be read is never overwritten (SettingsError), unless
+          `replace` (an explicit "save as" over that file);
+        - nothing is written when the merge changes no value (opening a window does not
+          rewrite the file);
+        - the new file is written next to it and moved into place with os.replace (never a
+          half-written file); the previous file is kept as <name>.bak;
+        - a lock file serialises writers (two plugins saving at the same moment)."""
         path = path or self.path
         if not path:
             raise SettingsError("no file name for the settings")
-        if name is not None:
-            self.meta["name"] = name
-        if note is not None:
-            self.meta["note"] = note
-        if versions:
-            self.meta["versions"] = dict(versions)
-        self.meta["created"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        rows = self.rows(catalog)
-        ext = os.path.splitext(path)[1].lower()
-        try:
-            if ext == ".xlsx":
-                sheets = [(SHEET, rows), (ABOUT, self.about_rows())] + list(extra_sheets)
-                xlsx_lite.write(path, sheets)
-            else:
-                with open(path, "w", newline="", encoding="utf-8") as fh:
-                    w = csv.writer(fh)
-                    for r in rows:
-                        w.writerow(["" if c is None else c for c in r])
-                    for k, v in self.about_rows()[1:]:
-                        w.writerow(["about", k, "", "", "", v, "", "", ""])
-        except OSError as e:
-            raise SettingsError("the settings file {} cannot be written: {}".format(path, e))
+        with _FileLock(path):
+            existing = os.path.isfile(path)
+            if existing and not replace:
+                try:
+                    disk = Settings.load(path)
+                except SettingsError as e:
+                    raise SettingsError("the settings file {} was not saved: it exists but cannot be "
+                                        "read, so saving would overwrite it ({})".format(path, e))
+                base = self._base if (self._base is not None and _same_path(self.path, path)) else {}
+                merged = dict(disk.values)
+                for k in set(base) | set(self.values):
+                    if self.values.get(k) != base.get(k):
+                        if k in self.values:
+                            merged[k] = self.values[k]
+                        else:
+                            merged.pop(k, None)
+                # only the engineer's own changes are a reason to write: a plugin version that is
+                # not yet in the About sheet rides along with the next real save, it does not
+                # rewrite the file on its own (opening a window must leave the file as it is)
+                meta_same = ((name is None or name == disk.meta.get("name"))
+                             and (note is None or note == disk.meta.get("note")))
+                if merged == disk.values and meta_same:
+                    self.values, self._base, self.path = merged, dict(merged), path
+                    for k in ("name", "note", "created", "versions"):
+                        if k in disk.meta:
+                            self.meta[k] = disk.meta[k]
+                    return path
+                self.values = merged
+                for k in ("name", "note"):
+                    if disk.meta.get(k) and not self.meta.get(k):
+                        self.meta[k] = disk.meta[k]
+                if versions:
+                    versions = dict(disk.meta.get("versions") or {}, **versions)
+            if name is not None:
+                self.meta["name"] = name
+            if note is not None:
+                self.meta["note"] = note
+            if versions:
+                self.meta["versions"] = dict(versions)
+            self.meta["created"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # a file that exists keeps holding only stored values (each with its label from the
+            # catalog): merging into it never adds a row per default. A new file or an explicit
+            # replace is the full template, every parameter listed.
+            rows = self.rows(catalog, only_set=existing and not replace)
+            ext = os.path.splitext(path)[1].lower()
+            folder = os.path.dirname(os.path.abspath(path))
+            tmp = os.path.join(folder, ".{}.{}.tmp{}".format(os.path.basename(path), os.getpid(), ext))
+            try:
+                if ext == ".xlsx":
+                    sheets = [(SHEET, rows), (ABOUT, self.about_rows())] + list(extra_sheets)
+                    xlsx_lite.write(tmp, sheets)
+                else:
+                    with open(tmp, "w", newline="", encoding="utf-8") as fh:
+                        w = csv.writer(fh)
+                        for r in rows:
+                            w.writerow(["" if c is None else c for c in r])
+                        for k, v in self.about_rows()[1:]:
+                            w.writerow(["about", k, "", "", "", v, "", "", ""])
+                if existing:
+                    shutil.copy2(path, path + ".bak")
+                os.replace(tmp, path)
+            except OSError as e:
+                raise SettingsError("the settings file {} cannot be written: {}".format(path, e))
+            finally:
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
         self.path = path
+        self._base = dict(self.values)
         return path
 
     @classmethod
@@ -410,6 +479,7 @@ class Settings(object):
             raise SettingsError("the settings file {} cannot be read: {}".format(path, e))
         except Exception as e:                                   # noqa - a damaged zip / xml
             raise SettingsError("the settings file {} cannot be read ({}: {})".format(path, type(e).__name__, e))
+        s._base = dict(s.values)
         return s
 
     def _about(self, key, value):
@@ -455,6 +525,54 @@ class Settings(object):
             if v is None:
                 continue
             self.values[(p, t, str(k).strip())] = v
+
+
+def _same_path(a, b):
+    try:
+        return bool(a) and bool(b) and os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except (TypeError, ValueError):
+        return False
+
+
+class _FileLock(object):
+    """<file>.lock made with O_EXCL: one writer at a time. A lock older than STALE seconds (a
+    crashed QGIS) is taken over; after TIMEOUT seconds the save fails with SettingsError."""
+    STALE, TIMEOUT = 30.0, 10.0
+
+    def __init__(self, path):
+        self.lock = os.path.abspath(path) + ".lock"
+        self.fd = None
+
+    def __enter__(self):
+        t0 = time.time()
+        while True:
+            try:
+                self.fd = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self.fd, str(os.getpid()).encode("ascii"))
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(self.lock) > self.STALE:
+                        os.remove(self.lock)
+                        continue
+                except OSError:
+                    continue
+                if time.time() - t0 > self.TIMEOUT:
+                    raise SettingsError("the settings file is being saved by another program "
+                                        "(lock {}); try again".format(self.lock))
+                time.sleep(0.02)
+            except OSError as e:
+                raise SettingsError("the settings file cannot be locked for saving: {}".format(e))
+
+    def __exit__(self, *a):
+        try:
+            os.close(self.fd)
+        finally:
+            try:
+                os.remove(self.lock)
+            except OSError:
+                pass
+        return False
 
 
 def _same(a, b, setting):

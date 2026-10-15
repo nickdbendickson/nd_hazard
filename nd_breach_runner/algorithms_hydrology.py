@@ -139,7 +139,7 @@ class RainfallRunoffAlgorithm(_ToolBase):
         for k, v in res.summary.items():
             feedback.pushInfo("{}: {}".format(k, v))
         for w in res.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         feedback.pushInfo("Inflow hydrograph: " + out)
         return {"OUTPUT": out, "HYDROGRAPH": out, "PEAK_CFS": res.peak_cfs,
                 "VOLUME_ACFT": res.volume_acft, "RESULT": res.markdown}

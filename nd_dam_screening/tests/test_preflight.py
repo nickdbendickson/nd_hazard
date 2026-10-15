@@ -97,6 +97,18 @@ assert t["DWR dam lines"]["status"] == pf.OK
 assert t["Dams without a dam line"]["status"] == pf.WARN and "1 of 3" in t["Dams without a dam line"]["detail"]
 assert t["Water bodies"]["status"] == pf.WARN and "geometry is point" in t["Water bodies"]["detail"]
 assert t["Structures"]["status"] == pf.WARN and "occ_cls" in t["Structures"]["detail"]
+assert "occtype" in t["Structures"]["detail"] and "bldgtype" in t["Structures"]["detail"]      # 0.26.0: named too
+# 0.26.0: an NSI-only structures layer (occtype / bldgtype) is fine; each STRUCT_FIELDS group is one
+# tuple of alternatives
+assert all(isinstance(g, tuple) for g in pf.STRUCT_FIELDS) and ("occtype" in pf.STRUCT_FIELDS[0]) and \
+    ("BLDGTYPE" in pf.STRUCT_FIELDS[1])
+nsi = _gpkg.write(os.path.join(W, "nsi.gpkg"), {"nsi": ("Point", [("occtype", "TEXT"), ("bldgtype", "TEXT")],
+                                                  [(("Point", (0, 0)), {"occtype": "RES1", "bldgtype": "W"})])})
+t_nsi = by_title(pf.run_checks(W, dict(S4, structures=nsi), env=Net()))
+assert t_nsi["Structures"]["status"] == pf.OK, t_nsi["Structures"]
+nd_pkg = _gpkg.write(os.path.join(W, "ndpkg.gpkg"), {"s": ("Point", [("OCC_CLS", "TEXT"), ("PRIM_OCC", "TEXT")],
+                                                      [(("Point", (0, 0)), {"OCC_CLS": "Residential"})])})
+assert by_title(pf.run_checks(W, dict(S4, structures=nd_pkg), env=Net()))["Structures"]["status"] == pf.OK
 assert t["Roads"]["status"] == pf.WARN and "Optional" in t["Roads"]["fix"]
 assert "roughly" in t["Disk space"]["detail"] and "3 dams" in t["Disk space"]["detail"]
 # the pond path: water bodies needed, dams not

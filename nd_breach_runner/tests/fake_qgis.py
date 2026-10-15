@@ -234,6 +234,12 @@ class QgsProcessingFeedback:
     def pushInfo(self, m):
         self.info.append(m)
 
+    def pushWarning(self, m):
+        self.errors.append(str(m))              # the tests read warnings from .errors
+
+    def pushCommandInfo(self, m):
+        self.info.append(m)
+
     def reportError(self, m, fatalError=False):
         self.errors.append(m)
 

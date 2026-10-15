@@ -246,7 +246,8 @@ def summary_facts(parsed):
     f = {}
     h, lines = section(parsed, "ND HAZARD CLASSIFICATION")
     if h:
-        f["nd"] = h.split(":", 1)[1].strip().capitalize() if ":" in h else ""
+        # v2.28: "  |  incomplete: flood cut off (...)" after the class is a marker, not the class
+        f["nd"] = h.split(":", 1)[1].split("|", 1)[0].strip().capitalize() if ":" in h else ""
         f["nd_reasons"] = [x for x in lines if not x.startswith("Basis:")]
     h, lines = section(parsed, "ACER TM 11 CLASSIFICATION")
     if h:

@@ -1,0 +1,42 @@
+{
+ "checked_by": "",
+ "entered_by": "",
+ "notes": "nd_breach_runner fatality rate table, 3.20.0 format Written by ND Dam Breach Runner on 2026-10-13T05:58:34. Sign-off: no engineer named: nobody has signed the fatality rates off. The tool records the names entered; it cannot confirm that a check was made. Engineer's notes: Shipped EMPTY and unsigned on purpose. A fatality rate table (Graham 1999 / Reclamation RCEM style: the fraction of the population at risk lost in each flood-severity and warning-time cell) is engineering judgement that belongs to a named engineer, not to plugin source code - the same rule the suite applies to the ACER TM 11 charts. Until an engineer enters the rates and signs this file (Settings > Loss of life, or ndbreach:signrates), the Runner reports population at risk, flood severity and warning time and says that loss of life is not estimated. Fill every cell: a signed table with an empty cell is refused, because a total that leaves those people out would be too low.",
+ "rates": {
+  "high": {
+   "15to60": null,
+   "over60": null,
+   "under15": null
+  },
+  "low": {
+   "15to60": null,
+   "over60": null,
+   "under15": null
+  },
+  "medium": {
+   "15to60": null,
+   "over60": null,
+   "under15": null
+  }
+ },
+ "severities": [
+  "high",
+  "medium",
+  "low"
+ ],
+ "severity_rule": "damsuite.loss: high = depth x velocity >= 160 ft2/s or depth >= 13 ft; medium = depth x velocity >= 40 ft2/s; low = anything wet above 0.1 ft",
+ "signed_off_by": "",
+ "signed_off_on": "",
+ "source": "",
+ "status": "not signed off",
+ "warning_bands": [
+  "under15",
+  "15to60",
+  "over60"
+ ],
+ "warning_labels": {
+  "15to60": "15 to 60 minutes",
+  "over60": "over 60 minutes",
+  "under15": "under 15 minutes"
+ }
+}

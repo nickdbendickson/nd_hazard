@@ -106,7 +106,7 @@ from .download import _CACHE_RE
 
 # ------------------------------------------------------------------ roles --
 ROLES = ("nsi", "address", "usa", "outlines", "camps", "roads", "aadt", "rail", "crossings",
-         "bridges", "dams", "lifelines", "boundary", "parcels", "centerline")
+         "bridges", "dams", "lifelines", "boundary", "parcels", "centerline", "parks", "places")
 MULTI_ROLES = ("lifelines",)
 ROLE_LABELS = {
     "nsi": "NSI structure points", "address": "ND GIS Hub site / structure address points",
@@ -115,10 +115,11 @@ ROLE_LABELS = {
     "rail": "rail lines", "crossings": "rail grade crossings",
     "bridges": "bridges / culverts / low-water crossings", "dams": "dams (NID)",
     "lifelines": "lifeline facilities", "boundary": "model boundary polygon",
-    "parcels": "parcels", "centerline": "channel centerline / NHD flowlines"}
+    "parcels": "parcels", "centerline": "channel centerline / 3DHP flowlines",
+    "parks": "mobile-home / trailer parks", "places": "cities / towns / villages (travel-time table)"}
 ROLE_GROUP = {"nsi": 3, "address": 3, "usa": 3, "outlines": 3, "camps": 3, "roads": 4,
               "aadt": 4, "rail": 4, "crossings": 4, "bridges": 4, "dams": 5, "lifelines": 5,
-              "boundary": 5, "parcels": 5, "centerline": 6}
+              "boundary": 5, "parcels": 5, "centerline": 6, "parks": 3, "places": 6}
 
 POINT, LINE, POLYGON, NONE, UNKNOWN = "point", "line", "polygon", "none", "unknown"
 ROLE_GEOMETRY = {
@@ -126,7 +127,7 @@ ROLE_GEOMETRY = {
     "camps": (POLYGON,), "roads": (LINE,), "aadt": (LINE, POINT), "rail": (LINE,),
     "crossings": (POINT,), "bridges": (POINT,), "dams": (POINT, POLYGON),
     "lifelines": (POINT, POLYGON), "boundary": (POLYGON,), "parcels": (POLYGON,),
-    "centerline": (LINE,)}
+    "centerline": (LINE,), "parks": (POLYGON,), "places": (POINT,)}
 # camps: polygons only - structures.campground_records() takes every feature as a
 # footprint (the OSM download already turns campground points into circles)
 
@@ -769,8 +770,14 @@ _NBI_MARKER = "structure_number_008"             # facilities.read_crossings: NB
 _OSM_CROSSING_FIELDS = ("waterway", "railway")   # facilities.read_crossings: OSM crossing
 _NID_ID_FIELDS = ("nidid",)                      # facilities.read_dams (compact form)
 _DAM_DETAIL_FIELDS = ("hazardpotential", "nidheight", "nidstorage")
+_DWR_DAM_FIELDS = ("structureid", "damname", "maxdamheight")   # compact form
+_DWR_NOT_DAMS_RE = re.compile(r"(?<![a-z])(?:unknown|dugouts?)(?![a-z])")
 _DAM_NAME_RE = re.compile(r"(?<![a-z])(?:nid|dams|national inventory of dams|"
                           r"dam (?:points?|locations?|inventory))(?![a-z])")
+_PARK_NAME_RE = re.compile(
+    r"(?<![a-z])(?:mobile ?home ?(?:parks?|courts?|communit(?:y|ies))|trailer ?(?:parks?|courts?)|"
+    r"manufactured ?(?:home|housing) ?(?:parks?|communit(?:y|ies))|mhps?)(?![a-z])")
+_PLACES_NAME_RE = re.compile(r"(?<![a-z])(?:osm ?places?|populated ?places?|cities|towns|villages)(?![a-z])")
 _OUTLINE_RE = re.compile(r"(?<![a-z])(?:buildings?|footprints?|outlines?|bldgs?)(?![a-z])")
 _BOUNDARY_STRONG_RE = re.compile(
     r"2d ?flow ?areas?|(?<![a-z])flow ?areas?(?![a-z])|model ?(?:boundary|boundaries|extent|"
@@ -794,7 +801,8 @@ _DATASET_ROLES = {"nsi": "nsi", "address": "address", "usa": "usa", "camps": "ca
 _PACK_GROUP_ROLES = {"nsi": ("nsi",), "address": ("address",), "usa": ("usa",),
                      "nid": ("dams",), "roads": ("roads",), "traffic": ("aadt",),
                      "rail": ("rail", "crossings"), "lifelines": ("lifelines",),
-                     "bridges": ("bridges",), "nhd": ("centerline",)}
+                     "bridges": ("bridges",), "nhd": ("centerline",),
+                     "hydro": ("centerline",)}
 
 
 def _tab_rules():
@@ -881,7 +889,8 @@ def _plugin_names():
         from . import build_nd_pack as B
         from . import osm_parse as O
         osm_roles = {O.overpass_to_features: ("lifelines",), O.crossing_features: ("bridges",),
-                     O.camp_features: ("camps",)}
+                     O.camp_features: ("camps",), O.trailer_park_features: ("parks",),
+                     O.place_features: ("places",)}
         for entry in B.datasets():
             name, group, spec = entry[0], entry[2], entry[-1] if isinstance(entry[-1], dict) \
                 else {}
@@ -903,16 +912,18 @@ def _plugin_names():
 
 
 def _nhd_fields():
-    """NHD flowline fields (the pack builder's field list), lower case."""
+    """Flowline fields (the pack builder's field list: 3DHP since 1.19.0, NHD before), lower case."""
+    old = ("gnis_name", "gnis_id", "ftype", "fcode", "reachcode", "lengthkm")
     try:
         from . import build_nd_pack as B
         for entry in B.datasets():
             spec = entry[-1] if isinstance(entry[-1], dict) else {}
-            if entry[2] == "nhd" and spec.get("fields"):
-                return tuple(f.strip().lower() for f in spec["fields"].split(",") if f.strip())
+            if entry[0] == "3DHP_flowlines" and spec.get("fields"):
+                new = tuple(f.strip().lower() for f in spec["fields"].split(",") if f.strip())
+                return old + tuple(f for f in new if f not in old)
     except Exception:
         pass
-    return ()
+    return old
 
 
 class Candidate(object):
@@ -1104,6 +1115,18 @@ def _score(ds, table, nhd_fields):
     n = next((x for x in names if _camp_re().search(_singular(_layer_name_key(x)))), None)
     if n:
         ev["camps"].add(65, "name '{}' -> campgrounds / RV parks".format(n))
+    # 2.29.0 + OSM layers: mobile-home parks (areas) and populated places (points) of the
+    # OpenStreetMap layers (osm_parse.trailer_park_features / place_features)
+    n = _pattern_hit(names, _PARK_NAME_RE)
+    if n:
+        ev["parks"].add(S_NAME_STRONG, "name '{}' -> mobile-home / trailer parks".format(n))
+    if "match" in low and "landuse" in low and "osm_id" in low:
+        ev["parks"].add(S_FIELDS, "fields match, landuse, osm_id -> OpenStreetMap mobile-home parks")
+    if "place" in low and "name" in low and "osm_id" in low:
+        ev["places"].add(S_FIELDS, "fields place, name, osm_id -> OpenStreetMap places")
+    n = _pattern_hit(names, _PLACES_NAME_RE)
+    if n and "place" in low:
+        ev["places"].add(S_NAME, "name '{}' -> cities / towns / villages".format(n))
 
     # --- roads, rail and crossings (group 4) ------------------------------
     rail_names = [x for x in names
@@ -1163,8 +1186,13 @@ def _score(ds, table, nhd_fields):
         ev["dams"].add(85, "NID ID field -> National Inventory of Dams")
     elif "damname" in compact and any(f in compact for f in _DAM_DETAIL_FIELDS):
         ev["dams"].add(60, "dam name / hazard fields -> dams")
+    # v2.23.0: the ND DWR dam inventory (structure_id, dam_name, max_dam_height). The DWR
+    # unknown-structures and dugouts layers carry the same fields but are not dams.
+    not_dams = _pattern_hit(names, _DWR_NOT_DAMS_RE)
+    if not not_dams and all(f in compact for f in _DWR_DAM_FIELDS):
+        ev["dams"].add(85, "DWR fields structure_id / dam_name / max_dam_height -> dams")
     n = _pattern_hit(names, _DAM_NAME_RE)
-    if n:
+    if n and not not_dams:
         ev["dams"].add(60, "name '{}' -> dams".format(n))
     for x in names:
         cat = lifeline_category(x)
@@ -1196,7 +1224,7 @@ def _score(ds, table, nhd_fields):
     # --- channel (group 6) ------------------------------------------------
     nhd = [f for f in nhd_fields if f in low]
     if len(nhd) >= 3:
-        ev["centerline"].add(75, "NHD fields {} -> flowlines".format(", ".join(nhd[:4])))
+        ev["centerline"].add(75, "3DHP / NHD fields {} -> flowlines".format(", ".join(nhd[:4])))
     n = _pattern_hit(names, T._CENTERLINE_RE, T._CENTER_EXCLUDE)
     if n:
         ev["centerline"].add(S_NAME, "name '{}' -> channel centerline".format(n))

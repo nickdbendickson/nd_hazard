@@ -499,6 +499,30 @@ def drop_clip(dst):
             pass
 
 
+def _from_5070(xy, wkt):
+    """0.21.0: an EPSG:5070 point in the CRS `wkt` (the point as it is when the raster has no CRS,
+    is EPSG:5070 itself, or the transform is not available)."""
+    x, y = float(xy[0]), float(xy[1])
+    if not wkt:
+        return x, y
+    try:
+        from osgeo import osr
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(wkt)
+        a = osr.SpatialReference()
+        a.ImportFromEPSG(5070)
+        if srs.IsSame(a):
+            return x, y
+        for r in (srs, a):
+            try:
+                r.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            except AttributeError:
+                pass
+        return tuple(osr.CoordinateTransformation(a, srs).TransformPoint(x, y)[:2])
+    except Exception:                                            # noqa - the loader warps to 5070
+        return x, y
+
+
 class TerrainLoader:
     """Loads terrain for any extent at any cell size and conditions it.
 
@@ -527,6 +551,31 @@ class TerrainLoader:
     def _cached(self, dam_id):
         p = os.path.join(self.demdir, f"dam_{dam_id}.tif") if self.demdir else None
         return p if p and os.path.exists(p) else None
+
+    def covers_point(self, dam_id, xy):
+        """0.21.0 (pre-run check): (True / False / None, detail) - is the EPSG:5070 point `xy` on
+        the terrain this loader would read for the dam? None when it can't be known before the
+        run (USGS 3DEP is fetched for the extent then)."""
+        srcs = [p for p in (self._cached(dam_id), self.vrt) if p]
+        if not srcs:
+            if self.source == "3dep":
+                return None, "USGS 3DEP is fetched for the run"
+            return False, "no cached clip (tool 2) and no terrain source"
+        for path in srcs:
+            try:
+                ds = gdal_open(path)
+                gt = ds.GetGeoTransform()
+                x, y = _from_5070(xy, ds.GetProjection())
+                x0, y1 = gt[0], gt[3]
+                x1, y0 = x0 + ds.RasterXSize * gt[1], y1 + ds.RasterYSize * gt[5]
+                if min(x0, x1) <= x <= max(x0, x1) and min(y0, y1) <= y <= max(y0, y1):
+                    return True, "the breach point is on {}".format(os.path.basename(path))
+            except Exception:                                    # noqa - the next source
+                continue
+        if self.source == "3dep":
+            return None, "USGS 3DEP is fetched for the run"
+        return False, "the breach point is outside the terrain ({})".format(
+            ", ".join(os.path.basename(p) for p in srcs))
 
     def _covers(self, path, ext):
         ds = gdal_open(path); gt = ds.GetGeoTransform()
@@ -638,3 +687,65 @@ def albers_parts(feature, transform):
         return None, []
     g.transform(transform)
     return geom_parts(g)
+
+
+# ------------------------------------------------- last outputs (0.21.0) --
+# The last layer a tool wrote, so that the next tools opened from the Processing Toolbox (which
+# knows no work folder) start with it: "dams" = tool 1's Standardized dams, "dams3" = tool 3's.
+# A file path, or the id of a layer of the project (a temporary layer); forgotten when gone.
+_LAST_KEY = "nd_dam_screening/last_output/{}"
+
+
+def remember_output(kind, dest):
+    try:
+        from qgis.core import QgsSettings
+        QgsSettings().setValue(_LAST_KEY.format(kind), str(dest or ""))
+    except Exception:                                            # noqa - never fail a tool here
+        pass
+
+
+def last_output(kind):
+    """The remembered output of `kind` when it still exists (a file, or a layer of the
+    project), else None."""
+    try:
+        from qgis.core import QgsSettings
+        v = str(QgsSettings().value(_LAST_KEY.format(kind), "") or "").strip()
+    except Exception:                                            # noqa
+        return None
+    if not v:
+        return None
+    if os.path.isfile(v.split("|")[0]):
+        return v
+    try:
+        if QgsProject.instance().mapLayer(v) is not None:
+            return v
+    except Exception:                                            # noqa
+        pass
+    return None
+
+
+def dialog_with_last(alg, parent, name, *kinds):
+    """The standard dialog of `alg` whose layer box `name` starts with the first remembered
+    output of `kinds` that still exists. A value set afterwards (the Screening window's) wins.
+    None (QGIS then opens its own dialog) without the Processing GUI or nothing remembered."""
+    v = next((x for x in (last_output(k) for k in kinds) if x), None)
+    if not v:
+        return None
+    try:
+        from processing.gui.AlgorithmDialog import AlgorithmDialog
+        from qgis.core import QgsProcessingContext
+        dlg = AlgorithmDialog(alg.create(), parent=parent)
+        w = (getattr(dlg.mainWidget(), "wrappers", {}) or {}).get(name)
+        if w is not None:
+            ctx = QgsProcessingContext()
+            ctx.setProject(QgsProject.instance())            # a temporary layer, by its id
+            w.setParameterValue(v, ctx)
+        return dlg
+    except Exception:                                            # noqa
+        return None
+
+
+def is_temporary(dest):
+    """True when a tool's destination is not a file (a temporary / memory layer)."""
+    p = str(dest or "").split("|")[0]
+    return not p or not os.path.splitext(p)[1] or p.startswith("memory:")

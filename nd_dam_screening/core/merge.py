@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 
 from . import workflow as wf
+from . import gpkg_sqlite
 
 LAYOUT = {"OUT": "18_dams_all.gpkg", "OUTP": "18_breach_points_all.gpkg", "OUTL": "18_flow_arrows_all.gpkg",
           "CURVES": "18_stage_storage", "TERRAIN": "18_terrain"}
@@ -38,6 +39,10 @@ def append_gpkg(dst_path, src_path, notes=None):
     con = sqlite3.connect(dst_path)
     try:
         dst = _feature_table(con)
+        # 0.29.0: a dst GeoPackage that QGIS/GDAL wrote has rtree triggers calling ST_IsEmpty,
+        # which plain sqlite3 lacks; drop the index so the INSERT below does not fail. (The merged
+        # 18_* layer is an intermediate for steps 5-10; QGIS rebuilds an index if it needs one.)
+        gpkg_sqlite.disable_rtree(con, dst)
         con.execute("ATTACH DATABASE ? AS src", (src_path,))
         row = con.execute("SELECT table_name FROM src.gpkg_contents WHERE data_type='features'").fetchone()
         if row is None:

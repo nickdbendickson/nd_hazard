@@ -20,7 +20,7 @@ data and servers) writes <dam folder>/data/ and lists the files in dam.json's da
 same rules (only the layers dam.json lists, each only for the data sets its kind can be:
 _DAM_DATA_ROLES) and fill every data set that this folder's picks and the lists of groups
 3-6 leave empty - marked "(from dam folder)" here and in the run log. Never a hand-picked
-layer or a pick of this folder is replaced. NHD flowlines are not used as the channel
+layer or a pick of this folder is replaced. 3DHP flowlines are not used as the channel
 centerline (a whole stream network is not one channel line).
 
 HIFLD: the plugin can no longer download HIFLD (the HIFLD Open service was closed and

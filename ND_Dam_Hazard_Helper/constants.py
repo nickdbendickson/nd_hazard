@@ -2,8 +2,31 @@
 """Constants, ACER-11 coefficients, and README text for the ND Dam Hazard
 Classification Helper. Pure data - no QGIS imports needed here."""
 
+import os as _os
+
 PLUGIN_NAME = "ND Dam Hazard Classification Helper"
-PLUGIN_VERSION = "2.22.0"
+
+
+def _version_from_metadata(fallback, path=None):
+    """v2.28: the version= line of the plugin's metadata.txt (the one place the version is
+    kept); `fallback` when the file cannot be read. Only a line that starts at column 0 counts,
+    so the indented changelog text under it is never mistaken for it."""
+    if path is None:
+        path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "metadata.txt")
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            for line in fh:
+                if not line.startswith("version"):
+                    continue
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "version" and value.strip():
+                    return value.strip()
+    except (OSError, UnicodeError):
+        pass
+    return fallback
+
+
+PLUGIN_VERSION = _version_from_metadata("2.31.0")
 OUTPUT_FOLDER_NAME = "outputs"
 
 # ------------------------------------------------------------ layer tree ----
@@ -407,12 +430,26 @@ CAMP_POINT_RADIUS_FT = 150.0  # campground mapped as a point: this circle is eva
 # distance from the place point within which its first flooded structure counts
 OSM_PLACE_RADIUS_FT = {"city": 10560.0, "town": 5280.0, "village": 2640.0,
                        "hamlet": 1320.0}
-# USGS National Hydrography Dataset flowlines (large scale) for the channel
-# centerline of the travel-time table when none is given
-NHD_FLOWLINE_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6")
-# 2.17.0: NHD waterbodies (large scale) - ponds and reservoirs for the suite's dam data and the
-# offline pack (the Breach Runner's PONDS input, Screening's pool area)
-NHD_WATERBODY_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/12")
+# USGS flowlines for the channel centerline of the travel-time table when none is given.
+# 1.19.0: the USGS 3D Hydrography Program (3DHP) service replaces the National Hydrography
+# Dataset service (the constant keeps its old name: a data-source file may change it, and the
+# older NHD service stays in the Suite data and servers list). Each downloaded feature also gets
+# the NHD properties gnis_name, ftype ... (damsuite.hydro3dhp).
+NHD_FLOWLINE_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/3DHP_all/MapServer/50")
+# 2.17.0: waterbodies - ponds and reservoirs for the suite's dam data and the offline pack (the
+# Breach Runner's PONDS input, Screening's pool area); 1.19.0: 3DHP waterbodies
+NHD_WATERBODY_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/3DHP_all/MapServer/60")
+# 1.19.0: the ND DWR dam inventory as a public service (the pack's DWR_dams when no DWR export
+# file is at hand; the export has a few more fields)
+DWR_DAMS_URL = ("https://ndgishub.nd.gov/arcgis/rest/services/Applications/DWR_Dams/"
+                "MapServer/0")
+# 1.19.0: Southeast Aquatic Resources Partnership (SARP) aquatic barrier services - the data
+# behind tool.aquaticbarriers.org (Great Plains / Intermountain West region): dams and the
+# surveyed road-stream crossings
+SARP_DAMS_URL = ("https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/services/"
+                 "Aquatic_Barrier_Prioritization_Dams_v360/FeatureServer/0")
+SARP_CROSSINGS_URL = ("https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/services/"
+                      "Aquatic_Barrier_Prioritization_RoadBarriers_v360/FeatureServer/0")
 TRAVEL_STATION_MI = 0.5       # travel-time table: a station every ... miles
 TRAVEL_SEARCH_FT = 150.0      # station value: deepest / earliest cell within this
 TRAVEL_MAX_MI = 200.0         # traced channel is cut here
@@ -446,6 +483,7 @@ SOURCE_KEYS = ("NSI_API_URL", "NARN_URL", "CROSSINGS_URL", "USA_STRUCTURES_URL",
                "ND_ADDRESS_POINTS_URL", "NID_URL", "NID_MIRROR_URL", "OVERPASS_URL",
                "ND_ROADS_URL", "HPMS_ND_URLS", "ND_COUNTY_ROADS_URL", "NBI_URL",
                "NDDOT_AADT_URL", "NHD_FLOWLINE_URL", "NHD_WATERBODY_URL",
+               "SARP_DAMS_URL", "SARP_CROSSINGS_URL", "DWR_DAMS_URL",
                "AERIAL_IMAGERY_URL", "WEBMAP_URL_TEMPLATE")
 SOURCES_FILE_NAME = "ND_Dam_Hazard_Helper_data_sources.json"
 SOURCE_OVERRIDES = {}          # what the file changed (shown in the run log)

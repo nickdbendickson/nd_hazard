@@ -42,6 +42,16 @@ def z_to_m_factor(path, choice=Z_AUTO):
         return FT, "feet (raster unit '{}')".format(unit)
     if unit in _METER_NAMES:
         return 1.0, "metres (raster unit '{}')".format(unit)
+    # 3.20.0: the suite tags its own DEMs with a UNITS metadata item ("metres"), and the
+    # screening's DEM download has done so since 0.26.0. A VRT mosaic over those tiles carries
+    # no band unit type of its own, which is why every run over a step-2 mosaic logged "no
+    # units recorded in the raster; check" although every tile in it says what it is. An
+    # explicit UNITS item is a statement by whoever wrote the file, so it is read like a chosen
+    # unit - before anything is inferred from the CRS - on the mosaic itself, else on its first
+    # source raster.
+    tagged, where = _units_item(gdal, ds, path)
+    if tagged:
+        return tagged[0], "{} (UNITS={} recorded {})".format(tagged[1], tagged[2], where)
     srs = osr.SpatialReference()
     wkt = ds.GetProjection()
     if wkt:
@@ -72,6 +82,52 @@ def z_to_m_factor(path, choice=Z_AUTO):
             return f, ("{} (assumed from the CRS units; the elevations fit both feet and "
                        "metres - set the units if this is wrong)").format(name)
     return 1.0, "metres (no units recorded in the raster; check)"
+
+
+_UNITS_KEYS = ("UNITS", "units", "Z_UNITS", "VERTICAL_UNITS")
+
+
+def _units_from_text(text):
+    """(factor, name, as written) for a UNITS metadata item, or None."""
+    t = str(text or "").strip().lower()
+    if not t:
+        return None
+    if t in _US_FEET_NAMES:
+        return US_FT, "US survey feet", text
+    if t in _FEET_NAMES:
+        return FT, "feet", text
+    if t in _METER_NAMES:
+        return 1.0, "metres", text
+    return None
+
+
+def _units_item(gdal, ds, path):
+    """((factor, name, as written), where) from the raster's own UNITS metadata item, else from
+    the first source raster of a VRT; ((), "") when there is none. Never raises."""
+    try:
+        md = ds.GetMetadata() or {}
+    except Exception:                                            # noqa
+        md = {}
+    for k in _UNITS_KEYS:
+        got = _units_from_text(md.get(k))
+        if got:
+            return got, "in the raster"
+    try:
+        files = [f for f in (ds.GetFileList() or [])
+                 if os.path.abspath(f) != os.path.abspath(path)]
+    except Exception:                                            # noqa
+        files = []
+    for f in files[:1]:
+        try:
+            sub = GS.open_raster(f)
+            sub_md = sub.GetMetadata() or {}
+            for k in _UNITS_KEYS:
+                got = _units_from_text(sub_md.get(k))
+                if got:
+                    return got, "in its source raster {}".format(os.path.basename(f))
+        except Exception:                                        # noqa - a tile we cannot open
+            continue
+    return (), ""
 
 
 ND_GROUND_M = (200.0, 1100.0)      # North Dakota: 229 m (Pembina) to 1069 m (White Butte)
@@ -105,6 +161,28 @@ def utm_epsg(lon, lat):
     return 26900 + zone
 
 
+def _pixel_m(ds):
+    """A raster's pixel size in metres, or None. A geographic raster's degrees are converted at
+    its own latitude (1 degree of latitude is about 111,320 m)."""
+    try:
+        gt = ds.GetGeoTransform()
+        px = max(abs(float(gt[1])), abs(float(gt[5])))
+        if not px:
+            return None
+        from osgeo import osr
+        srs = osr.SpatialReference()
+        if ds.GetProjection():
+            srs.ImportFromWkt(ds.GetProjection())
+        if srs.IsGeographic():
+            import math
+            lat = float(gt[3]) - px * ds.RasterYSize / 2.0
+            return px * 111320.0 * max(math.cos(math.radians(max(min(lat, 89.0), -89.0))), 0.1)
+        unit = srs.GetLinearUnits() or 1.0
+        return px * float(unit)
+    except Exception:                                   # noqa: BLE001 - only used for a warning
+        return None
+
+
 class GdalTerrain:
     """terrain_src for workflow.run_dam."""
 
@@ -120,6 +198,9 @@ class GdalTerrain:
         self.resample = resample
         ds = GS.open_raster(dem_path)
         self.src_nodata = ds.GetRasterBand(1).GetNoDataValue()
+        # 3.20.3: the DEM's own pixel size in metres, so the run can say when the terrain is too
+        # coarse for what it is being asked (the crest estimate near the dam point)
+        self.src_cell_m = _pixel_m(ds)
 
     def _warp(self, path, bounds, cell, alg, src_nodata=None):
         gdal, _ = _gdal()
@@ -304,6 +385,9 @@ def build_vrt(sources, out_path, nodata=None, resolution="highest"):
         try:
             v = GS.open_raster(out_path, update=True)
             v.GetRasterBand(1).SetUnitType(units[0])
+            # 3.20.0: and as a UNITS metadata item, the form the suite's own DEM files carry
+            # and the one z_to_m_factor reads, so a run over this mosaic never has to guess
+            v.SetMetadataItem("UNITS", units[0])
             v = None
         except Exception:
             pass

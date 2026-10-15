@@ -1,5 +1,133 @@
-ND Dam Hazard Classification Helper - Version 2.22.0
+ND Dam Hazard Classification Helper - Version 2.30.0
 ====================================================
+
+NEW IN 2.30.0
+- What this means, in one screen. The Review tab and page 1 of the PDF report open with a plain
+  card: the hazard class, the ONE criterion that carries it, what would change it (the margin),
+  the flags that qualify it (flood cut off, provisional, no signed-off fatality-rate table) and
+  the numbers underneath. Written for a dam owner and a county emergency manager.
+- "What would change it": the five structures, road or rail stretches nearest a class boundary,
+  each with the depth, velocity, AADT or train-count change that would flip it and the class it
+  would become. Rows that would LOWER a class are marked as such - the plugin never applies them.
+- EAP map layout (PDF): Hazard Classification > "EAP map layout (PDF)" fills a print layout from
+  the dam folder (title block, dam, inundation shaded by arrival time, structures, roads, legend,
+  data vintages) and exports PDF plus GeoPDF where GDAL can write one.
+- Letter / notification drafts: a dam-owner letter and a county notification filled from the run,
+  editable in the window, saved as .docx or .md. Each one is marked DRAFT - FOR REVIEW, states no
+  legal requirement and leaves the signature and regulatory wording to the engineer.
+- Classification history: every run appends its summary (class, counts, data vintages, plugin
+  version, scenario) to Classification_History.json in the dam folder; "Classification history"
+  shows the class over time and what changed with it.
+- Lifeline detail: for each lifeline or critical facility inundated or cut off, the alternative
+  route length by road and whether a second facility of the same kind is within 15 minutes -
+  "isolated" when there is no dry route at all.
+- Field-check sheet: one printable page per structure a visit has to settle (address, NSI type,
+  depth, velocity, photo slot, habitable yes / no / could not tell), and import of the marked-up
+  sheet, which becomes engineer review decisions in the existing review store. A "no" is reported
+  as a lowering decision for the engineer to accept; nothing is applied silently.
+- Processing algorithms: ndhazard:buildpack, ndhazard:screendam, ndhazard:runbreach,
+  ndhazard:classify and ndhazard:suitechain - the four main steps in the Model Designer or
+  headless with qgis_process, for a statewide batch.
+- Usability: the window opens on "Setup & Run" and the two importers sit after Review; both run
+  buttons say why they are grey and name the missing input; a suite hand-off runs "Find rasters"
+  at once and offers "Run everything now"; "no rasters recognised" now reads "run the breach model
+  first (step 3 of the suite)".
+- No hazard class changes in this release: everything above reports, explains or reviews.
+
+NEW IN 2.29.1 (Breach Runner 3.19.0 and Breach Screening 0.27.0 unchanged)
+- OpenStreetMap layer files. The offline pack builder now reads OSM_lifelines, OSM_crossings,
+  OSM_campgrounds, OSM_trailer_parks and OSM_places from files - the suite data folder's
+  osm_layers/ folder (the ND Data Updater builds them from Geofabrik's North Dakota extract), the
+  "DWR / HIFLD files" folder, or --files - and goes to the Overpass API (which often times out)
+  only for the layers without a file.
+- Data & Output > folder search recognises two more layers, mobile-home / trailer parks and
+  cities / towns / villages (travel-time table), by name or fields (OSM_trailer_parks, OSM_places);
+  a layer picked there is used instead of the download.
+
+NEW IN 2.29.0 (with the ND Dam Breach Runner 3.19.0 and ND Dam Breach Screening 0.27.0, damsuite 1.15.0)
+- One button builds the whole offline pack. Plugins > ND Dam Suite > Suite data and servers >
+  "Build / update the offline pack..." (or python build_nd_pack.py --out ND_Dam_Suite_Pack) makes
+  every layer the plugins need, in one run:
+    web layers   buildings (NSI, FEMA USA Structures, address points), roads, rail and crossings,
+                 traffic counts, bridges, lifelines, NID dams, USGS 3DHP streams and waterbodies,
+                 SARP aquatic barriers, OpenStreetMap, counties
+    land cover   NLCD 2021 from the MRLC web coverage service (30 m, EPSG:5070; needs GDAL, so run it
+                 inside QGIS)
+    files        the DWR exports (dams, dam lines, dugouts, dugout polygons, unknown structures) and the
+                 HIFLD layers (fire / EMS stations, emergency operations centers, law enforcement,
+                 wastewater plants). They have no public service, so put the files in the suite data
+                 folder's dwr/ and hifld/ folders (or pick another folder in "DWR / HIFLD files"; the
+                 command line has --files). Files are recognised by name (Dam_Lines.shp, Dugouts_poly.gpkg,
+                 Local_Emergency_Operations_Centers_(EOC).geojson ...), reprojected to lon / lat and clipped
+                 to the pack's box. The DWR dams come from DWR's public service when there is no file.
+    3DHP file    the USGS 3DHP web service often answers HTTP 504 / 502 to a whole-state request. The builder
+                 reads it in small tiles, and when the National Map's 3DHP national file (CONUS, FileGDB zip
+                 about 12.5 GB, https://apps.nationalmap.gov/downloader/ > Hydrography > 3DHP) is in the
+                 suite data folder's 3dhp/ folder (or the "DWR / HIFLD files" folder, or --files), the
+                 flowlines and waterbodies are cut out of that file instead - fast, complete and offline.
+  A layer that could not be built is listed under NOT IN THE PACK in LAYERS.txt, with what to do. Run
+  it again later: layers already in the pack are kept and only what is missing, old or incomplete is built.
+- USGS 3D Hydrography Program (3DHP) replaces NHD for streams and waterbodies. Pack layers
+  3DHP_flowlines and 3DHP_waterbodies (an older pack's NHD_flowlines / NHD_waterbodies are replaced when
+  the pack is updated; the plugins answer to either name, so old packs keep working). Each 3DHP feature
+  keeps its own fields (id3dhp, mainstemid, featuretype, streamorder, ...) and gets the NHD ones the tools
+  read (gnis_name, gnis_id, ftype, fcode). The servers list has 3DHP as the default and NHD / NHDPlus HR
+  as alternatives.
+- Aquatic barriers: SARP_dams (about 7,000 dams in and around North Dakota) and SARP_surveyed_crossings
+  (field-surveyed road-stream crossings) from the Southeast Aquatic Resources Partnership services behind
+  tool.aquaticbarriers.org. The tool's unsurveyed (modelled) road-stream crossings are not in those public
+  services and are not in the pack.
+- The land-cover request to the MRLC server used the wrong grid axis names and was refused; fixed.
+
+NEW IN 2.28.0 (with the ND Dam Breach Runner and ND Dam Breach Screening released with it)
+- Flood cut-off marker: when the Runner's run_report.json next to the flood rasters says the
+  model stopped while water was still moving (duration cap, domain-run limit or the largest
+  domain side), the summary's classification line ends with "incomplete: flood cut off
+  (<reason>)" and the data sources say the inundated extent and the class may be low. The
+  class itself is not changed; without a Runner report nothing changes.
+- Dam suite home opens a sibling plugin that is installed but not loaded: it is loaded and
+  started first, and the status line says so.
+- The plugin version in the summary header, the chart sign-off record and the HTTP user agent
+  is read from metadata.txt (it was stuck at 2.24.0).
+- Export for screening: the waterbodies gap line now says "not in this export" (the pack has
+  had waterbodies since 2.17.0).
+- tests/ folder: python3 -m ND_Dam_Hazard_Helper.tests.run_tests (no QGIS needed).
+
+NEW IN 2.24.0 (with ND Dam Breach Runner 3.14.0 and ND Dam Breach Screening 0.22.0)
+
+The offline pack is now a folder, ND_Dam_Suite_Pack, with one GeoPackage per layer
+(structures/, roads/, railroads/, lifelines/, hydro/, dwr/, hifld/, boundaries/, landcover/).
+Each file opens in QGIS by itself. LAYERS.txt in the folder lists every layer, its file,
+feature count and source, and what was left out. The DWR inventory files, the HIFLD lifeline
+layers and NLCD land cover are inside the pack, so the pack alone is enough. An older
+nd_offline_pack.zip still works, and the dwr/, hifld/ and nlcd/ drop-in folders are still read
+when the pack lacks a layer.
+
+Data source, shared by the three plugins: Offline pack (choose its folder or zip) or Download
+from the servers (the pack is not read). Set it in Suite data and servers in any of the plugins;
+the setting is the same in all three.
+
+- Data & Output tab, section 7: Data source - Offline pack or Download, with Folder... and
+  Zip... to choose the pack. Build offline pack writes the ND_Dam_Suite_Pack folder.
+- With the offline pack, the pack's HIFLD lifeline layers (fire / EMS stations, emergency
+  operations centers, law enforcement, wastewater plants) are read with the other lifelines
+  when lifelines are on. They win the 300 ft duplicate check against downloaded points.
+
+NEW IN 2.23.1 (with ND Dam Breach Runner 3.13.1 and ND Dam Breach Screening 0.21.1)
+
+No change in this plugin. The shared damsuite (1.9.1) names the new release set; install
+the three plugins together.
+
+NEW IN 2.23.0 (with ND Dam Breach Runner 3.13.0 and ND Dam Breach Screening 0.21.0)
+- Fast run: a box on the More settings tab (FAST_RUN in the Processing tools, batch too)
+  skips the EAP map book and the aerial imagery under the maps for that run. The map book and
+  imagery settings are kept; every result is the same.
+- No structures in the study area: the message now says which layer has no CRS, or that the
+  layers have a CRS and do not overlap the study area (before, it always blamed the CRS).
+- Data folder scan: the ND DWR dam inventory (fields structure_id, dam_name, max_dam_height)
+  is recognised as dams; DWR unknown-structure and dugout layers are not taken as dams.
+- Offline pack: opened strictly read-only (PRAGMA query_only), and a zip entry whose path
+  has ".." or a drive is never used (damsuite 1.9.0).
 
 NEW IN 2.22.0 (with ND Dam Breach Runner 3.12.0 and ND Dam Breach Screening 0.20.0)
 - Shared suite code only (damsuite 1.8.0): the Runner and Screening keep the computer awake
@@ -908,8 +1036,8 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   grade-crossing and 2-mile town searches still work at the state line):
   NSI, ND GIS Hub address points and roads, FEMA USA Structures, NID,
   rail and grade crossings, HPMS / NDDOT / county-road traffic, NBI,
-  lifeline facilities (ND GIS Hub, EIA; v2.9: no HIFLD), USGS NHD flowlines
-  (name and type fields only) and the OpenStreetMap lifelines, crossings,
+  lifeline facilities (ND GIS Hub, EIA; v2.9: no HIFLD), USGS flowlines
+  (2.29.0: 3DHP; before: NHD; name and type fields) and the OpenStreetMap lifelines, crossings,
   campgrounds and towns. Data sets from services that only cover North
   Dakota have nothing beyond it, online or in the pack.
 - Build it on a computer that is online, either
@@ -920,7 +1048,7 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   --refresh fetches finished ones again; --sources <file> uses your
   data-source file's addresses). Expect an hour or more and a large
   file (hundreds of MB or more); FEMA USA Structures and NHD are the
-  largest - --skip nhd leaves NHD out if you always give a centerline. A stopped build goes on
+  largest - --skip hydro leaves the 3DHP streams out if you always give a centerline. A stopped build goes on
   where it stopped when run again with the same --out (the finished data
   sets are kept in <name>_work/ next to the zip). Data sets that failed
   are listed at the end and in the zip's README.txt.

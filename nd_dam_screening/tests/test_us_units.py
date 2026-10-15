@@ -23,12 +23,15 @@ m = wf.migrate_settings({"dem_cell": 1.0, "grid_m": 10.0, "simh": 6.0})
 assert "dem_cell" not in m and "grid_m" not in m and m["dem_cell_ft"] == 3.3 and m["grid_ft"] == 32.8 and m["simh"] == 6.0
 m = wf.migrate_settings({"grid_m": 10.0, "grid_ft": 50.0})
 assert m["grid_ft"] == 50.0
-assert wf.DEFAULT_SETTINGS["dem_cell_ft"] == 3.3 and wf.DEFAULT_SETTINGS["grid_ft"] == 33.0
+# 0.28.0: the cached DEM's cell follows the SOURCE cell (3DEP and the suite's downloads are 10 m
+# = 32.8 ft); it used to resample a 10 m source to 1 m
+assert wf.DEFAULT_SETTINGS["dem_cell_ft"] == 32.8 and wf.DEFAULT_SETTINGS["grid_ft"] == 33.0
 assert "dem_cell" not in wf.DEFAULT_SETTINGS and "grid_m" not in wf.DEFAULT_SETTINGS
 p = wf.defaults("7", "/tmp/w", {"grid_m": 20.0})
 assert abs(p["CELL_FT"] - 65.6) < 0.01 and "CELL" not in p, p
 p = wf.defaults("2", "/tmp/w", {})
-assert p["CELL_FT"] == 3.3
+assert p["CELL_FT"] == 32.8                            # 0.28.0: 10 m, the source cell
+assert wf.defaults("2", "/tmp/w", {"dem_cell_ft": 3.3})["CELL_FT"] == 3.3    # a 1 m LiDAR folder
 
 # ---- the sink fills the twins (qgis mock)
 from qgis.core import QgsFields, QgsField, QgsFeature, QgsGeometry, QgsPointXY  # noqa: E402

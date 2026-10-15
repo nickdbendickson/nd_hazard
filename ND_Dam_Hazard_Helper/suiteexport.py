@@ -39,7 +39,8 @@ Layers written (all EPSG:5070):
                     as linear.analyze_rail finds them (same railroad, on the line or the
                     same subdivision first, within RAIL_CROSSING_SEARCH_MI), level
                     (linear.nd_rail_class).
-  flowlines         USGS NHD flowlines as the pack holds them (name and type only).
+  flowlines         USGS 3DHP flowlines as the pack holds them (1.19.0: 3DHP, with the NHD-style
+                    name and type added; a pack from before 1.19.0 holds NHD flowlines).
   lifelines         5.2.2 lifeline facilities (ND GIS Hub / EIA / HIFLD layers in the
                     source, OpenStreetMap) as points with category (and kind = category,
                     the field name Screening's tool 8 looks for); care facilities and
@@ -49,14 +50,15 @@ Layers written (all EPSG:5070):
                     eap, state_id.
   suite_export_info attribute table: what was exported from where, counts, gaps.
 
-NOT in the pack and therefore not exported: NHD waterbodies, the DWR dam lines, any
-DEM / terrain. Give those to Screening's tool 0 (and tool 2) yourself.
+Not in a whole-area export: 3DHP waterbodies, the DWR dam lines, any DEM / terrain (an export
+for one dam folder adds them, below). Give those to Screening's tool 0 (and tool 2) yourself.
 
 2.17.0 - an export for ONE dam folder (export(..., dam_folder=...), or a package written
 in <dam folder>/data/ next to dam.json, as "Get data for this dam" does) also writes
 what Screening requires and the dam folder has (dam.json's data section, damsuite.damdata),
 else the source's own data set when it has one:
-  waterbodies       NHD waterbodies (role waterbodies; source NHD_waterbodies) - the
+  waterbodies       3DHP waterbodies (role waterbodies; source 3DHP_waterbodies, or NHD_waterbodies
+                    in an older pack) - the
                     layer name Screening's tools 3 / 16 take from a package
   dam_lines         ND DWR dam lines (role dwr_dam_lines; source DWR_dam_lines) - tool 4
   dwr_dams          ND DWR dams inventory (role dwr_dams; source DWR_dams) - tool 1 (its
@@ -91,13 +93,15 @@ FORMAT_VERSION = 1
 INFO_TABLE = "suite_export_info"
 LAYERS = ("structures", "structure_points", "roads", "railroads", "flowlines", "lifelines",
           "dams")
-NOT_IN_PACK = ("waterbodies (NHD waterbodies: the pack holds flowlines only)",
+# 2.28.0: the pack has had waterbodies since 2.17.0; the whole-area export still leaves
+# them out (an export for one dam folder adds them, DAM_EXTRAS)
+NOT_IN_PACK = ("waterbodies (3DHP waterbodies: not in this export)",
                "dam_lines (ND DWR dam lines)",
                "DEM / terrain (Screening tool 2: USGS 3DEP or local LiDAR)")
 FT = 0.3048
 # 2.17.0: what an export for one dam folder adds - (layer, dam.json data role, source data
 # set, label); the layer names are those ND Dam Breach Screening reads (workflow.LAYER_SLOTS)
-DAM_EXTRAS = (("waterbodies", "waterbodies", "NHD_waterbodies", "NHD waterbodies"),
+DAM_EXTRAS = (("waterbodies", "waterbodies", "3DHP_waterbodies", "3DHP waterbodies"),
               ("dam_lines", "dwr_dam_lines", "DWR_dam_lines", "ND DWR dam lines"),
               ("dwr_dams", "dwr_dams", "DWR_dams", "ND DWR dams"))
 
@@ -183,10 +187,16 @@ class FolderSource(object):
     def names(self):
         return sorted(self.files)
 
+    def _real(self, name):
+        """1.19.0: 3DHP_flowlines downloads count as NHD_flowlines ones and the other way round."""
+        from .damsuite import hydro3dhp as H
+        return H.real_name(name, self.files)
+
     def has(self, name):
-        return name in self.files
+        return self._real(name) in self.files
 
     def features(self, name, extent):
+        name = self._real(name)
         if name not in self.files:
             return None
         out, seen = [], set()
@@ -210,6 +220,7 @@ class FolderSource(object):
         return out
 
     def note(self, name, extent):
+        name = self._real(name)
         days = sorted({d for d, _p in self.files.get(name, ())})
         return "{} file(s), downloaded {}".format(len(self.files.get(name, ())),
                                                   ", ".join(d for d in days if d) or "?")
@@ -946,15 +957,15 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
                                                      if a["trains_day"] is not None)))
         # flowlines
         prog(74, "flowlines")
-        if not source.has("NHD_flowlines"):
-            missing.append("flowlines (NHD_flowlines not in the source)")
+        if not source.has("3DHP_flowlines"):
+            missing.append("flowlines (3DHP_flowlines not in the source)")
         else:
-            feats = get("NHD_flowlines")
+            feats = get("3DHP_flowlines")
             fields, rows = passthrough(feats, extra=[("source", "text")])
             lyr = w.layer("flowlines", "MULTILINESTRING", fields,
-                          description="USGS NHD flowlines (digitised in flow direction)")
+                          description="USGS 3DHP flowlines (digitised in flow direction)")
             for g, a in rows:
-                a["source"] = "NHD_flowlines"
+                a["source"] = "3DHP_flowlines"
                 lyr.add(g, a)
             counts["flowlines"] = len(rows)
         # lifelines
@@ -1008,7 +1019,8 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
             missing.extend("{} - not in the dam folder's data or the source".format(m)
                            for m in gaps)
         else:
-            missing.extend("{} - not in ND Dam Hazard's pack".format(m) for m in NOT_IN_PACK)
+            missing.extend("{} - only an export for one dam folder adds it".format(m)
+                           for m in NOT_IN_PACK)
         info = w.table(INFO_TABLE, [("key", "text"), ("value", "text")],
                        description="what this package holds and where it came from")
         meta = [("format", FORMAT), ("format_version", str(FORMAT_VERSION)),

@@ -346,3 +346,115 @@ def write_arrival_contours(path, arrival_path):
     except Exception as e:
         log_message("EAP arrival contours not written: {}".format(e))
         return None
+
+
+# ------------------------------------------- 2.30.0: the one-page EAP map layout --
+# The map book (mapbook.py) is the set of sheets an EAP needs for field use; this is the ONE
+# page the dam owner and the county emergency manager are handed: title block, the dam, the
+# inundation shaded by arrival time, the structures and roads in it, the legend and the data
+# vintages. It is filled from the dam folder in one click, kept in the project's Layout Manager
+# so it can be edited, and exported to PDF and GeoPDF (the GeoPDF carries the coordinates, so
+# the sheet can be used on a tablet in the field).
+LAYOUT_PDF = "EAP_Map.pdf"
+LAYOUT_GEOPDF = "EAP_Map_GeoPDF.pdf"
+LAYOUT_TITLE = "ND Dam EAP map"
+# role -> (file name under the outputs folder, raster?) - the layers the sheet draws, in
+# drawing order (first = on top). The names are the pipeline's output contracts.
+LAYOUT_LAYERS = (
+    ("notifications", os.path.join("EAP", "EAP_Notification_List.gpkg"), False),
+    ("structures", os.path.join("Classification", "Habitable_Structures.gpkg"), False),
+    ("access", os.path.join("Classification", "Access_Cut_Off.gpkg"), False),
+    ("lifelines", os.path.join("Classification", "Lifeline_Facilities.gpkg"), False),
+    ("roads", os.path.join("Classification", "Roads_Inundated.gpkg"), False),
+    ("rail", os.path.join("Classification", "Rail_Inundated.gpkg"), False),
+    ("contours", os.path.join("EAP", "EAP_Arrival_Contours.gpkg"), False),
+    ("bands", os.path.join("EAP", "EAP_Arrival_Bands.tif"), True),
+)
+VINTAGE_FILE = os.path.join("QA", "Data_Vintage.csv")
+SUMMARY_FILE = "Hazard_Classification_Summary.txt"
+
+
+def layout_sources(dam_folder, output_folder=None, depth=None, find=None):
+    """What the one-page layout can draw for this dam: {"layers": {role: path}, "depth": path,
+    "vintage": [line], "class": "High", "missing": [role], "output_folder": path}.
+
+    Only the file system is read (no QGIS), so a window, a Processing algorithm and a test can
+    all ask the same question. `find`: autodetect.find_rasters, passed in by the caller that
+    has it; `depth`: the depth raster when the caller already knows it."""
+    dam_folder = dam_folder or ""
+    out = output_folder or os.path.join(dam_folder, "outputs")
+    got = {"layers": {}, "depth": depth or "", "vintage": [], "class": "", "missing": [],
+           "output_folder": out, "summary": ""}
+    for role, rel, _raster in LAYOUT_LAYERS:
+        path = os.path.join(out, rel)
+        if os.path.isfile(path):
+            got["layers"][role] = path
+        else:
+            got["missing"].append(role)
+    if not got["depth"] and find is not None:
+        try:
+            got["depth"] = (find(dam_folder) or {}).get("depth") or ""
+        except Exception:                                        # noqa - never stop the sheet
+            got["depth"] = ""
+    vintage = os.path.join(out, VINTAGE_FILE)
+    if os.path.isfile(vintage):
+        try:
+            import csv as _csv
+            with open(vintage, encoding="utf-8-sig", newline="") as fh:
+                for i, row in enumerate(_csv.reader(fh)):
+                    if i == 0 or not row:
+                        continue
+                    got["vintage"].append(" - ".join(x for x in row[:3] if x))
+        except (OSError, UnicodeDecodeError, ValueError):
+            pass
+    summary = os.path.join(out, SUMMARY_FILE)
+    if os.path.isfile(summary):
+        got["summary"] = summary
+        try:
+            with open(summary, encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("ND HAZARD CLASSIFICATION"):
+                        got["class"] = line.split(":", 1)[-1].split("|")[0].strip()
+                        break
+        except (OSError, UnicodeDecodeError):
+            pass
+    return got
+
+
+def layout_ready(sources):
+    """(ok, why) - the sheet needs an inundation raster at least."""
+    sources = sources or {}
+    if sources.get("layers", {}).get("bands") or sources.get("depth"):
+        return True, ""
+    return False, ("No inundation raster for the map: run the breach model (step 3 of the "
+                   "suite) and the classification first, or choose the Depth raster on "
+                   "'Setup & Run'")
+
+
+def layout_title_lines(dam_name, hazard_class="", scenario="", when=None, plugin="",
+                       version="", vintage=(), max_vintage=6):
+    """(title, subtitle, vintage block) of the sheet's title block."""
+    import time as _time
+    when = when or _time.strftime("%Y-%m-%d")
+    title = "{} - dam-break inundation, Emergency Action Plan".format(dam_name or "dam")
+    bits = []
+    if hazard_class:
+        bits.append("ND hazard class (screening): {}".format(str(hazard_class).upper()))
+    if scenario:
+        bits.append("breach scenario: {}".format(scenario))
+    bits.append("prepared {}".format(when))
+    sub = "   |   ".join(bits)
+    lines = ["Data vintages"]
+    rows = [v for v in (vintage or ()) if str(v).strip()]
+    for v in rows[:max_vintage]:
+        lines.append("  " + str(v))
+    if len(rows) > max_vintage:
+        lines.append("  ... {} more in QA/Data_Vintage.csv".format(len(rows) - max_vintage))
+    if not rows:
+        lines.append("  not recorded - run the classification to write QA/Data_Vintage.csv")
+    lines.append("")
+    lines.append("Screening result produced by {}{}. The engineer of record remains "
+                 "responsible for the classification. Arrival times are hours after the "
+                 "breach starts.".format(plugin or "the ND Dam Hazard Classification Helper",
+                                         " v" + version if version else ""))
+    return title, sub, "\n".join(lines)

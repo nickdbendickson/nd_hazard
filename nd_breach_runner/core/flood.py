@@ -58,6 +58,21 @@ class Spillway:
         return float(q[-1] * ((wse_m - z[0]) / h0) ** 1.5)      # weir-like beyond the table
 
     @property
+    def first_flow_m(self):
+        """Elevation of the first rating row with flow > 0 (the conservative crest: the rating
+        gives no flow below it). The table's bottom when no row flows."""
+        nz = np.nonzero(self.q_cms > 0)[0]
+        return float(self.elev_m[nz[0]]) if len(nz) else float(self.elev_m[0])
+
+    @property
+    def crest_gap_m(self):
+        """Elevation gap between the last q = 0 row and the first q > 0 row (0 if none)."""
+        nz = np.nonzero(self.q_cms > 0)[0]
+        if not len(nz) or nz[0] == 0:
+            return 0.0
+        return float(self.elev_m[nz[0]] - self.elev_m[nz[0] - 1])
+
+    @property
     def crest_m(self):
         nz = np.nonzero(self.q_cms > 0)[0]
         return float(self.elev_m[max(0, nz[0] - 1)]) if len(nz) else float(self.elev_m[0])
@@ -127,6 +142,26 @@ def _step(qin, qout, t, v, dt):
     return max(0.0, v + dt * q2)
 
 
+def route_static(qin, qout, v0, t_in, t_max, dt):
+    """No-breach routing loop (route_flood step 1, also used by adequacy.route_no_breach):
+    midpoint _step every dt from volume v0 until t_max, stopping once past t_in when the
+    outflow is ~0 or < 0.2 % of its peak. qin(t), qout(t, v). Returns (t, v, q) arrays and the
+    last time reached."""
+    ts, vs, qs = [0.0], [v0], [qout(0.0, v0)]
+    t, v, qpk = 0.0, v0, qs[0]
+    while t < t_max:
+        v = _step(qin, qout, t, v, dt)
+        t += dt
+        q = qout(t, v)
+        ts.append(t)
+        vs.append(v)
+        qs.append(q)
+        qpk = max(qpk, q)
+        if t > t_in and (q <= 1e-9 or q < 0.002 * qpk):
+            break
+    return np.asarray(ts), np.asarray(vs), np.asarray(qs), t
+
+
 def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
     """Route the inflow with and without a breach. `method` is a routed method
     or a TR-60 method of breach.py."""
@@ -192,21 +227,8 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
     # -- 1. no breach -----------------------------------------------------------------
     dt = dt_hydro_s
     v0 = float(res.volume(pool_ft * FT))
-    ts, vs_, qs = [0.0], [v0], [static_q(pool_ft * FT, 0.0, 0.0)]
-    t, v = 0.0, v0
-    qpk = qs[0]
     out_nb = lambda tt, vv: static_q(float(res.wse(vv)), 0.0, tt)
-    while t < t_max:
-        v = _step(qin, out_nb, t, v, dt)
-        t += dt
-        q = out_nb(t, v)
-        ts.append(t)
-        vs_.append(v)
-        qs.append(q)
-        qpk = max(qpk, q)
-        if t > t_in and (q <= 1e-9 or q < 0.002 * qpk):
-            break
-    ts, vs_, qs = np.asarray(ts), np.asarray(vs_), np.asarray(qs)
+    ts, vs_, qs, t = route_static(qin, out_nb, v0, t_in, t_max, dt)
     stage_t = ts.copy()
     wse_nb = res.wse(vs_)
     i_peak = int(np.argmax(wse_nb))
@@ -218,6 +240,12 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
 
     # -- 2. when the breach starts --------------------------------------------------------
     trig = fi.trigger
+    if trig == TRIGGER_PEAK and peak_stage_ft <= dam.top_of_dam_ft:
+        notes.append("The breach is ASSUMED at the peak pool ({:.1f} ft, {:.1f} ft below the top of "
+                     "dam): the flood scenario models a failure there, it does not find one. "
+                     "Whether the dam passes the flood is the no-breach peak pool against the top "
+                     "of dam and freeboard (tool 'Spillway adequacy').".format(
+                         peak_stage_ft, dam.top_of_dam_ft - peak_stage_ft))
     if trig == TRIGGER_PEAK:
         k_b = i_peak
     elif trig == TRIGGER_TIME:

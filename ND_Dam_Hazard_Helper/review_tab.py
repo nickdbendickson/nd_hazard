@@ -46,6 +46,8 @@ from .structures import (
 REVIEW_COLS = ["ID", "Why review", "Address", "Reviewed", "FEMA category", "Habitable (now)",
                "ACER type (now)", "ACER zone", "Depth ft", "Vel ft/s", "Persons (now)",
                "Set habitable", "Set ACER type", "Set persons", "Note"]
+# 2.30.0: the "what would change it" table (whatif.py)
+WHATIF_COLS = ["Item", "Now", "What would change it", "Resulting class", "Direction"]
 
 
 def _qt_sort_order(name):
@@ -163,6 +165,38 @@ class ReviewTabMixin(object):
     def _build_review_tab(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
+        # 2.30.0: the plain-language result card first - the class, the one reason for it,
+        # what would change it and the flags (resultcard.py; the same card heads the report).
+        self.review_card = QLabel("No classification run yet - the result card appears here "
+                                  "after a run.")
+        self.review_card.setWordWrap(True)
+        try:                        # Qt6 scopes the flag, Qt5 has it on Qt itself
+            flag = getattr(getattr(Qt, "TextInteractionFlag", Qt), "TextSelectableByMouse")
+            self.review_card.setTextInteractionFlags(flag)
+        except Exception:                                        # noqa - selection is a nicety
+            pass
+        self.review_card.setStyleSheet(
+            "padding: 10px; background-color: #f7f7f7; border: 1px solid #d0d0d0;")
+        lay.addWidget(self.review_card)
+        # 2.30.0: "what would change it" - the items nearest a class boundary (whatif.py)
+        self.whatif_label = QLabel("<b>What would change the class</b> - the items nearest a "
+                                   "boundary, closest first. A row that would LOWER the class "
+                                   "is the engineer's decision: the plugin never applies it.")
+        self.whatif_label.setWordWrap(True)
+        lay.addWidget(self.whatif_label)
+        self.whatif_table = QTableWidget()
+        self.whatif_table.setColumnCount(len(WHATIF_COLS))
+        self.whatif_table.setHorizontalHeaderLabels(WHATIF_COLS)
+        self.whatif_table.setRowCount(0)
+        self.whatif_table.setMaximumHeight(190)
+        self.whatif_table.setToolTip("Double-click a row to zoom to the structure, road or "
+                                     "railroad stretch behind it")
+        try:
+            self.whatif_table.cellDoubleClicked.connect(self._whatif_zoom)
+        except Exception:
+            pass
+        lay.addWidget(self.whatif_table)
+        self._whatif_rows = []
         info = QLabel(
             "<h3>Engineer review</h3>Structures that need a decision after the last Hazard "
             "Classification run. <b>Set habitable</b> decides habitability (structures with "
@@ -241,8 +275,24 @@ class ReviewTabMixin(object):
             "and - after you choose how to settle conflicts - merges them (a backup copy of "
             "your decisions is made first). Re-run the classification to apply them.")
         self.review_merge_btn.clicked.connect(self._review_merge)
+        # 2.30.0: the field-check sheet for the site visit after a screening High, and the
+        # marked-up sheet back into the engineer's review decisions (fieldcheck.py)
+        self.field_sheet_btn = QPushButton("Field-check sheet...")
+        self.field_sheet_btn.setToolTip(
+            "Writes a one-page-per-structure sheet for the site visit (address, what the data "
+            "says, depth, velocity, a photo slot and a habitable yes / no box) plus the CSV "
+            "to fill in and import again.")
+        self.field_sheet_btn.clicked.connect(self._field_sheet_write)
+        self.field_import_btn = QPushButton("Import field-check sheet...")
+        self.field_import_btn.setToolTip(
+            "Reads the marked-up Field_Check_Sheet.csv back in: the answers become engineer "
+            "review decisions (the same file the Review tab saves) and apply on the next "
+            "classification run. 'Habitable: no' can lower the class, so those rows are "
+            "listed before anything is saved.")
+        self.field_import_btn.clicked.connect(self._field_sheet_import)
         for b in (self.review_zoom_btn, self.review_webmap_btn, self.review_save_btn,
-                  self.review_rerun_btn, self.review_export_btn, self.review_merge_btn):
+                  self.review_rerun_btn, self.review_export_btn, self.review_merge_btn,
+                  self.field_sheet_btn, self.field_import_btn):
             row.addWidget(b)
         row.addStretch()
         lay.addLayout(row)
@@ -386,6 +436,209 @@ class ReviewTabMixin(object):
         self.review_status.setText(
             "{} structure(s) listed{}{}; {} saved decision(s) in {}".format(
                 len(entries), hidden, order, len(store), os.path.basename(store.path)))
+        self._populate_card()                      # 2.30.0: the card and the boundary list
+
+    # ------------------------------------- 2.30.0: the card and "what would change it" --
+    def _populate_card(self):
+        """The result card and the what-would-change-it table of the last run. Never raises:
+        both are views of the run, and a view must not stop the Review tab."""
+        res = getattr(self, "_last_run", None) or {}
+        try:
+            from . import resultcard as RC
+            card = res.get("card")
+            if not card:
+                from . import whatif as WI       # a result from before 2.30.0: build one now
+                gov = (res.get("results") or {}).get(res.get("governing")) or {}
+                card = RC.build(res.get("nd") or {}, res.get("tm11") or {},
+                                roads=gov.get("roads") or [], rails=gov.get("rails") or [],
+                                access=res.get("access"), margin=res.get("margin"),
+                                dam_name=res.get("dam_name") or "",
+                                governing_scenario=res.get("governing") or "")
+                _ = WI
+            self.review_card.setText(RC.html(card))
+        except Exception as e:                                   # noqa - never stop the tab
+            log_message("Result card not shown: {}".format(e))
+            self.review_card.setText("The result card could not be built ({}).".format(e))
+        rows = []
+        try:
+            from . import whatif as WI
+            rows = res.get("whatif") or []
+            if not rows and res.get("structs"):
+                gov = (res.get("results") or {}).get(res.get("governing")) or {}
+                rows = WI.candidates(res["structs"], gov.get("roads") or [],
+                                     gov.get("rails") or [], res.get("nd") or {})
+            table = WI.table_rows(rows)
+        except Exception as e:                                   # noqa - never stop the tab
+            log_message("'What would change it' not shown: {}".format(e))
+            rows, table = [], []
+        self._whatif_rows = list(rows)
+        t = self.whatif_table
+        t.setRowCount(len(table))
+        for i, row in enumerate(table):
+            for c, v in enumerate(row):
+                t.setItem(i, c, QTableWidgetItem("" if v is None else str(v)))
+        try:
+            t.resizeColumnsToContents()
+        except Exception:
+            pass
+
+    def _zoom_to_geometry(self, geom, pad_ft=150.0):
+        """Zoom the canvas to one geometry of the last run (the analysis CRS). Returns True
+        when the canvas moved."""
+        try:
+            from qgis.utils import iface
+            canvas = iface.mapCanvas()
+        except Exception:                                        # noqa - no canvas (tests)
+            canvas = None
+        if canvas is None or geom is None:
+            return False
+        try:
+            crs = self._last_run["crs"]
+            dest = canvas.mapSettings().destinationCrs()
+            xf = QgsCoordinateTransform(crs, dest, QgsProject.instance().transformContext())
+            bb = QgsRectangle(geom.boundingBox())
+            pad = max(bb.width() * 0.5, bb.height() * 0.5,
+                      buffer_distance_in_layer_units(pad_ft, crs))
+            bb = QgsRectangle(bb.xMinimum() - pad, bb.yMinimum() - pad, bb.xMaximum() + pad,
+                              bb.yMaximum() + pad)
+            canvas.setExtent(bb if xf.isShortCircuited() else xf.transformBoundingBox(bb))
+            canvas.refresh()
+            try:
+                canvas.flashGeometries([geom], crs)
+            except Exception:                                    # noqa - older QGIS
+                pass
+            return True
+        except Exception as e:                                   # noqa
+            log_message("Zoom failed: {}".format(e))
+            return False
+
+    def _whatif_zoom(self, row=None, *args):
+        """Zoom to the item of a what-would-change-it row (its geometry, when it has one)."""
+        try:
+            rows = getattr(self, "_whatif_rows", []) or []
+            i = self.whatif_table.currentRow() if row is None else int(row)
+            if not (0 <= i < len(rows)):
+                return
+            geom = rows[i].get("geom")
+            if geom is None:
+                self.review_status.setText("That row has no location to zoom to.")
+                return
+            self._zoom_to_geometry(geom)
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("Zoom to the boundary item failed: {}".format(e))
+
+    # ------------------------------------------- 2.30.0: the field-check sheet --
+    def _field_sheet_folder(self):
+        folder = getattr(self, "config_output_folder", "") or getattr(
+            self, "config_dam_folder", "") or ""
+        return folder
+
+    def _field_sheet_write(self, *args):
+        """Write Field_Check_Sheet.md (one page per structure) and .csv next to the outputs."""
+        try:
+            from . import fieldcheck as FC
+            res = getattr(self, "_last_run", None)
+            if not res:
+                QMessageBox.warning(self, "Field-check sheet",
+                                    "Run the Hazard Classification first.")
+                return
+            folder = self._field_sheet_folder()
+            if not folder or not os.path.isdir(folder):
+                QMessageBox.warning(self, "Field-check sheet",
+                                    "No outputs folder yet - run the classification first.")
+                return
+            rows = FC.sheet_rows(res["structs"], address_fn=address_of,
+                                 lonlat_fn=lambda rec: self._lonlat_of(rec))
+            if not rows:
+                QMessageBox.information(self, "Field-check sheet",
+                                        "No structure needs a site visit: none is in the ACER "
+                                        "high or judgment zone, unverified, borderline or cut "
+                                        "off.")
+                return
+            name = self._review_dam_name()
+            md = FC.write_sheet(folder, name, rows)
+            csv_path = FC.write_csv(folder, rows)
+            self._log(">>> Field-check sheet: {} structure(s) - {} and {}".format(
+                len(rows), os.path.basename(md), os.path.basename(csv_path)))
+            self.review_status.setText(
+                "Field-check sheet written for {} structure(s): {} (print it) and {} (fill it "
+                "in, then 'Import field-check sheet...')".format(
+                    len(rows), os.path.basename(md), os.path.basename(csv_path)))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("Field-check sheet not written: {}".format(e))
+            QMessageBox.warning(self, "Field-check sheet",
+                                "The sheet could not be written: {}".format(e))
+
+    def _lonlat_of(self, rec):
+        """(lon, lat) of a structure, for the sheet (None when it cannot be transformed)."""
+        from qgis.core import QgsCoordinateReferenceSystem
+        from .review import rep_point
+        res = getattr(self, "_last_run", None) or {}
+        p = rep_point(rec)
+        if p is None or res.get("crs") is None:
+            return None, None
+        try:
+            to_wgs = QgsCoordinateTransform(res["crs"],
+                                            QgsCoordinateReferenceSystem("EPSG:4326"),
+                                            QgsProject.instance().transformContext())
+            q = p if to_wgs.isShortCircuited() else to_wgs.transform(p)
+            return q.x(), q.y()
+        except Exception:                                        # noqa
+            return None, None
+
+    def _field_sheet_import(self, *args):
+        """Read a marked-up field-check sheet into the engineer's review decisions."""
+        try:
+            from . import fieldcheck as FC
+            res = getattr(self, "_last_run", None)
+            if not res:
+                QMessageBox.warning(self, "Field-check sheet",
+                                    "Run the Hazard Classification first - the sheet's rows "
+                                    "are matched to this run's structures.")
+                return
+            start = self._field_sheet_folder() or ""
+            path, _f = QFileDialog.getOpenFileName(self, "Marked-up field-check sheet", start,
+                                                   "CSV (*.csv);;All Files (*)")
+            if not path:
+                return
+            rows = FC.read_csv(path)
+            got = FC.summary(rows)
+            if not rows:
+                QMessageBox.information(self, "Field-check sheet",
+                                        "No row of {} has been filled in.".format(
+                                            os.path.basename(path)))
+                return
+            store = ReviewStore(res["review_file"])
+            store.attach(res["structs"], res["crs"], QgsProject.instance().transformContext())
+            text = ("{} filled-in row(s): {} habitable yes, {} habitable NO, {} could not "
+                    "tell.\n\n{} of them would LOWER the hazard class (habitable: no). "
+                    "The class only changes when you save the decisions and re-run the "
+                    "classification.\n\nImport them as engineer review decisions?".format(
+                        got["rows"], got["habitable_yes"], got["habitable_no"],
+                        got["unverified"], got["lowering"]))
+            if QMessageBox.question(self, "Import field-check sheet", text,
+                                    MB_YES | MB_NO) != MB_YES:
+                return
+            done = FC.apply_to_store(store, res["structs"], res["crs"],
+                                     QgsProject.instance().transformContext(), rows)
+            store.save()
+            for sid, what in done["rows"]:
+                self._log(">>> Field check: structure {} - {}".format(sid, what))
+            if done["unmatched"]:
+                self._log(">>> Field check: {} row(s) matched no structure of this run: "
+                          "{}".format(len(done["unmatched"]),
+                                      ", ".join(str(x) for x in done["unmatched"][:8])))
+            self._populate_review()
+            self.review_status.setText(
+                "Field check imported: {} decision(s) saved to {} ({} lower the class); "
+                "{} row(s) matched nothing. Re-run the classification to apply them.".format(
+                    done["applied"], os.path.basename(store.path), done["lowering"],
+                    len(done["unmatched"])))
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("Field-check sheet not imported: {}".format(e))
+            QMessageBox.warning(self, "Field-check sheet",
+                                "The sheet could not be imported: {}".format(e))
 
     # -------------------------------------------------- v2.9: column sorting --
     def _review_show_sort(self):

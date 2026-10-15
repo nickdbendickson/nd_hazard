@@ -58,7 +58,7 @@ from .structures import (
 )
 from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, FeatureIndex
 from .classification import (
-    classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
+    classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria, flood_cut_off_note,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -96,6 +96,9 @@ DEFAULTS = {
     # v2.2
     "download_dams": True, "dam_layer": None, "subject_dam_nid": "",
     "download_lifelines": True, "lifeline_layer": None, "lifeline_as_medium": True,
+    # 2.30.0: the alternative route and the second facility of the same kind, for every
+    # lifeline facility the flood reaches (only computed when one is actually hit)
+    "lifeline_detail": True,
     "model_boundary_layer": None, "eap": True,
     # v2.3
     "download_roads": True, "download_crossings_structures": True, "spreadsheets": True,
@@ -156,6 +159,9 @@ DEFAULTS.update({
 DEFAULTS.update({
     # v2.10: the dam suite
     "write_dam_record": True,           # dam.json: values and the "classified" status
+    # v2.23.0: one switch for a quick run - no EAP map book, no aerial imagery under the maps
+    # (the two slowest outputs). The two settings themselves are left as they are.
+    "fast_run": False,
     "ensemble_member": False,           # set by ensemble.py on every ensemble run
 })
 from . import modelgate as _MG          # noqa: E402  (v2.10 model gate settings)
@@ -178,6 +184,19 @@ def _eap_on(cfg, part):
     if part == "list":
         return bool(cfg.get("eap_list", True) or cfg.get("eap_mapbook"))
     return bool(cfg.get("eap_" + part))
+
+
+FAST_RUN_OFF = ("eap_mapbook", "report_imagery")
+
+
+def fast_run_config(cfg):
+    """cfg with the slow map outputs off when cfg["fast_run"] is set (a copy; cfg unchanged)."""
+    if not cfg.get("fast_run"):
+        return cfg
+    out = dict(cfg)
+    for k in FAST_RUN_OFF:
+        out[k] = False
+    return out
 
 
 def config(**kw):
@@ -311,6 +330,7 @@ class Run(object):
         self.used_inputs = {}
         self.marks = []                 # v2.6.2: (monotonic time, stage) for the run log
         self.damage_curves = None       # v2.7: the engineer's non-residential curves
+        self.flood_cut_off = None       # v2.28: the Runner's run_report.json "cut_off", when any
 
     def tick(self, pct, msg):
         """A main stage of the run (timed in the run log) and progress."""
@@ -637,7 +657,11 @@ def run_classification(cfg, progress=None, log=None, deferred=False):
     res["post"]; call finish_run(res) on the main thread to add the layers,
     make the map book and the PDF report and write the summary and the run
     log. deferred=False: everything is done here."""
+    cfg = fast_run_config(cfg)
     run = Run(cfg, progress, log, deferred=deferred)
+    if cfg.get("fast_run"):
+        run.messages.append("Fast run: the EAP map book and the aerial imagery under the "
+                            "maps are skipped. Every result is the same.")
     os.makedirs(run.out, exist_ok=True)
     try:
         res = _run_classification(run, cfg)
@@ -774,6 +798,7 @@ def _run_classification(run, cfg):
     out = run.out
     redirected_outputs(clear=True)
     _read_dam_record(run, cfg)                # v2.10: dam.json (name, NID) when not given
+    _flood_cut_off_step(run, cfg)             # v2.28: the Runner's run_report.json "cut_off"
     run.dam_name = cfg.get("dam_name") or dam_display_name(cfg.get("dam_folder") or out)
     log_message(environment_summary())
     scenarios = order_for_run([s for s in cfg["scenarios"]])
@@ -1184,6 +1209,29 @@ def _read_dam_record(run, cfg):
                 "the dam's dam.json ('conflicts')".format(
                     sum(1 for c in rec.conflicts if not c.get("applied"))))
     return rec
+
+
+def _flood_cut_off_step(run, cfg):
+    """v2.28: when the ND Dam Breach Runner's run_report.json of the dam folder says the flood
+    model was cut off (duration cap, domain-run limit, largest domain side), the run log and the
+    summary's data sources say so and the summary's classification line is marked incomplete
+    (modelchain.read_flood_cut_off, classification.flood_cut_off_note). The class is not
+    changed. No Runner report: nothing changes. Never fails the run."""
+    run.flood_cut_off = None
+    try:
+        from . import modelchain as MC
+        info = MC.read_flood_cut_off(cfg.get("dam_folder") or None)
+    except Exception as e:                                   # noqa
+        run.log(">>> NOTE: the Runner's run report was not read ({})".format(e))
+        return None
+    if not info:
+        return None
+    run.flood_cut_off = info
+    note = flood_cut_off_note(info)
+    run.log(">>> WARNING: {} ({})".format(note, info.get("path")))
+    if note not in run.sources:
+        run.sources.append(note)
+    return info
 
 
 def _write_dam_record(run, cfg, res):
@@ -1647,11 +1695,22 @@ def _classify_and_write(run, cfg, state):
     governing["margin"] = rob
     more["margin"] = rob["lines"]
     more["nid"] = _nid_lines(run, governing)
+    # ---- 2.30.0: what would change the class, the lifeline detail, the history, the card ----
+    more["whatif"] = _whatif_step(run, governing, s_view, r_view, l_view, judge, one_d, d_qa,
+                                  written)
+    more["lifeline_detail"] = PX.lifeline_detail_step(run, gov, governing, layers, inputs,
+                                                      d_qa, written)
+    more["history"] = _history_step(run, gov, governing, dam_name, more.get("vintage"))
+    _result_card(run, gov, governing, s_view, r_view, l_view, dam_name)
     qa_rows = inventory_qa(structs)
     _retire_everywhere(out, "Inventory_QA", ("csv",), keep=d_qa)
     qa_path = write_qa_csv(qa_rows, os.path.join(d_qa, "Inventory_QA.csv"), acrs)
     written.append(os.path.relpath(qa_path, out))
     extra = _extra_sections(run, breaches, gov, qa_rows, inputs)
+    if getattr(run, "flood_cut_off", None):
+        extra["flood_cut_off"] = run.flood_cut_off           # v2.28: marks the class line
+    if governing.get("card"):
+        extra["card"] = governing["card"]                   # 2.30.0: the top of the summary
     hcom = _hcom_check(run, governing, d_qa, written)
     if hcom:
         extra["hcom"] = hcom
@@ -1668,6 +1727,9 @@ def _classify_and_write(run, cfg, state):
     governing["dv_charts"] = _dv_spreadsheet(run, cfg, gov, structs, dam_name, written, d_class)
     run.tick(92, "Writing the summary...")
     res = {"governing": gov.name, "nd": governing["nd"], "tm11": governing["tm11"],
+           "card": governing.get("card"), "whatif": governing.get("whatif") or [],
+           "access": governing.get("access"), "margin": governing.get("margin"),
+           "output_folder": out,
            "result_items": _result_items(run, gov, governing),
            "results": run.results, "lines": [], "outputs": written, "structs": structs,
            "crs": acrs, "report": None, "review_file": store.path, "clip": clip,
@@ -1956,16 +2018,16 @@ def _collect_inputs(run, clip):
             want("xosm", "OpenStreetMap crossings", fetch_osm_crossings, ext4326, out)
         if cfg.get("download_camps") and "camps" not in loc:
             want("camps", "OpenStreetMap campgrounds", fetch_osm_camps, ext4326, out)
-        if cfg.get("download_trailer_parks", True):
+        if cfg.get("download_trailer_parks", True) and "parks" not in loc:
             want("parks", "OpenStreetMap mobile-home parks", fetch_osm_trailer_parks, ext4326,
                  out)
-        if travel and cfg.get("download_places"):
+        if travel and cfg.get("download_places") and "places" not in loc:
             want("places", "OpenStreetMap places", fetch_osm_places, big4326, out)
         # v2.8: the termination point needs the channel too, with or without the travel table
         if (travel or cfg.get("termination")) and cfg.get("centerline_layer") is None \
                 and cfg.get("download_flowlines"):
-            want("flow", "USGS NHD flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext4326,
-                 out, "NHD_flowlines")
+            want("flow", "USGS 3DHP flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext4326,
+                 out, "3DHP_flowlines")
     labels = {k: lbl for k, lbl, _f, _a in jobs}
     got = {}
     if jobs:
@@ -2074,7 +2136,7 @@ def _collect_inputs(run, clip):
         else:
             run.log(">>> WARNING: campground download failed - campgrounds / RV parks not "
                     "screened")
-    parks = None
+    parks = loc.get("parks")
     if "parks" in got:
         parks, n, path = result("parks")
         if parks is not None:
@@ -2084,6 +2146,8 @@ def _collect_inputs(run, clip):
             run.log(">>> WARNING: mobile-home park download failed - park evidence for the "
                     "manufactured-home typing not used")
     places, flowlines = [], None
+    if loc.get("places") is not None:
+        places = _read_places(loc["places"], clip.crs, run.ctx)
     if "places" in got:
         lyr, n, path = result("places")
         if lyr is not None:
@@ -2158,6 +2222,28 @@ def _used_inputs(cfg, got, loc):
     except Exception:                                    # noqa: BLE001 - a record only
         pass
     return used
+
+
+def pack_hifld_layers():
+    """2.24.0: [(GeoPackage, category or None)] of the HIFLD layers of the offline pack in use
+    (a folder pack, Data source = Offline pack), else []."""
+    from .download import offline_config
+    try:
+        from .damsuite import suitedata as _SD
+        from .damsuite import gpkgpack as _GP
+        path, _only = offline_config()
+        folder = _GP.pack_folder_of(path) if path else ""
+        if not folder:
+            return []
+        out = []
+        for name, e in sorted(_SD.pack_entries(folder).items()):
+            if e.get("group") == "hifld" or name.startswith("HIFLD_"):
+                p = _SD.pack_file(name, folder)
+                if p:
+                    out.append((p, e.get("category")))
+        return out
+    except Exception:
+        return []
 
 
 def _log_offline_mode(run):
@@ -2293,6 +2379,20 @@ def _collect_facilities(run, clip, ext4326, got):
         lifelines += FAC.read_lifelines(one, "data folder '{}'".format(one.name()), cat, acrs,
                                         run.ctx, clip)
         life_on = True
+    # 2.24.0: the HIFLD lifeline layers of the offline pack (Data source = Offline pack; agency
+    # layers, read before the downloads and OpenStreetMap, so they win the dedupe)
+    if cfg.get("download_lifelines", True):
+        for path, cat in pack_hifld_layers():
+            lyr = QgsVectorLayer(path, os.path.splitext(os.path.basename(path))[0], "ogr")
+            if not lyr.isValid():
+                run.log(">>> WARNING: offline pack layer {} could not be opened".format(path))
+                continue
+            got_n = FAC.read_lifelines(lyr, "offline pack {}".format(lyr.name()), cat, acrs,
+                                       run.ctx, clip)
+            lifelines += got_n
+            life_on = True
+            run.sources.append("HIFLD lifelines (offline pack): {} in the area ({})".format(
+                len(got_n), os.path.basename(path)))
     if "life_osm" in got:
         failed = []
         for key, label, url, cat in lifeline_downloads():
@@ -2937,7 +3037,7 @@ def _travel_time(run, gov, governing, structs, layers, inputs, clip, dam_name, w
     peak = _peak_raster(cfg, gov)
     flow = None
     if inputs.get("flowlines"):
-        flow = QgsVectorLayer(inputs["flowlines"], "NHD flowlines", "ogr")
+        flow = QgsVectorLayer(inputs["flowlines"], "3DHP flowlines", "ogr")
         if not flow.isValid():
             flow = None
     try:
@@ -2964,7 +3064,7 @@ def _travel_time(run, gov, governing, structs, layers, inputs, clip, dam_name, w
             _retire_everywhere(run.out, base)
         msg = "; ".join((result or {}).get("notes") or []) or "no centerline"
         if cfg.get("centerline_layer") is None and not inputs.get("flowlines"):
-            msg = "no centerline layer given and no NHD flowlines downloaded"
+            msg = "no centerline layer given and no 3DHP flowlines downloaded"
         run.log(">>> Travel-time table not made: {}".format(msg))
         return ["Travel-time table not made: {}".format(msg)]
     if peak:
@@ -3004,6 +3104,94 @@ def _map_book(run, gov, governing, layers, clip, dam_name, written, folder):
         written.append(os.path.relpath(path, run.out))
         governing["mapbook"] = path
     return lines
+
+
+# --------------------------------------------------------- 2.30.0: the result card --
+def _whatif_step(run, governing, s_view, r_view, l_view, judge, one_d, d_qa, written):
+    """The items nearest a class boundary (whatif.py) with the change that would flip each
+    one, as the summary section and QA/What_Would_Change_It.csv. Never fails the run."""
+    try:
+        from . import whatif as WI
+        rows = WI.candidates(s_view, r_view, l_view, governing["nd"],
+                             judgment_as_probable=judge, one_d=one_d)
+        governing["whatif"] = rows
+        lines = WI.lines(rows, governing["nd"]["cls"])
+        if rows:
+            _retire_everywhere(run.out, "What_Would_Change_It", ("csv",), keep=d_qa)
+            path = WI.write_csv(prepare_output_path(
+                os.path.join(d_qa, "What_Would_Change_It.csv")), rows)
+            written.append(os.path.relpath(path, run.out))
+            lines.append("Table: QA/{}".format(os.path.basename(path)))
+        return lines
+    except CancelledByUser:
+        raise
+    except Exception as e:                                       # noqa - a report section only
+        run.log(">>> WARNING: 'what would change it' not computed: {}".format(e))
+        return []
+
+
+def _history_step(run, gov, governing, dam_name, vintage=None):
+    """Record this run in <dam folder>/Classification_History.json and return the "class over
+    time" section. The log is the dam's, so it survives a cleared outputs folder."""
+    try:
+        from . import history as HIS
+        folder = run.cfg.get("dam_folder") or ""
+        entries = HIS.read_entries(folder)
+        from .constants import PLUGIN_VERSION
+        entry = HIS.make_entry(governing["nd"], governing["tm11"], dam_name=dam_name,
+                               governing=gov.name, plugin_version=PLUGIN_VERSION,
+                               vintage=vintage or (), cfg=run.cfg,
+                               outputs=os.path.basename(run.out),
+                               note="quick re-run" if run.cfg.get("quick_rerun") else "")
+        governing["history_entries"] = entries
+        governing["history_entry"] = entry
+        lines = HIS.history_lines(entries, entry)
+        if not run.cfg.get("ensemble_member") and not run.cfg.get("reproduction"):
+            path = HIS.append_entry(folder, entry)
+            if path:
+                run.sources.append("Classification history: this run added to {}".format(
+                    os.path.basename(path)))
+        return lines
+    except CancelledByUser:
+        raise
+    except Exception as e:                                       # noqa - a report section only
+        run.log(">>> WARNING: classification history not written: {}".format(e))
+        return []
+
+
+def _result_card(run, gov, governing, s_view, r_view, l_view, dam_name):
+    """The plain-language card (resultcard.py) for the top of the Review tab, the top of the
+    report and the top of the summary. Never fails the run."""
+    try:
+        from . import resultcard as RC
+        from . import history as HIS
+        from .damsuite import loss as LOSS
+        rates = None
+        est = None
+        try:
+            est = LOSS.both_times([_loss_row(rec) for rec in s_view
+                                   if rec.get("habitable") == "Yes"], rates)
+        except Exception as e:                                   # noqa - PAR is optional here
+            run.log(">>> NOTE: population-at-risk summary not added to the card: {}".format(e))
+        history_line = HIS.history_one_line(governing.get("history_entries") or [],
+                                            governing.get("history_entry"))
+        governing["card"] = RC.build(
+            governing["nd"], governing["tm11"], roads=r_view, rails=l_view,
+            access=governing.get("access"), margin=governing.get("margin"),
+            flood_cut_off=getattr(run, "flood_cut_off", None), loss=est,
+            history_line=history_line, dam_name=dam_name, governing_scenario=gov.name)
+    except CancelledByUser:
+        raise
+    except Exception as e:                                       # noqa - the card is a view
+        run.log(">>> WARNING: result card not built: {}".format(e))
+        governing["card"] = None
+
+
+def _loss_row(rec):
+    """One structure as damsuite.loss reads it (plain numbers, no QGIS)."""
+    return {"depth_ft": rec.get("max_depth"), "velocity_fts": rec.get("max_vel"),
+            "arrival_hr": rec.get("arrival"), "habitable": rec.get("habitable") == "Yes",
+            "pop": rec.get("persons")}
 
 
 _NID_TO_ND = {"high": "High", "significant": "Medium", "low": "Low"}

@@ -24,7 +24,6 @@ from the record itself.
 
 Pure Python + the vendored damsuite; no QGIS.
 """
-import configparser
 import math
 import os
 
@@ -42,6 +41,14 @@ PARAM_FIELDS = (("HEIGHT_FT", "height_ft", "Dam height (ft)"),
 LOCAL_DATUMS = ("local",)
 MANIFEST_REL = "_breach_model/run_manifest.json"
 REPORT_REL = "_breach_model/run_report.json"
+# 3.20.3: the datum this plugin writes with a top of dam IT estimated from the DEM, and the
+# source note beside it. A later run reads such a value as an estimate and estimates it again
+# (dem_estimate / fill), instead of treating one run's guess as a surveyed crest for every run
+# after it. "DEM" on its own is a measured crest (the Screener's proposed-embankment tool
+# writes that); OLD_DEM_NOTES are the notes releases up to 3.20.2 wrote with their estimate.
+DEM_ESTIMATE_DATUM = "DEM estimate"
+DEM_ESTIMATE_NOTE = "estimated by this plugin from the {}; not a surveyed or as-built crest"
+OLD_DEM_NOTES = ("highest dem point", "dem near the dam point", "dem median along the crest line")
 
 
 def folder_name(dam_id):
@@ -52,20 +59,11 @@ def folder_name(dam_id):
 
 
 def plugin_version():
-    """version= of the plugin's metadata.txt (the workflow's VERSION when unreadable)."""
-    md = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      "metadata.txt")
-    try:
-        cp = configparser.ConfigParser(interpolation=None, strict=False)
-        with open(md, encoding="utf-8-sig") as f:
-            cp.read_file(f)
-        v = cp.get("general", "version", fallback="").strip()
-        if v:
-            return v
-    except (OSError, configparser.Error):
-        pass
-    from .workflow import VERSION
-    return VERSION
+    """version= of the plugin's metadata.txt (the workflow's VERSION when unreadable).
+    3.18.0: read by workflow.metadata_version, the same reader that sets workflow.VERSION at
+    import; the file is read again here so a changed metadata.txt is seen without a reload."""
+    from .workflow import metadata_version, VERSION
+    return metadata_version(VERSION)
 
 
 def load(folder):
@@ -95,6 +93,21 @@ def local_datum(rec):
     return d in LOCAL_DATUMS
 
 
+def dem_estimate(rec):
+    """3.20.3: True when the record's top of dam is a DEM estimate an earlier run of this plugin
+    wrote, rather than a value someone gave. Reads the datum this plugin writes, and the source
+    notes of releases up to 3.20.2, which had no datum of their own."""
+    if rec is None:
+        return False
+    if str(rec.get("top_of_dam_datum") or "").strip().lower() == DEM_ESTIMATE_DATUM.lower():
+        return True
+    s = (rec.sources.get("top_of_dam_ft") or {}) if getattr(rec, "sources", None) else {}
+    if str(s.get("tool") or "") != TOOL:
+        return False
+    note = str(s.get("note") or "").strip().lower()
+    return any(note.startswith(n) for n in OLD_DEM_NOTES)
+
+
 def fill(values, rec):
     """Fill empty values ({tool parameter: value or None}) from the record.
 
@@ -115,6 +128,12 @@ def fill(values, rec):
         if field == "top_of_dam_ft" and local_datum(rec):
             notes.append("{} in dam.json ({}) is on a local datum ({}); not used as an "
                          "elevation.".format(label, v, rec.get("top_of_dam_datum")))
+            continue
+        if field == "top_of_dam_ft" and dem_estimate(rec):
+            # 3.20.3: an earlier run's own DEM estimate is not evidence for this run
+            notes.append("{} in dam.json ({}) is an earlier run's estimate from the DEM, not a "
+                         "given crest ({}); this run estimates it again from its own "
+                         "DEM.".format(label, v, source_text(rec, field)))
             continue
         if field in ("height_ft", "storage_acft") and not (isinstance(v, (int, float))
                                                            and v > 0):
@@ -170,8 +189,11 @@ def values_used(dam, st=None, top_source="parameter", point=None, nid_id=None):
          "nid_id": nid_id or None}
     if top_source != "record":
         v["top_of_dam_ft"] = _num(getattr(dam, "top_of_dam_ft", None))
-        if v["top_of_dam_ft"] is not None:
-            v["top_of_dam_datum"] = "DEM"
+        # 3.20.3: the datum says where the value came from. Only this plugin's own DEM estimate
+        # is marked (and read back as an estimate); a value given as a parameter keeps whatever
+        # datum the record already holds, since this plugin cannot know it.
+        if v["top_of_dam_ft"] is not None and top_source == "dem":
+            v["top_of_dam_datum"] = DEM_ESTIMATE_DATUM
     fl = getattr(st, "flood", None) if st is not None else None
     if fl is not None and _num(getattr(fl, "normal_pool_ft", None)) is not None:
         v["normal_pool_ft"] = _num(fl.normal_pool_ft)

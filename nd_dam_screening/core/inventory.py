@@ -34,6 +34,22 @@ FIELD_CANDIDATES = {
     "NIDREF": ("national_i", "national_id"),
     "LEN": ("dam_length",),
 }
+# 0.21.0: the NID's own field names (the national NID export / the suite offline pack's
+# NID_dams, upper case there; matched without case). The first one present is used. NID height:
+# NID_HEIGHT is the NID's "max of dam, hydraulic and structural height"; NID_STORAGE is its max
+# storage. No status: the status filter is for DWR records only.
+NID_FIELD_CANDIDATES = {
+    "ID": ("nidid", "nid_id", "national_id"),
+    "NAME": ("name", "dam_name"),
+    "H": ("nid_height", "dam_height", "structural_height", "hydraulic_height"),
+    "NS": ("normal_storage",),
+    "MS": ("max_storage", "nid_storage"),
+    "SA": ("surface_area",),
+    "HZ": ("hazard_potential", "hazard"),
+    "STATUS": (),
+    "NIDREF": (),
+    "LEN": ("dam_length",),
+}
 # dugout-only extras: water above the natural ground (what a breach can release), and the
 # dugout's height / depth (not a dam height: DWR's max_height mixes cut and spoil)
 DUGOUT_EXTRA = {"ABOVE": ("storage_above_grade_acft",), "DUGH": ("max_height",),
@@ -57,14 +73,16 @@ def detect_kind(field_names, layer_name=""):
     return KIND_DAM
 
 
-def resolve_fields(chosen, field_names, kind=KIND_DAM):
+def resolve_fields(chosen, field_names, kind=KIND_DAM, candidates=None):
     """{role: field name or None}. A chosen field that is not in the layer (e.g. the dBase default
     'structure_' on the GeoPackage export, whose field is 'structure_id') is replaced by the first
-    candidate that is; returns (fields, [notes])."""
+    candidate that is; returns (fields, [notes]). `candidates`: the table of names to look for
+    (FIELD_CANDIDATES, the DWR exports, by default; NID_FIELD_CANDIDATES for the NID)."""
+    cands = FIELD_CANDIDATES if candidates is None else candidates
     names = list(field_names)
     lower = {x.lower(): x for x in names}
     out, notes = {}, []
-    for role in FIELD_CANDIDATES:
+    for role in cands:
         c = chosen.get(role)
         if c and c in names:
             out[role] = c
@@ -72,13 +90,13 @@ def resolve_fields(chosen, field_names, kind=KIND_DAM):
         if kind == KIND_DUGOUT and role == "LEN":
             out[role] = None                 # a dugout's length is the pond, not a dam crest
             continue
-        hit = next((lower[x] for x in FIELD_CANDIDATES[role] if x in lower), None)
+        hit = next((lower[x] for x in cands[role] if x in lower), None)
         out[role] = hit
         if c and hit:
             notes.append("{} field '{}' not in the layer: '{}' used".format(role, c, hit))
     if kind == KIND_DUGOUT:
-        for role, cands in DUGOUT_EXTRA.items():
-            out[role] = next((lower[x] for x in cands if x in lower), None)
+        for role, extra in DUGOUT_EXTRA.items():
+            out[role] = next((lower[x] for x in extra if x in lower), None)
         out["H"] = None                      # see DUGOUT_EXTRA: no dam height for a dugout
     return out, notes
 

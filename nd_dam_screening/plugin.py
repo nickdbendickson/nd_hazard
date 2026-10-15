@@ -158,6 +158,7 @@ class NDDamScreeningPlugin:
         self.dialog.show()
         self.dialog.raise_()
         self.dialog.activateWindow()
+        return self.dialog                  # 1.18: the suite hand-offs point the window at a dam
 
     def check_versions(self, versions=None):
         """Warn in the message log and bar when another suite plugin is too old. Runs once;

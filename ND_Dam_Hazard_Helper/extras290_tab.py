@@ -45,7 +45,7 @@ _LITERAL = {
     "mobile_min_length_ft": 30.0, "mobile_max_length_ft": 90.0, "mobile_lot_units": True,
     "download_trailer_parks": True,
     "fast_sampling": False, "input_overviews": False, "zone_overviews": True,
-    "report_imagery": True,
+    "report_imagery": True, "fast_run": False,
     "dv_spreadsheet": True, "dv_template": "",
     "conseq_sensitivity": False, "conseq_sens_warning_hr": "-0.5, 0.5, 1.0",
     "conseq_sens_ppd": "2.0, 2.5, 3.0", "conseq_sens_population": True,
@@ -138,7 +138,7 @@ class Extras290TabMixin(object):
         "mobile_min_length_spin", "mobile_max_length_spin", "mobile_lot_check",
         "trailer_parks_check",
         "fast_sampling_check", "input_overviews_check", "zone_overviews_check",
-        "report_imagery_check", "dv_spreadsheet_check", "dv_template_edit",
+        "report_imagery_check", "fast_run_check", "dv_spreadsheet_check", "dv_template_edit",
         "conseq_sens_check", "conseq_warning_edit", "conseq_ppd_edit", "conseq_pop_check",
         "conseq_severity_check",
         "evac_routes_check", "temporal_check", "temporal_start_edit", "temporal_step_spin",
@@ -252,6 +252,15 @@ class Extras290TabMixin(object):
             "imagery service does not answer - the maps are then made without it. A picture "
             "for looking at; no result uses it.")
         form.addRow("", self.report_imagery_check)
+        # v2.23.0
+        self.fast_run_check = QCheckBox("Fast run: skip the EAP map book and the aerial imagery")
+        self.fast_run_check.setChecked(bool(_default("fast_run")))
+        self.fast_run_check.setToolTip(
+            "For a quick look. Turns off the two slowest outputs for this run only: the EAP "
+            "inundation map book and the aerial imagery under the maps. The classification, "
+            "the tables, the report and every other output are the same. Your map book and "
+            "imagery settings are kept for the next run without this box.")
+        form.addRow("", self.fast_run_check)
         # v2.20.0: the structures on a copy of the depth-velocity spreadsheet
         self.dv_spreadsheet_check = QCheckBox("Plot the structures on a copy of the "
                                               "depth-velocity spreadsheet and in the report")
@@ -656,6 +665,7 @@ class Extras290TabMixin(object):
             "input_overviews": bool(self.input_overviews_check.isChecked()),
             "zone_overviews": bool(self.zone_overviews_check.isChecked()),
             "report_imagery": bool(self.report_imagery_check.isChecked()),
+            "fast_run": bool(self.fast_run_check.isChecked()),
             "dv_spreadsheet": bool(self.dv_spreadsheet_check.isChecked()),
             "dv_template": self.dv_template_edit.text().strip(),
             "conseq_sensitivity": bool(self.conseq_sens_check.isChecked()),

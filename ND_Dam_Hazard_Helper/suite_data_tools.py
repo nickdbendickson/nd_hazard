@@ -225,9 +225,10 @@ GET_DATA_HELP = (
     "data section: the DEM (your own DEM in the suite data folder's dem/, else the terrain server "
     "chosen in Suite data and servers, through the shared tile cache), land cover, building "
     "outlines and points, address points, roads, railroads, grade crossings, bridges, lifelines, "
-    "NID and DWR dams, DWR dam lines, NHD flowlines and waterbodies, FEMA flood zones and counties "
-    "(the offline pack in the suite data folder when it covers the dam, else your files in dwr/ / "
-    "hifld/, else the chosen server). The dam's NID / DWR values (height, storage, county, class, "
+    "NID and DWR dams, DWR dam lines, 3DHP flowlines and waterbodies, FEMA flood zones and counties "
+    "(the offline pack when it covers the dam - Data source in Suite data and servers, where the "
+    "pack location is chosen - else your files in dwr/ / hifld/, else the chosen server; with "
+    "Data source = Download the pack is not read). The dam's NID / DWR values (height, storage, county, class, "
     "location) are offered to dam.json; a value already there is not replaced. Afterwards every "
     "tool of the three ND dam plugins fills its EMPTY inputs from the dam folder; your own choices "
     "are never replaced. Leave Dam ID empty for every dam of the Dams folder. Data already there "
@@ -314,7 +315,7 @@ def get_data_algorithm(base, group="", group_id=""):
                     "No dam folder: give the Dams folder and the Dam ID, or the dam folder (a "
                     "folder holding dam.json).")
             data = _text(self, parameters, "DATA_FOLDER", context) or SD.data_folder()
-            if not data:
+            if not data and not SD.active_pack(""):
                 raise QgsProcessingException(
                     "No suite data folder: choose one here or in Plugins > ND Dam Suite > Suite "
                     "data and servers.")
@@ -328,7 +329,11 @@ def get_data_algorithm(base, group="", group_id=""):
                 over = bool(self.parameterAsBoolean(parameters, "OVERWRITE", context))
             except Exception:                                    # noqa
                 over = bool(parameters.get("OVERWRITE"))
-            pack = SD.find_pack(data)
+            pack = SD.active_pack(data or "")                  # 1.10.0: "" in Download mode
+            if feedback is not None:
+                feedback.pushInfo("Data source: {}{}".format(
+                    SD.SOURCE_LABELS.get(SD.data_source(), SD.data_source()),
+                    " ({})".format(pack) if pack else ""))
             make = None
             try:
                 from . import suite_data as _UI                  # ND Dam Hazard's suite export

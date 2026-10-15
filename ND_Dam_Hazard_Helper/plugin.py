@@ -213,6 +213,7 @@ class NDdamHazardHelperPlugin(QObject):
         self.dialog.show()
         self.dialog.raise_()
         self.dialog.activateWindow()
+        return self.dialog                  # 1.18: the suite hand-offs point the window at a dam
 
     def unload(self):
         """

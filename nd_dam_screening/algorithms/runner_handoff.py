@@ -4,16 +4,20 @@ import os
 
 from qgis import processing
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
+                       QgsProcessingParameterBoolean,
                        QgsProcessingParameterEnum, QgsProcessingParameterRasterLayer,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
+                       QgsProcessingParameterFileDestination,
                        QgsProcessingParameterNumber, QgsProcessingParameterField,
                        QgsProcessingParameterString, QgsProcessingParameterFeatureSink,
+                       QgsProcessingOutputNumber,
                        QgsFeature, QgsProcessingException, QgsApplication,
                        QgsProcessingMultiStepFeedback, QgsWkbTypes)
 
 from ..core import handoff as ho, hazard as hz
 from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri
+from ..core import comparison as cmp
 from ..damsuite import versions as vs
 from ..damsuite import damdata as dd
 from . import _common as cm
@@ -80,8 +84,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "TM 11 charts); the chart method needs digitized and checked charts.\n"
                 "OUTPUT: the input dams plus rn_status (done / failed: message / skipped: reason), "
                 "rn_folder, rn_class, rn_border, rn_gaps, scr_class (the screening class, hz_class), "
-                "rn_agree (agree / runner higher / runner lower) and rn_inputs (what was sent). A dam "
-                "that fails is logged and the others continue. Runner runs take minutes to hours per "
+                "rn_agree (agree / runner higher / runner lower) and rn_inputs (what was sent), plus "
+                "the counts DONE / FAILED / SKIPPED (0.28.3). A dam "
+                "that fails is logged and the others continue, and the tool then FAILS at the end so "
+                "qgis_process exits non-zero (FAIL_ON_ERROR=false reports the counts instead). Runner runs take minutes to hours per "
                 "dam; the runner needs LISFLOOD-FP set up in its own provider settings.\n"
                 "DAM RECORD (v0.9): before each run, <Dams folder>/<dam ID>/dam.json (the suite's "
                 "shared dam record) gets the values sent to the runner - dam_id, name, nid_id, DWR "
@@ -164,7 +170,18 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                                minValue=hz.MIN_WET_M, optional=True)))
         P(QgsProcessingParameterFile("CHART_FILE", "Digitized ACER TM 11 chart file (.json; empty = the "
                                      "runner's own copy)", extension="json", optional=True))
+        # 0.28.3: without this a hand-off in which every dam failed still ended qgis_process
+        # with exit code 0, so a script could not tell it from a clean batch
+        P(QgsProcessingParameterBoolean("FAIL_ON_ERROR", "Fail the tool when a dam fails (so "
+                                        "qgis_process exits non-zero; the other dams still run)",
+                                        defaultValue=True))
         P(QgsProcessingParameterFeatureSink("OUT", "Dams with runner results", SRC_POINT))
+        P(QgsProcessingParameterFileDestination(
+            "OUT_COMPARISON", "Runner vs Screener comparison (HTML)",
+            fileFilter="HTML (*.html)", optional=True))
+        for k, d in (("DONE", "Dams the runner finished"), ("FAILED", "Dams that failed"),
+                     ("SKIPPED", "Dams not sent")):
+            self.addOutput(QgsProcessingOutputNumber(k, d))             # 0.28.3
 
     # ------------------------------------------------------------------
     def processAlgorithm(self, params, context, feedback):
@@ -290,6 +307,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         steps = QgsProcessingMultiStepFeedback(2 * n_send, feedback)
         feedback.pushInfo("{} of {} dams to send to ND Dam Breach Runner ({}); hydrograph: {}".format(
             sum(1 for c in chosen if c[2]), len(feats), ho.SELECT_LABELS[mode], ho.HYDRO_LABELS[hydro]))
+        comp_path = self.parameterAsFileOutput(params, "OUT_COMPARISON", context) or ""
+        comp_rows = []
         counts, agree = {"done": 0, "failed": 0, "skipped": 0}, {}
         k = 0
         for f, attrs, ok, why in chosen:
@@ -317,10 +336,13 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         user_csv, peak = ho.write_runner_hydrograph(str(src),
                                                                     os.path.join(dfold, ho.RUNNER_HYDRO_CSV))
                         feedback.pushInfo("tool-5 hydrograph -> {} (peak {:,.0f} cfs)".format(user_csv, peak))
-                    area = None
+                    area, area_note = None, ""
                     if curves:
-                        area = ho.area_at_top_m2(os.path.join(curves, f"curve_{dam_id}.csv"),
-                                                 cm.fval(f, names, "est_crest_m", float))
+                        # 0.28.3: no area from a curve that spans much less than the dam height
+                        area, area_note = ho.area_for_runner(
+                            os.path.join(curves, f"curve_{dam_id}.csv"),
+                            cm.fval(f, names, "est_crest_m", float),
+                            cm.fval(f, names, "height_m", float))
                     dem = params.get("DEM")
                     if not dem_given:           # 0.16.0: the dam folder's DEM
                         dem = dd.dam_data(dfold).get("dem")
@@ -330,6 +352,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         feedback.pushInfo("DEM from the dam folder: {}".format(dem))
                     p, notes = ho.rundam_params(attrs, bmap[dam_id], cm.ALBERS, dem, folder,
                                                 cell, user_csv, area, user_idx)
+                    if area_note:
+                        notes.append(area_note)
                     for key, v in receptors.items():
                         if v not in (None, ""):
                             p[key] = v
@@ -364,6 +388,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                     agree[res["rn_agree"]] = agree.get(res["rn_agree"], 0) + 1
                     feedback.pushInfo("dam {}: runner {} / screening {} ({})".format(
                         dam_id, info["class"], scr or "-", res["rn_agree"]))
+                    # item 8: collect comparison row after a successful run
+                    try:
+                        manifest = cmp.read_runner_manifest(dfold)
+                        comp_rows.append(cmp.build_row(dam_id, attrs, res, manifest))
+                    except Exception:                            # noqa
+                        pass
                 except Exception as e:          # one dam must not stop the batch
                     msg = str(e).strip() or type(e).__name__
                     res["rn_status"] = hz.limit_text(["failed: " + msg.replace("\n", " ")])
@@ -378,4 +408,25 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         feedback.pushInfo("runner hand-off: " + ", ".join(f"{k_} {v}" for k_, v in counts.items() if v))
         if agree:
             feedback.pushInfo("runner vs screening: " + ", ".join(f"{k_} {v}" for k_, v in sorted(agree.items())))
-        return {"OUT": dest}
+        # item 8: write Runner vs Screener comparison sheet
+        html_out = ""
+        if comp_rows:
+            try:
+                if not comp_path or comp_path.upper() == "TEMPORARY_OUTPUT":
+                    comp_path = os.path.join(folder, "runner_vs_screener.html")
+                cmp.write_comparison_html(comp_path, comp_rows)
+                html_out = comp_path
+                feedback.pushInfo("comparison: {}".format(comp_path))
+            except Exception as e:                               # noqa
+                feedback.reportError("comparison not written: {}".format(e))
+        out = {"OUT": dest, "OUT_COMPARISON": html_out, "DONE": counts.get("done", 0),
+               "FAILED": counts.get("failed", 0), "SKIPPED": counts.get("skipped", 0)}
+        if counts.get("failed") and self.parameterAsBool(params, "FAIL_ON_ERROR", context):
+            # 0.28.3: an exception is what makes qgis_process exit non-zero; everything above is
+            # written first, so the dams that did run keep their results and their folders
+            raise QgsProcessingException(
+                "{} of {} dams failed in the hand-off to ND Dam Breach Runner ({} done, {} "
+                "skipped); rn_status says why for each. (FAIL_ON_ERROR=false reports the counts "
+                "without failing.)".format(counts["failed"], len(chosen), counts.get("done", 0),
+                                           counts.get("skipped", 0)))
+        return out

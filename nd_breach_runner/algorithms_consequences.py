@@ -116,6 +116,13 @@ class ConsequencesAlgorithm(_ToolBase):
                    ext="csv")
         self._file("FATALITY_CSV", "Fatality rate table CSV (severity, none, short, some, "
                    "adequate); replaces the built-in approximate default", ext="csv")
+        # 3.20.0 (feature 12): the SIGNED-OFF rate table of the suite's own PAR / loss-of-life
+        # roll-up (core/lifeloss.py, damsuite.loss). Not the same thing as FATALITY_CSV above:
+        # that one feeds this tool's own estimate, this one feeds the PAR section, which
+        # reports no loss of life at all until an engineer has signed a table.
+        self._file("RATE_FILE", "Signed-off fatality rate table for the population-at-risk "
+                   "section (empty = the plugin's core/fatality_rates.json; sign one with "
+                   "'Sign off the fatality rate table')", ext="json")
         d = cons.ConsequenceParams()
         self._num("PERSONS_PER_UNIT", "Persons per residential unit (when only a unit count "
                   "is given)", d.persons_per_unit, minimum=0)
@@ -274,6 +281,36 @@ class ConsequencesAlgorithm(_ToolBase):
             if v is not None:
                 aadt[ident] = max(aadt.get(ident, 0.0), v)
 
+    @staticmethod
+    def _report_par(summary, feedback):
+        """3.20.0: the PAR / loss-of-life and crossing lines in the log. A failure inside the
+        addition is reported as a note, never as the loss of the estimate above it."""
+        par = summary.get("par") or {}
+        if par.get("problem"):
+            feedback.pushWarning("Check: the population-at-risk section could not be worked "
+                                 "out ({}); the estimate above is unaffected.".format(
+                                     par["problem"]))
+        else:
+            night, day = par.get("night") or {}, par.get("day") or {}
+            feedback.pushInfo("Population at risk: night {:.0f}, day {:.0f} (severity and "
+                              "warning-time splits in the report)".format(
+                                  night.get("par") or 0.0, day.get("par") or 0.0))
+            lol = par.get("loss_of_life")
+            if lol:
+                feedback.pushInfo("Loss of life from the signed-off rate table: night "
+                                  "{:.2f}, day {:.2f}".format(lol.get("night") or 0.0,
+                                                              lol.get("day") or 0.0))
+            else:
+                feedback.pushWarning("Check: " + str(par.get("rates_text") or
+                                                     "loss of life is not estimated"))
+        cross = summary.get("crossings") or {}
+        if cross.get("problem"):
+            feedback.pushWarning("Check: the road and railroad crossing table could not be "
+                                 "worked out ({}).".format(cross["problem"]))
+        elif cross.get("crossings"):
+            feedback.pushInfo("Road and railroad crossings wet: {} ({} flagged for "
+                              "closure)".format(cross["crossings"], cross.get("closed", 0)))
+
     def processAlgorithm(self, parameters, context, feedback):
         folder = self.parameterAsFile(parameters, "DAM_FOLDER", context)
         params = self._params(parameters, context)
@@ -302,12 +339,27 @@ class ConsequencesAlgorithm(_ToolBase):
         rec, aadt = impmod.Receptors(), {}
         self._read_lines(parameters, context, grid, crs, "ROADS", impmod.KIND_ROAD, rec, aadt)
         self._read_lines(parameters, context, grid, crs, "RAIL", impmod.KIND_RAIL, rec, aadt)
+        rate_table = None
+        rate_path = self._fileparam(parameters, "RATE_FILE", context)
+        if rate_path:
+            from .core import lifeloss
+            rate_table, rate_problem = lifeloss.load(rate_path)
+            if rate_problem:
+                feedback.reportError(rate_problem, fatalError=False)
+        sim_end = None
+        try:
+            from .core import compareruns
+            sim_end = compareruns.run_info(folder).get("sim_time_hr")
+        except Exception:                                        # noqa - an optional extra
+            sim_end = None
         try:
             rows, summary = cons.assess(structs, grid, with_f, base_f, params, curves, table,
                                         "us", rec if len(rec) else None, aadt or None,
-                                        fatality_source=table_src)
+                                        fatality_source=table_src, rate_table=rate_table,
+                                        sim_end_hr=sim_end)
         except ValueError as e:
             raise QgsProcessingException(str(e))
+        self._report_par(summary, feedback)
         summary["notes"] = notes + summary["notes"]
         epsg = None
         try:
@@ -329,7 +381,7 @@ class ConsequencesAlgorithm(_ToolBase):
                        wb["par"], inc["par"], wb["estimated_lol"], inc["estimated_lol"]))
         feedback.pushInfo(msg)
         for n in summary["notes"]:
-            feedback.reportError("Check: " + n, fatalError=False)
+            feedback.pushWarning("Check: " + n)
         if paths.get("geojson"):
             self.load(context, paths["geojson"], "Consequences: affected structures")
         return {"CSV": paths["csv"], "REPORT": paths["markdown"],

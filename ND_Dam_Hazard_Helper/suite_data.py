@@ -3,6 +3,8 @@
 0.16.0) - byte-identical in the three plugins, opened from Plugins > ND Dam Suite.
 
   * the suite data folder and the Dams folder, set once for the three plugins (damsuite.suitedata)
+  * 1.10.0: the data source - the offline pack (and where it is) or download from the servers -
+    shared by the three plugins
   * what the data folder holds, and "Update data" (the statewide offline pack, built by ND Dam
     Hazard's build_nd_pack when that plugin is installed; only stale data sets are fetched again)
   * the servers: for every kind of data the suite needs, which WMS / WMTS / WCS / ArcGIS REST
@@ -23,7 +25,7 @@ import traceback
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QFileDialog, QMessageBox, QComboBox, QCheckBox, QTextEdit, QGroupBox,
-    QInputDialog, QDoubleSpinBox, QFormLayout,
+    QInputDialog, QDoubleSpinBox, QFormLayout, QRadioButton, QButtonGroup,
 )
 
 from .damsuite import damdata as DD
@@ -122,9 +124,15 @@ class SuiteDataDialog(QDialog):
         self.tasks = []
         self.setWindowTitle(TITLE)
         self.setMinimumWidth(920)
+        try:
+            from qgis.PyQt.QtWidgets import QApplication
+            self.setMaximumHeight(max(600, QApplication.primaryScreen().geometry().height() - 80))
+        except Exception:
+            pass
         self._build()
         self.data_edit.setText(SD.data_folder())
         self.dams_edit.setText(SD.dams_folder())
+        self._load_source()
         self.refresh()
         if dam_folder:
             self.select_dam(dam_folder)
@@ -162,6 +170,53 @@ class SuiteDataDialog(QDialog):
             "folder: the three plugins open on it).", self._browse_dams)
         self.dams_edit.editingFinished.connect(self._dams_changed)
 
+        # 1.10.0: where the data comes from (the three plugins share it)
+        sbox0 = QGroupBox("Data source (shared by the three plugins)")
+        s0 = QVBoxLayout()
+        row = QHBoxLayout()
+        self.source_pack_radio = QRadioButton("Offline pack")
+        self.source_pack_radio.setToolTip("Every data set the pack holds is read from it (no "
+                                          "internet needed for those).")
+        self.source_download_radio = QRadioButton("Download from the servers")
+        self.source_download_radio.setToolTip("The pack is not read: the data sets come from the "
+                                              "servers listed below.")
+        self._source_group = QButtonGroup(self)
+        self._source_group.addButton(self.source_pack_radio)
+        self._source_group.addButton(self.source_download_radio)
+        row.addWidget(self.source_pack_radio)
+        row.addWidget(self.source_download_radio)
+        row.addStretch(1)
+        s0.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Pack location:"))
+        self.pack_edit = QLineEdit()
+        self.pack_edit.setPlaceholderText("the ND_Dam_Suite_Pack folder (empty = the pack in the "
+                                          "suite data folder)")
+        self.pack_edit.setToolTip("The offline pack: a folder with one GeoPackage per layer and "
+                                  "LAYERS.txt (or an older nd_offline_pack.zip).")
+        self.pack_edit.editingFinished.connect(self._pack_changed)
+        row.addWidget(self.pack_edit, 1)
+        for text, tip, slot in (
+                ("Folder...", "Pick the pack folder (the one holding manifest.json and "
+                 "LAYERS.txt).", self._browse_pack),
+                ("Zip...", "Pick an older one-file pack (nd_offline_pack.zip).",
+                 self._browse_pack_zip),
+                ("Open LAYERS.txt", "The list of the pack's layers and their sources.",
+                 self._open_layers_txt)):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _c=False, f=slot: f())
+            row.addWidget(b)
+            if text == "Open LAYERS.txt":
+                self.layers_btn = b
+            elif text == "Folder...":
+                self.pack_folder_btn = b
+            else:
+                self.pack_zip_btn = b
+        s0.addLayout(row)
+        sbox0.setLayout(s0)
+        lay.addWidget(sbox0)
+
         box = QGroupBox("What the data folder holds")
         bl = QVBoxLayout()
         self.status_text = QTextEdit()
@@ -169,17 +224,38 @@ class SuiteDataDialog(QDialog):
         self.status_text.setMaximumHeight(130)
         bl.addWidget(self.status_text)
         row = QHBoxLayout()
-        self.update_btn = QPushButton("Update data...")
-        self.update_btn.setToolTip("Build the statewide offline pack in the data folder, or fetch "
-                                   "again only its data sets that are old or incomplete (needs ND "
-                                   "Dam Hazard installed and internet access; it takes a long time "
-                                   "the first time, and QGIS stays usable).")
+        self.update_btn = QPushButton("Build / update the offline pack...")
+        self.update_btn.setToolTip("Build the statewide offline pack with every layer the plugins "
+                                   "need (USGS 3DHP streams and waterbodies, aquatic barrier dams "
+                                   "and crossings, buildings, roads, rail, lifelines, dams, land "
+                                   "cover and the DWR / HIFLD files), or add only what is missing, "
+                                   "old or incomplete (needs ND Dam Hazard installed and internet "
+                                   "access; it takes a long time the first time, and QGIS stays "
+                                   "usable).")
         self.update_btn.clicked.connect(lambda _c=False: self.update_data())
+        self.layer_files_edit = QLineEdit()
+        self.layer_files_edit.setPlaceholderText("optional: another folder with the DWR / HIFLD "
+                                                 "files (dwr/ and hifld/ of the data folder are "
+                                                 "searched anyway)")
+        self.layer_files_edit.setToolTip(
+            "The DWR exports (dams, dam lines, dugouts, dugout polygons, unknown structures) and "
+            "the HIFLD layers (fire / EMS stations, emergency operations centers, law "
+            "enforcement, wastewater plants) have no public service: the build writes the files it "
+            "finds here into the pack, recognised by their names.")
+        self.layer_files_edit.editingFinished.connect(self._layer_files_changed)
+        self.layer_files_btn = QPushButton("Layer files...")
+        self.layer_files_btn.setToolTip("Pick the folder with the DWR / HIFLD layer files.")
+        self.layer_files_btn.clicked.connect(lambda _c=False: self._browse_layer_files())
         self.open_btn = QPushButton("Open the folder")
         self.open_btn.clicked.connect(lambda _c=False: self._open(self.data_edit.text()))
         row.addWidget(self.update_btn)
         row.addWidget(self.open_btn)
         row.addStretch(1)
+        bl.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("DWR / HIFLD files:"))
+        row.addWidget(self.layer_files_edit, 1)
+        row.addWidget(self.layer_files_btn)
         bl.addLayout(row)
         box.setLayout(bl)
         lay.addWidget(box)
@@ -311,11 +387,92 @@ class SuiteDataDialog(QDialog):
         SD.set_dams_folder(self.dams_edit.text().strip())
         self.refresh_dams()
 
+    # ------------------------------------------------------------ data source --
+    def _load_source(self):
+        download = SD.data_source() == SD.SOURCE_DOWNLOAD
+        for w in (self.source_pack_radio, self.source_download_radio):
+            w.blockSignals(True)
+        self.source_pack_radio.setChecked(not download)
+        self.source_download_radio.setChecked(download)
+        for w in (self.source_pack_radio, self.source_download_radio):
+            w.blockSignals(False)
+        try:
+            self.source_pack_radio.toggled.connect(self._source_changed)
+        except Exception:                                        # noqa
+            pass
+        self.pack_edit.setText(SD.pack_location())
+        try:
+            self.layer_files_edit.setText(SD.layer_files_folder())
+        except Exception:                                        # noqa
+            pass
+        self._enable_pack()
+
+    def _enable_pack(self):
+        on = self.source_pack_radio.isChecked()
+        for w in (self.pack_edit, self.pack_folder_btn, self.pack_zip_btn):
+            w.setEnabled(on)
+
+    def _source_changed(self, *a):
+        SD.set_data_source(SD.SOURCE_PACK if self.source_pack_radio.isChecked() else
+                           SD.SOURCE_DOWNLOAD)
+        self.log("Data source: {}".format(SD.SOURCE_LABELS[SD.data_source()]))
+        self._enable_pack()
+        self.refresh()
+
+    def _pack_changed(self, *a):
+        path = self.pack_edit.text().strip()
+        if path == SD.pack_location():
+            return
+        SD.set_pack_location(path)
+        self.refresh()
+
+    def _layer_files_changed(self, *a):
+        SD.set_layer_files_folder(self.layer_files_edit.text().strip())
+
+    def _browse_layer_files(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Folder with the DWR / HIFLD layer files",
+            self.layer_files_edit.text().strip() or self.data_edit.text().strip() or
+            os.path.expanduser("~"))
+        if d:
+            self.layer_files_edit.setText(d)
+            self._layer_files_changed()
+
+    def _browse_pack(self):
+        d = QFileDialog.getExistingDirectory(self, "Offline pack folder",
+                                             self.pack_edit.text().strip() or
+                                             self.data_edit.text().strip() or os.path.expanduser("~"))
+        if d:
+            self.pack_edit.setText(d)
+            self._pack_changed()
+
+    def _browse_pack_zip(self):
+        p, _f = QFileDialog.getOpenFileName(self, "Offline pack (older one-file pack)",
+                                            self.data_edit.text().strip() or os.path.expanduser("~"),
+                                            "Offline pack (*.zip *.sqlite);;All files (*)")
+        if p:
+            self.pack_edit.setText(p)
+            self._pack_changed()
+
+    def _open_layers_txt(self):
+        pack = SD.active_pack(self.data_edit.text().strip()) if \
+            SD.data_source() == SD.SOURCE_PACK else (SD.pack_location() or
+                                                     SD.find_pack(self.data_edit.text().strip()))
+        p = os.path.join(pack, "LAYERS.txt") if pack and os.path.isdir(pack) else ""
+        if not p or not os.path.isfile(p):
+            QMessageBox.information(self, TITLE, "No LAYERS.txt: the pack is not a folder pack "
+                                                 "(one GeoPackage per layer), or no pack is "
+                                                 "chosen.")
+            return
+        from qgis.PyQt.QtCore import QUrl
+        from qgis.PyQt.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+
     # ---------------------------------------------------------------- refresh --
     def refresh(self):
         st = SD.status(self.data_edit.text().strip())
         self.status_text.setPlainText("\n".join(SD.describe(st)))
-        self.update_btn.setEnabled(bool(st.get("exists")))
+        self.update_btn.setEnabled(bool(st.get("exists")) or bool(SD.pack_location()))
         self.refresh_servers()
         self.refresh_dams()
 
@@ -533,35 +690,56 @@ class SuiteDataDialog(QDialog):
         if bnp is None:
             QMessageBox.information(self, TITLE, "Building the offline pack needs ND Dam Hazard "
                                                  "Classification Helper installed. You can also copy "
-                                                 "an nd_offline_pack.zip into the data folder.")
+                                                 "a pack folder (ND_Dam_Suite_Pack) here and choose "
+                                                 "it as the pack location.")
             return None
-        pack = SD.find_pack(folder) or os.path.join(folder, SD.PACK_NAMES[0])
+        # 1.10.0: the pack being used (its location, or the data folder's); a new pack is a
+        # folder (one GeoPackage per layer) in the data folder
+        pack = SD.active_pack(folder) or SD.pack_location() or \
+            os.path.join(folder, SD.PACK_NAMES[0])
         st = SD.status(folder)
         stale = list(st.get("pack_stale") or [])
         if st.get("pack"):
             # data sets this ND Dam Hazard downloads that the pack does not hold yet (new in a
             # release, or a server chosen here since the pack was built)
             have = {t[0] for t in st.get("pack_sets") or []}
+            try:                                  # 1.19.0: the land-cover raster counts too
+                from .damsuite import offline_pack as _OP
+                have |= set(((_OP.read_manifest(st["pack"]) or {}).get("rasters")) or {})
+            except Exception:                                    # noqa
+                pass
             try:
                 stale += [t[0] for t in bnp.datasets() if t[0] not in have and t[0] not in stale]
             except Exception:                                    # noqa
                 pass
+        try:                     # 1.10.0: only what the builder fetches (not the DWR / HIFLD
+            known = {t[0] for t in bnp.datasets()}      # files added to a pack from files)
+            stale = [n for n in stale if n in known]
+        except Exception:                                        # noqa
+            pass
         if st.get("pack") and not stale:
             msg = "Every data set of the pack is current. Fetch everything again anyway?"
             only, refresh = None, True
         elif st.get("pack"):
-            msg = "Fetch the {} data set(s) that are missing, old or incomplete:\n{}?".format(
-                len(stale), ", ".join(stale))
+            msg = "Build the {} layer(s) that are missing, old or incomplete:\n{}?\n\nThe " \
+                  "DWR / HIFLD layers come from files (the data folder's dwr/ and hifld/, or the " \
+                  "DWR / HIFLD files folder); a layer with no file is listed as not in the " \
+                  "pack.".format(len(stale), ", ".join(stale))
             only, refresh = ",".join(stale), True
         else:
-            msg = "Download every data set for all of North Dakota into\n{}\n\nThis needs internet " \
-                  "access and takes a long time the first time (an hour or more; a large file). " \
-                  "QGIS stays usable. Start?".format(pack)
+            msg = "Build the offline pack for all of North Dakota into\n{}\n\nEvery layer the " \
+                  "plugins need: buildings, roads, rail, lifelines, dams, USGS 3DHP streams and " \
+                  "waterbodies, aquatic barrier dams and crossings, land cover, and the DWR / " \
+                  "HIFLD layers from the files in the data folder's dwr/ and hifld/. (Put the National Map's 3DHP " \
+                  "national file in 3dhp/ and the streams are cut out of it; the web service is slow.)\n\nThis " \
+                  "needs internet access and takes a long time the first time (an hour or " \
+                  "more; a large folder). QGIS stays usable. Start?".format(pack)
             only, refresh = None, False
         if QMessageBox.question(self, TITLE, msg) != _YES:
             return None
-        if not pack.lower().endswith(".zip"):
-            pack = os.path.join(folder, SD.PACK_NAMES[0])
+        from .damsuite import gpkgpack as GP
+        if os.path.isdir(pack) and not GP.is_gpkg_pack(pack):
+            pack = os.path.join(folder, SD.PACK_NAMES[0])      # an unpacked one-file pack
         self.update_btn.setEnabled(False)
         self.log("Updating the offline pack: {}".format(pack))
 
@@ -613,7 +791,9 @@ class SuiteDataDialog(QDialog):
                                                  "everything is fetched again")) != _YES:
             return None
         cat = self.catalog
-        pack = SD.find_pack(data)
+        pack = SD.active_pack(data)                       # 1.10.0: "" in Download mode
+        self.log("Data source: {}{}".format(SD.SOURCE_LABELS[SD.data_source()],
+                                            " ({})".format(pack) if pack else ""))
         make = make_package_fn(pack)
         opts = dict(data_folder=data, catalog=cat, http_get=qgis_http_get, make_package=make,
                     vector_half_mi=self.vec_spin.value(), dem_half_mi=self.dem_spin.value(),

@@ -43,8 +43,14 @@ def _run_dam_folder(alg, parameters, context=None):
 # (empty = none) in every run tool, so dam.json's normal pool may fill it. PONDS is NOT filled:
 # NHD waterbodies include the dam's own reservoir and every pond is lowered and started full -
 # a modelling choice the engineer makes in the tool, not a data default.
+# 3.13.0: CREST_LINE from the DWR dam lines (the run picks this dam's line by its DWR structure
+# number, else the nearest within 500 m, and moves the dam point onto it).
+# 3.20.0: CROSSINGS takes the pack's "bridges" (NBI bridges and culverts, points). Unlike
+# STRUCTURES it is safe to fill: a crossing is MEASURED against the model's embankments and
+# reported, and is only cut as a gap when the engineer turns CROSSING_GAPS on.
 _RUN_MAPPING = {"DEM": "dem", "RECEPTOR_POINTS": "structures", "RECEPTOR_ROADS": "roads",
-                "RECEPTOR_RAIL": "rail", "NLCD_RASTER": "nlcd"}
+                "RECEPTOR_RAIL": "rail", "NLCD_RASTER": "nlcd", "CREST_LINE": "dwr_dam_lines",
+                "CROSSINGS": "bridges"}
 _RUN = (_RUN_MAPPING, {"NORMAL_POOL_FT": "normal_pool_ft"}, ("DEM",), _run_dam_folder)
 DATA_INPUTS = {
     "rundam": _RUN, "sensitivity": _RUN, "estimate": _RUN, "nested": _RUN, "probabilistic": _RUN,
@@ -53,6 +59,8 @@ DATA_INPUTS = {
                      ("STRUCTURES",), None),
     "ndhazardclass": ({"STRUCTURES": "structures", "ROADS": "roads", "RAIL": "rail",
                        "LIFELINES": "lifelines", "DOWNSTREAM_DAMS": "nid_dams"}, {}, (), None),
+    # 3.20.0 (feature 13): the road and railroad crossing table reads the same lines
+    "crossings": ({"ROADS": "roads", "RAIL": "rail"}, {}, (), None),
 }
 
 

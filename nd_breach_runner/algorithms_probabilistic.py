@@ -134,7 +134,7 @@ class ProbabilisticAlgorithm(SensitivityAlgorithm):
         except (ModelError, brmod.BreachInputError, ValueError) as e:
             raise QgsProcessingException(str(e))
         for w in out.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         for f in out.flags:
             feedback.pushInfo(f)
         for n, p in out.rasters.items():

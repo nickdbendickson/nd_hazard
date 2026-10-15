@@ -25,7 +25,8 @@ SCEN_FIELDS = [("start_m", FT_DOUBLE), ("vw_m3", FT_DOUBLE),
                ("qp_tr60", FT_DOUBLE), ("rel_m3", FT_DOUBLE),
                ("csv", FT_STRING)]
 BASE_FIELDS = [("base_m", FT_DOUBLE), ("store_af", FT_DOUBLE),
-               ("brch_eq", FT_STRING), ("brch_src", FT_STRING),
+               ("brch_eq", FT_STRING), ("brch_mode", FT_STRING),   # 0.28.0: piping / overtopping
+               ("brch_src", FT_STRING),
                ("simplified", FT_STRING), ("flow_az", FT_DOUBLE),
                ("dir_conf", FT_STRING), ("brch_conf", FT_STRING),
                ("brch_notes", FT_STRING)]
@@ -257,7 +258,10 @@ class BreachHydrograph(QgsProcessingAlgorithm):
                     notes += [f"{pf}: {n}" for n in r["notes"]]
                 td = res["td"]
                 vw = td.get("vw_m3")
-                extra.update({"base_m": base, "brch_eq": method,
+                # 0.28.0: the mode as a field of its own. It only ever appeared inside the
+                # source text, and ND Dam Breach Runner needs it (with brch_eq) to start a
+                # detailed run from the same breach the screening used (core/damrecord_io).
+                extra.update({"base_m": base, "brch_eq": method, "brch_mode": mode,
                               "brch_src": td.get("src_text") or f"equation {method}",
                               "store_af": (vw / AF_M3) if vw else None,
                               "simplified": ("YES" if vw and vw / AF_M3 < 200 else "no") if vw else None})

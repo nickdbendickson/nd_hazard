@@ -15,6 +15,7 @@ that step as not done.
 import csv
 import json
 import os
+import time as _time
 
 PROVIDER = "nddam"
 
@@ -163,8 +164,15 @@ NEEDS_LAYER = {"3": ("waterbodies",), "4": ("dam_lines",), "8": ("structures",),
 # defaults of the settings the window keeps (saved with the QGIS project)
 DEFAULT_SETTINGS = {
     "work": "", "package": "",
+    "counties": "",           # 0.21.1: the county (comma-separated names; "" = all of North Dakota)
     "terrain_source": 0,      # tool 2: 0 USGS 3DEP, 1 local DEM folder
-    "larger_clips": 0,        # tool 7: 0 cached clips only, 1 3DEP, 2 local
+    # 0.28.0: tool 7: 0 cached clips only, 1 3DEP, 2 local, 3 follow the terrain source (the
+    # default). "Cached clips only" was the default and it truncated floods in silence: a
+    # 3,937 ac-ft dam ran its flood off a 3 km clip and screened Medium with 0 buildings, where
+    # the same dam with clip growth allowed screened High with 27 buildings. A clip that cannot
+    # grow is a flood that stops at its edge, so the default now follows the terrain the run
+    # already has (larger_clips_index).
+    "larger_clips": 3,
     "local_dem": "", "engine": 2, "exe": "", "scenario": 0, "workers": 0,   # engine 2 = built-in (0.13: no install)
     "crit": 0, "chart_file": "", "runner_dem": "", "dams_folder": "", "clip": "",
     # 0.11: tool 7 no-breach baseline / buildings, tool 8 incremental, tools 11 / 13 inputs
@@ -173,7 +181,20 @@ DEFAULT_SETTINGS = {
     "building_raise_ft": 10.0, "building_n": 0.15,
     "incremental": False,
     # step 2 writes the DEM; the flood grid is its own size (0 = automatic)
-    "dem_cell_ft": 3.3, "grid_ft": 33.0, "simh": 12.0, "simmax": 96.0,       # 0.18.0: feet (was dem_cell / grid_m in m)
+    # 0.28.0: dem_cell_ft follows the SOURCE cell (3DEP and the suite's DEM downloads are 10 m =
+    # 32.8 ft). At 3.3 ft it resampled a 10 m source to 1 m - 9 million cells for a 3 km box that
+    # step 7 then ran at 50 m. A local 1 m LiDAR folder is finer than this: set it to 3.3 there.
+    "dem_cell_ft": 32.8, "grid_ft": 33.0, "simh": 12.0, "simmax": 96.0,      # 0.18.0: feet (was dem_cell / grid_m in m)
+    # 0.28.0: the resolution preset of step 7 (0 Quick 50 m, 1 Standard 20 m, 2 Detailed 10 m,
+    # 3 Custom = the Grid size box). The window never passed it, so every run took QGIS's own
+    # default - Quick - and the Grid size box decided nothing (core/runplan.effective_cell).
+    "preset": 0,
+    # 0.28.0: step 7 runs top of dam AND sunny day and the worse class governs (core/scenarios).
+    # Two settings, not one, because the honest default differs: a one-dam run turns a minute into
+    # two, a county turns hours into days.
+    "both_scenarios": False,  # a county run
+    "both_one_dam": True,     # "Run one dam..." / "Run selected dams..."
+    "skip_done": True,        # 0.28.0: step 7 skips dams that already have a result (core/resume)
     "ref_folder": "",         # tool 11: reference rasters (per-dam sub-folders / files by dam ID)
     "ref_units": 0,           # tool 11: 0 US (ft, ft/s, h), 1 metric
     "old_inventory": "",      # tool 13: the previous tool-1 layer / DWR export
@@ -186,8 +207,15 @@ DEFAULT_SETTINGS = {
     "dugout_records": "", "wb_id": "", "pond_max_ac": "",
     "wb_search_ft": "",       # tool 3 waterbody search distance (empty = the tool's 500 ft)
     # 0.20.0: tool 7 enlarges the clip before the flood run when the downstream trace reaches its
-    # edge only when asked (PREGROW); otherwise the clip grows after a run that reaches the edge
-    "pregrow": False,
+    # edge only when asked (PREGROW); otherwise the clip grows after a run that reaches the edge.
+    # 0.28.0: on by default, with the larger-clip source above - a flood cut off at the clip edge
+    # is the one error that reads as a finished answer. It costs time (a pre-grown clip is larger
+    # before the first run); switch it off for a big county and let the clip grow after a run.
+    "pregrow": True,
+    # 0.28.3: the suite data folder (the offline pack, the dwr/ drop-in folder) for a run that
+    # has no QGIS setting to read - a script, qgis_process, another computer. Empty = the folder
+    # set in Plugins > ND Dam Suite > Suite data and servers (or NDSUITE_DATA).
+    "suite_folder": "",
 }
 LEGACY_METRIC = (("dem_cell", "dem_cell_ft"), ("grid_m", "grid_ft"))     # (old key in m, new key in ft)
 
@@ -210,7 +238,59 @@ def migrate_settings(s):
 # the window's choices that go to the settings file (not paths of this project / computer)
 WINDOW_KEYS = ("terrain_source", "larger_clips", "engine", "scenario", "workers", "crit", "baseline",
                "baseline_cfs", "buildings", "building_raise_ft", "building_n", "incremental", "ref_units",
-               "screen_what", "chain", "dem_cell_ft", "grid_ft", "simh", "simmax")
+               "screen_what", "chain", "dem_cell_ft", "grid_ft", "simh", "simmax",
+               "preset", "pregrow", "both_scenarios", "both_one_dam", "skip_done")   # 0.28.0
+
+# 0.28.0: "Step 7 terrain for larger clips" = follow the terrain source. The tool's own enum is
+# 0 cached clips only / 1 USGS 3DEP / 2 local DEM folder; this fourth value is the window's, and
+# it resolves to whichever terrain the run is already using, so the clip can grow when the flood
+# reaches its edge instead of the flood stopping there.
+CLIPS_CACHE, CLIPS_3DEP, CLIPS_LOCAL, CLIPS_FOLLOW = 0, 1, 2, 3
+
+
+def larger_clips_index(settings):
+    """The TSRC value step 7 gets (0 cache, 1 3DEP, 2 local): the chosen one, or - with "follow
+    the terrain source" - the source step 2 used. A local folder is only followed when one is
+    given; without it 3DEP is the fallback, because a clip that cannot grow is a truncated
+    flood and that is the worse of the two failures."""
+    S = settings or {}
+    try:
+        v = int(S.get("larger_clips") if S.get("larger_clips") is not None else CLIPS_FOLLOW)
+    except (TypeError, ValueError):
+        v = CLIPS_FOLLOW
+    if v != CLIPS_FOLLOW:
+        return v if v in (CLIPS_CACHE, CLIPS_3DEP, CLIPS_LOCAL) else CLIPS_CACHE
+    local = (S.get("local_dem") or "").strip()
+    if int(S.get("terrain_source") or 0) == 1 and local:
+        return CLIPS_LOCAL
+    return CLIPS_3DEP
+
+
+def larger_clips_text(settings):
+    """One line for the log and the preflight: which terrain a larger clip comes from."""
+    i = larger_clips_index(settings)
+    v = (settings or {}).get("larger_clips")
+    try:
+        chosen = int(v if v is not None else CLIPS_FOLLOW)
+    except (TypeError, ValueError):
+        chosen = CLIPS_FOLLOW
+    how = " (follows the terrain source)" if chosen == CLIPS_FOLLOW else ""
+    return {CLIPS_CACHE: "step 7 larger clips: cached clips only - a flood that reaches the clip "
+                         "edge is CUT OFF there and the class can be too low",
+            CLIPS_3DEP: "step 7 larger clips: USGS 3DEP" + how,
+            CLIPS_LOCAL: "step 7 larger clips: your local DEM folder" + how}[i]
+
+
+def dam_count(work):
+    """How many dams the run is about (the step 1 / 18 / 16 table), or None when none is
+    written yet. Used for the time estimate before a run."""
+    from . import runplan as rpl
+    for step in ("18", "1", "16"):
+        p = out(work, step) if work else None
+        n = rpl.count_rows(p) if p else None
+        if n:
+            return n
+    return None
 for _k, _l, _p in LAYER_SLOTS:
     DEFAULT_SETTINGS[_k] = ""
 
@@ -343,6 +423,11 @@ def _from_package(slot, work, settings):
 #       <work>/0_suite_data/<slot>.gpkg (once; written again when the pack is newer);
 #   (c) the files the user dropped into <suite data folder>/dwr/ (DWR dams, DWR dam lines).
 # A layer the user chose is never replaced; the run log says which source was used.
+# 0.22.0: (b) is the suite's offline pack wherever it is (suitedata.active_pack: the pack
+# location of Suite data and servers, else the data folder's pack; a pack folder with one
+# GeoPackage per layer also holds the DWR files). With Data source = Download the pack is not
+# read: (b) becomes the server chosen for that kind of data in Suite data and servers, fetched
+# for the work area into the same <work>/0_suite_data/<slot>.gpkg.
 SLOT_ROLE = {"dwr": "dwr_dams", "nid": "nid_dams", "structures": "structures", "roads": "roads",
              "rail": "rail", "lifelines": "lifelines", "streams": "flowlines",
              "waterbodies": "waterbodies", "dam_lines": "dwr_dam_lines", "nlcd": "nlcd"}
@@ -355,7 +440,10 @@ MODEL_SLOTS = ("streams", "dam_lines", "nlcd")
 ORIGIN_TEXT = {"package": "the step-0 data package",
                "dam folder": "the dam folder's data (Get data for this dam)",
                "suite pack": "the suite offline pack, clipped to the work area",
-               "dwr folder": "your file in the suite data folder's dwr/"}
+               "download": "downloaded for the work area from the server chosen in Suite data "
+                           "and servers (Data source = Download)",
+               "dwr folder": "your file in the suite data folder's dwr/",
+               "nid folder": "your file in the suite data folder's nid/"}
 
 
 def _ds(name):
@@ -369,11 +457,20 @@ def _ds(name):
 
 
 def suite_data_folder():
-    """The suite data folder ("" when none is set). A hook: the tests replace it."""
+    """The suite data folder of THIS COMPUTER ("" when none is set). A hook: the tests replace
+    it. Prefer settings_data_folder(settings), which lets a run carry its own folder."""
     try:
         return _ds("suitedata").data_folder()
     except Exception:                                            # noqa
         return ""
+
+
+def settings_data_folder(settings):
+    """0.28.3: the suite data folder a run should read: the settings' own "suite_folder" when it
+    has one, else this computer's. A headless run (qgis_process, a script, a server with no QGIS
+    profile) can then name the folder in the settings JSON it already passes."""
+    v = ((settings or {}).get("suite_folder") or "").strip()
+    return os.path.expanduser(v) if v else suite_data_folder()
 
 
 def _runner_name(dam_id):
@@ -469,7 +566,11 @@ def pack_names(slot, sets):
         cands = _ds("damdata").PACK_SETS.get(role, ())
     except Exception:                                            # noqa
         cands = ()
-    return [n for n in cands if n in sets]
+    try:
+        dedupe = _ds("hydro3dhp").dedupe          # 1.19.0: 3DHP_ and its old NHD_ name: once
+    except Exception:                                            # noqa
+        dedupe = list
+    return dedupe([n for n in cands if n in sets])
 
 
 def _pad_box(box, half_mi):
@@ -513,10 +614,52 @@ def _gpkg_extent_lonlat(gpkg):
             max(b[3] for b in boxes))
 
 
+def chosen_counties(settings):
+    """0.21.1: the window's counties ([] = all of North Dakota; a name that is not a county is
+    left out)."""
+    from . import nd_counties as cty
+    out = []
+    for part in str((settings or {}).get("counties") or "").split(","):
+        c = cty.normalize(part)
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+COUNTY_CLIP = "0_county.gpkg"
+
+
+def county_clip(work, settings, prepare=False):
+    """0.21.1: '<work>/0_county.gpkg|layername=county', the chosen counties' outlines (step 0's
+    clip), or None with no county chosen. prepare=True writes it (again when the counties
+    changed)."""
+    counties = chosen_counties(settings)
+    if not counties or not work:
+        return None
+    target = os.path.join(work, COUNTY_CLIP)
+    stamp = target + ".json"
+    if prepare:
+        try:
+            with open(stamp) as fh:
+                same = json.load(fh).get("counties") == counties and os.path.isfile(target)
+        except (OSError, ValueError):
+            same = False
+        if not same:
+            from . import nd_counties as cty
+            if os.path.isfile(target):
+                os.remove(target)
+            _ds("damdata").write_features(target, "county", cty.features(counties),
+                                          "ND county outlines (nd_counties.geojson)")
+            with open(stamp, "w") as fh:
+                json.dump({"counties": counties}, fh)
+    return "{}|layername=county".format(target)
+
+
 def work_area(work, settings):
     """lon / lat box the offline pack is clipped to: the dam (dam.json's location) when the run is
     about one dam folder, else the dams of the work folder (1_dams / 18 / 16 / 19), padded by the
-    suite's data distance (damdata.DEFAULT_VECTOR_HALF_MI), else North Dakota."""
+    suite's data distance (damdata.DEFAULT_VECTOR_HALF_MI), else (0.21.1) the chosen counties,
+    else North Dakota."""
     DD = _ds("damdata")
     half = DD.DEFAULT_VECTOR_HALF_MI
     folder = run_dam_folder(work, settings)
@@ -532,21 +675,101 @@ def work_area(work, settings):
         b = _gpkg_extent_lonlat(out(work, st)) if work else None
         if b:
             return _pad_box(b, half)
+    counties = chosen_counties(settings)
+    if counties:
+        from . import nd_counties as cty
+        b, nd = _pad_box(cty.box(counties), half), tuple(_ds("offline_pack").ND_BBOX)
+        return (max(b[0], nd[0]), max(b[1], nd[1]), min(b[2], nd[2]), min(b[3], nd[3]))
     return tuple(_ds("offline_pack").ND_BBOX)
 
 
-def prepare_pack_slot(slot, work, settings, pack, names, target, log=None):
-    """Write the pack's data sets of a slot, clipped to the work area, to `target` (a GeoPackage
-    with layer <slot>, EPSG:5070). An existing file newer than the pack is kept. Returns the
-    number of features written (None when kept)."""
-    log = log or (lambda m: None)
+NID_PAD_MI = 0.5      # 0.22.1: the suite NID is clipped to the user's DWR layer, padded by this
+
+
+def _vector_box_lonlat(layer):
+    """lon / lat box of a vector layer (file path, path|layername=..., or a project layer id), or
+    None when it cannot be read."""
     try:
-        if os.path.isfile(target) and os.path.getmtime(target) >= os.path.getmtime(pack):
-            return None
-    except OSError:
+        from qgis.core import (QgsProject, QgsVectorLayer, QgsCoordinateReferenceSystem,
+                               QgsCoordinateTransform)
+        lyr = QgsProject.instance().mapLayer(layer)
+        if lyr is None:
+            lyr = QgsVectorLayer(layer, "dwr", "ogr")
+        if lyr is not None and lyr.isValid() and lyr.featureCount() != 0:
+            ext = lyr.extent()
+            wgs = QgsCoordinateReferenceSystem("EPSG:4326")
+            if lyr.crs().isValid() and lyr.crs() != wgs:
+                ext = QgsCoordinateTransform(lyr.crs(), wgs, QgsProject.instance()) \
+                    .transformBoundingBox(ext)
+            if not ext.isNull() and ext.width() >= 0:
+                return (ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum())
+    except Exception:                                            # noqa - no QGIS here: read it
         pass
+    try:
+        DD = _ds("damdata")
+        feats = DD.read_vector_file(layer, tuple(_ds("offline_pack").ND_BBOX))
+        G = _ds("suitegpkg")
+        pts = [G.point_on_surface(f.get("geometry")) for f in feats]
+        pts = [p for p in pts if p]
+        if pts:
+            return (min(p[0] for p in pts), min(p[1] for p in pts),
+                    max(p[0] for p in pts), max(p[1] for p in pts))
+    except Exception:                                            # noqa
+        pass
+    return None
+
+
+def nid_clip_box(settings):
+    """0.22.1: the lon / lat box the suite's NID dams are clipped to when the DWR slot holds the
+    user's own layer: that layer's dams padded by NID_PAD_MI (and inside the chosen counties).
+    None when the DWR slot is empty or cannot be read (then the NID covers the work area)."""
+    S = settings or {}
+    v = (S.get("dwr") or "").strip()
+    if not v:
+        return None
+    b = _vector_box_lonlat(v)
+    if b is None:
+        return None
+    b = _pad_box(b, NID_PAD_MI)
+    counties = chosen_counties(S)
+    if counties:
+        from . import nd_counties as cty
+        c = _pad_box(cty.box(counties), NID_PAD_MI)
+        b = (max(b[0], c[0]), max(b[1], c[1]), min(b[2], c[2]), min(b[3], c[3]))
+        if b[0] > b[2] or b[1] > b[3]:
+            return None
+    return tuple(round(x, 9) for x in b)
+
+
+def prepare_nid_file_slot(f, target, box, log=None):
+    """0.22.1: the NID dams of the suite data folder's nid/ file inside `box`, written to `target`
+    (layer nid). Kept when written after the file for the same box. Returns the count or None."""
+    log = log or (lambda m: None)
+    if _keep_clip(target, box, "nid folder", os.path.getmtime(f), exact=True):
+        return None
+    DD = _ds("damdata")
+    feats = DD.read_vector_file(f, box)
+    cnt = DD.write_features(target, "nid", feats, "nid folder " + os.path.basename(f))
+    _write_box(target, box, "nid folder")
+    log("nid: {} feature(s) of {} near your DWR dams written to {}".format(
+        cnt, os.path.basename(f), target))
+    return cnt
+
+
+def prepare_pack_slot(slot, work, settings, pack, names, target, log=None, box=None):
+    """Write the pack's data sets of a slot, clipped to the work area, to `target` (a GeoPackage
+    with layer <slot>, EPSG:5070). An existing file newer than the pack is kept when it covers the
+    work area (0.21.1: its box is in <target>.box.json; a file without one is kept as before).
+    Returns the number of features written (None when kept)."""
+    log = log or (lambda m: None)
     OP, DD = _ds("offline_pack"), _ds("damdata")
-    box = work_area(work, settings)
+    exact = box is not None                  # 0.22.1: an explicit box (the NID clip) is kept only as is
+    box = box or work_area(work, settings)
+    # 0.22.0: a pack folder's date is its manifest's
+    stamp_of = os.path.join(pack, "manifest.json") if os.path.isdir(pack) else pack
+    if _keep_clip(target, box, "pack", os.path.getmtime(stamp_of) if os.path.exists(stamp_of)
+                  else 0.0, exact=exact):
+        return None
     reader = OP.open_pack(pack, log=log)
     feats = []
     for n in names:
@@ -560,7 +783,71 @@ def prepare_pack_slot(slot, work, settings, pack, names, target, log=None):
     info = reader.info(names[0]) or {}
     src = "offline pack {} (fetched {})".format("+".join(names), info.get("fetched", "?"))
     cnt = DD.write_features(target, slot, feats, src)
+    _write_box(target, box, "pack")
     log("{}: {} feature(s) from the {} written to {}".format(slot, cnt, src, target))
+    return cnt
+
+
+def _keep_clip(target, box, kind, newer_than, exact=False):
+    """True when <work>/0_suite_data/<slot>.gpkg can stay: written after `newer_than` (a file
+    time) from the same kind of source (0.22.0: "pack" or "download"), and its box (0.21.1,
+    <target>.box.json) covers `box` (0.22.1, exact: is `box`). Otherwise the file is removed
+    (written again)."""
+    try:
+        if not os.path.isfile(target):
+            return False
+        try:
+            with open(target + ".box.json") as fh:
+                d = json.load(fh)
+            had, was = d.get("box"), d.get("from", "pack")
+        except (OSError, ValueError):
+            had, was = None, "pack"
+        if exact:
+            fits = had is not None and all(abs(a - b) < 1e-9 for a, b in zip(had, box))
+        else:
+            fits = had is None or (had[0] <= box[0] + 1e-9 and had[1] <= box[1] + 1e-9 and
+                                   had[2] >= box[2] - 1e-9 and had[3] >= box[3] - 1e-9)
+        if was == kind and os.path.getmtime(target) >= newer_than and fits:
+            return True
+        os.remove(target)                # another county / area / source: written again
+    except OSError:
+        pass
+    return False
+
+
+def _write_box(target, box, kind):
+    try:
+        with open(target + ".box.json", "w") as fh:
+            json.dump({"box": list(box), "from": kind}, fh)
+    except OSError:
+        pass
+
+
+DOWNLOAD_MAX_AGE_S = 7 * 86400          # a download of the same area is fetched again after
+
+
+def prepare_download_slot(slot, work, settings, target, log=None, box=None):
+    """0.22.0 (Data source = Download): the slot's data for the work area from the server chosen
+    for it in Suite data and servers, written to `target` (layer <slot>, EPSG:5070). A download
+    of the same area younger than DOWNLOAD_MAX_AGE_S is kept. Returns the number of features
+    written (None when kept); raises when no server gives that kind of data."""
+    import time
+    log = log or (lambda m: None)
+    DD = _ds("damdata")
+    role = SLOT_ROLE.get(slot)
+    exact = box is not None
+    box = box or work_area(work, settings)
+    if _keep_clip(target, box, "download", time.time() - DOWNLOAD_MAX_AGE_S, exact=exact):
+        return None
+    log("{}: downloading for the work area {:.3f}, {:.3f} to {:.3f}, {:.3f}...".format(
+        slot, *box))
+    got = DD.fetch_role(role, box)
+    if got is None:
+        raise LookupError("no server gives {} (Suite data and servers)".format(role))
+    feats, src, _short = got
+    cnt = DD.write_features(target, slot, feats, src)
+    _write_box(target, box, "download")
+    log("{}: {} feature(s) downloaded from {} written to {}".format(slot, cnt, src, target))
     return cnt
 
 
@@ -580,21 +867,40 @@ def slot_origin(slot, work, settings, prepare=False, log=None):
     v = dam_data_paths(run_dam_folder(work, S)).get(role)
     if v:
         return v, "dam folder"
-    data = suite_data_folder()
-    if not data:
-        return None, None
+    data = settings_data_folder(S)
     try:
         SD = _ds("suitedata")
-        pack = SD.find_pack(data)
+        download = SD.data_source() == SD.SOURCE_DOWNLOAD
+        pack = SD.active_pack(data)              # 0.22.0: "" with Data source = Download
     except Exception:                                            # noqa
-        SD, pack = None, ""
+        SD, pack, download = None, "", False
+    nbox = nid_clip_box(S) if slot == "nid" and work else None     # 0.22.1: near the DWR dams
+    if nbox and prepare and log:
+        log("nid: only the NID dams within {} mi of your DWR layer's dams ({:.4f}, {:.4f} to "
+            "{:.4f}, {:.4f})".format(NID_PAD_MI, *nbox))
+    if download and work and role not in ("nlcd",):
+        target = os.path.join(work, SUITE_DIR, slot + ".gpkg")
+        ok = True
+        if prepare:
+            try:
+                prepare_download_slot(slot, work, S, target, log=log, box=nbox)
+            except Exception as e:                               # noqa - fall back to dwr/ below
+                ok = False
+                if log:
+                    log("{}: not downloaded ({})".format(slot, e))
+        elif not os.path.isfile(target):
+            ok = _download_possible(role)
+        if ok:
+            return "{}|layername={}".format(target, slot), "download"
+    if not data and not pack:
+        return None, None
     names = pack_names(slot, _pack_sets(pack)) if pack and work else []
     if names:
         target = os.path.join(work, SUITE_DIR, slot + ".gpkg")
         ok = True
         if prepare:
             try:
-                prepare_pack_slot(slot, work, S, pack, names, target, log=log)
+                prepare_pack_slot(slot, work, S, pack, names, target, log=log, box=nbox)
             except Exception as e:                               # noqa - fall back to dwr/ below
                 ok = False
                 if log:
@@ -608,7 +914,152 @@ def slot_origin(slot, work, settings, prepare=False, log=None):
             f = ""
         if f:
             return f, "dwr folder"
+    if role == "nid_dams":                                       # 0.21.1: no pack - an NID file
+        f = nid_dropin(data)
+        if f and nbox:                                           # 0.22.1: near the DWR dams only
+            target = os.path.join(work, SUITE_DIR, slot + ".gpkg")
+            if prepare:
+                try:
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    prepare_nid_file_slot(f, target, nbox, log=log)
+                except Exception as e:                           # noqa - the whole file then
+                    if log:
+                        log("nid: {} could not be clipped ({}); all of it is used".format(f, e))
+                    return f, "nid folder"
+            return "{}|layername={}".format(target, slot), "nid folder"
+        if f:
+            return f, "nid folder"
     return None, None
+
+
+def _download_possible(role):
+    """True when a server is chosen for the role in Suite data and servers (0.22.0)."""
+    try:
+        SV, DD = _ds("services"), _ds("damdata")
+        srole = DD.SERVICE_ROLE.get(role, role)
+        s = SV.load().chosen(srole) if srole else None
+        return s is not None and (s.get("kind") == "file" or SV.data_capable(s, srole))
+    except Exception:                                            # noqa
+        return False
+
+
+NID_DIR = "nid"
+
+
+def nid_dropin(data):
+    """0.21.1: the NID dams file the user put in <suite data folder>/nid/ (the first vector file
+    there, by name), or "". Without the offline pack this is where tool 1's NID layer comes from
+    (the folders download has no NID; layers/hydro-dams/NID_dams.gpkg is the statewide one)."""
+    d = os.path.join(data or "", NID_DIR)
+    if not data or not os.path.isdir(d):
+        return ""
+    for n in sorted(os.listdir(d)):
+        if os.path.splitext(n)[1].lower() in (".gpkg", ".shp", ".geojson", ".json", ".fgb") \
+                and not n.startswith((".", "_")):
+            return os.path.join(d, n)
+    return ""
+
+
+# 0.21.0: "Fill empty layers from the suite data" (Inputs tab). The same sources a run falls back
+# to (slot_origin), written into the empty slots so the user sees them before the run. Streams and
+# land cover are left alone: they change the model (road-crossing cuts, Manning's n), not only
+# give it data (MODEL_SLOTS); dam lines are filled (they only protect the dam from those cuts).
+FILL_SLOTS = ("dwr", "nid", "structures", "roads", "rail", "lifelines", "waterbodies", "dam_lines")
+
+
+def fill_empty_slots(work, settings, log=None, prepare=True, slots=FILL_SLOTS):
+    """{slot: (layer, origin)} for the EMPTY slots that the dam folder, the suite offline pack or
+    the suite data folder's dwr/ can fill. A chosen layer and the step-0 package are left as they
+    are. prepare=True writes the pack clips now (needs the work folder)."""
+    S = dict(settings or {})
+    out = {}
+    for slot in slots:
+        if (S.get(slot) or "").strip():
+            continue
+        try:
+            value, origin = slot_origin(slot, work, S, prepare=prepare, log=log)
+        except Exception as e:                                   # noqa - one slot never stops the rest
+            if log:
+                log("{}: not filled ({})".format(slot, e))
+            continue
+        if value and origin in ("dam folder", "suite pack", "dwr folder", "nid folder",
+                                "download"):
+            out[slot] = (value, origin)
+    return out
+
+
+# 0.28.1: the Simple tab's one line of what the run will read, without clipping anything (the
+# short names a user knows; the origins in the words of the Inputs tab)
+FOUND_NAMES = {"dwr": "DWR dams", "nid": "NID dams", "structures": "structures", "roads": "roads",
+               "rail": "railroads", "lifelines": "lifelines", "waterbodies": "waterbodies",
+               "dam_lines": "dam lines"}
+FOUND_ORIGIN = {"chosen": "chosen on the Inputs tab", "package": "data package",
+                "dam folder": "dam folder", "suite pack": "offline pack",
+                "download": "download", "dwr folder": "dwr/ folder", "nid folder": "nid/ folder"}
+
+
+def found_layers(work, settings):
+    """{slot: origin or None} for the layers a run needs (FILL_SLOTS), read without writing a
+    clip (slot_origin with prepare=False). One slot that cannot be read is None, never an error."""
+    out = {}
+    for slot in FILL_SLOTS:
+        try:
+            _value, origin = slot_origin(slot, work, settings or {}, prepare=False)
+        except Exception:                                        # noqa
+            origin = None
+        out[slot] = origin
+    return out
+
+
+def found_layers_text(work, settings, found=None):
+    """0.28.1: one line for the Simple tab: what the run will read and from where, and what it
+    will not find - "Found: DWR dams, structures, roads (offline pack); dam lines (dwr/ folder).
+    Not found: railroads." Empty without a work folder (the hint line asks for one then)."""
+    if not work:
+        return ""
+    found = found_layers(work, settings) if found is None else found
+    by_origin = {}
+    for slot in FILL_SLOTS:
+        o = found.get(slot)
+        if o:
+            by_origin.setdefault(o, []).append(FOUND_NAMES[slot])
+    missing = [FOUND_NAMES[s] for s in FILL_SLOTS if not found.get(s)]
+    if not by_origin:
+        return ("No input layers found: set the Suite folder on the Dam suite home's Start tab (it "
+                "finds the offline pack), or choose layers on the Inputs tab.")
+    parts = ["{} ({})".format(", ".join(names), FOUND_ORIGIN.get(o, o))
+             for o, names in by_origin.items()]
+    text = "Found: " + "; ".join(parts) + "."
+    if missing:
+        text += " Not found: " + ", ".join(missing) + "."
+    return text
+
+
+# 0.28.1: one Continue button that opens the plugin the selected dam needs next, read from its
+# dam.json (dam_record.next_action) - not from file names, which a baseline or an interim raster
+# would also match
+def continue_target(work, settings, dam_id):
+    """(plugin, label, why) for the Continue button: plugin "ndbreach", "ndhazard" or "" (the
+    button stays grey and `why` says why)."""
+    dam_id = str(dam_id or "").strip()
+    if not work or not dam_id:
+        return "", "Continue", ("Select a dam in the Results tab's table, or run one dam, then "
+                                "Continue opens the plugin it needs next.")
+    _root, row = dam_row_for(work, settings, dam_id)
+    folder = (row or {}).get("folder") or ""
+    try:
+        rec = _ds("dam_record").load(folder) if folder and os.path.isdir(folder) else None
+    except Exception as e:                                       # noqa - a broken dam.json
+        return "", "Continue", "{}: dam.json could not be read ({}).".format(dam_id, e)
+    if rec is None:
+        return "", "Continue", ("{} has no dam record yet: screen it (Run one dam) first.".format(dam_id))
+    code, text = _ds("dam_record").next_action(rec)
+    if code == "model":
+        return "ndbreach", "Continue: model {} in the Runner".format(dam_id), text
+    if code in ("classify", "review", "none"):
+        verb = {"classify": "classify", "review": "review"}.get(code, "open")
+        return "ndhazard", "Continue: {} {} in the Hazard Helper".format(verb, dam_id), text
+    return "", "Continue", text        # screen / refresh: this window's own job first
 
 
 # --------------------------------------------------------------- statuses --
@@ -732,6 +1183,15 @@ def _one_proposed_dem(work):
     return os.path.join(d, names[0]) if len(names) == 1 else None
 
 
+def missing_dams_note(work):
+    """0.21.0: the window's log line when tools 2-4 open with no tool-1 output in the work
+    folder (the dialog then starts with the last Standardized dams written, if any)."""
+    return ("Standardized dams: no {} in the work folder {}. Run tool 1 from this window (All "
+            "steps), or save its layer there as {}; the dialog starts with the last Standardized "
+            "dams written, when there is one - check it is the right layer.").format(
+                LAYOUT["1"]["OUT"], work, LAYOUT["1"]["OUT"])
+
+
 # --------------------------------------------------------------- defaults --
 def defaults(step, work, settings, log=None, prepare=False):
     """The parameters to fill in for tool `step` (only values that are known; a parameter
@@ -792,18 +1252,33 @@ def defaults(step, work, settings, log=None, prepare=False):
         pkg = (S.get("package") or "").strip()
         if pkg and os.path.isfile(pkg):
             put("PACKAGE", pkg)
-        put("CLIP", S.get("clip"))
+        put("CLIP", S.get("clip") or county_clip(work, S, prepare=prepare))   # 0.21.1: the county
         for slot, param in TOOL0_SLOT.items():
             put(param, (S.get(slot) or "").strip())
     elif step == "1":
-        put("DWR", S.get("dwr"))
-        put("NID", S.get("nid"))
+        # 0.21.0: like every other data slot, an empty DWR / NID slot falls back to the dam
+        # folder, the suite offline pack or the suite data folder's dwr/ (logged); before, tool 1
+        # took only the Inputs tab's choice
+        put("DWR", src("dwr"))
+        put("NID", src("nid"))
+        counties = chosen_counties(S)                        # 0.21.1: the window's county
+        if counties:
+            from . import nd_counties as cty
+            p["COUNTIES"] = [cty.names().index(c) for c in counties]
         put("ONLY_IDS", S.get("only_ids"))
     elif step == "2":
         put("DAMS", o("1"))
         put("SRC", S["terrain_source"])
         put("LOCAL", S.get("local_dem"))
-        put("CELL_FT", float(S.get("dem_cell_ft") if S.get("dem_cell_ft") is not None else 3.3))
+        cell_ft = float(S.get("dem_cell_ft") if S.get("dem_cell_ft") is not None else 32.8)
+        put("CELL_FT", cell_ft)
+        # 0.28.0: the cached DEM's cell follows the source (3DEP and the suite's downloads are
+        # 10 m). A local LiDAR folder can be finer than this, and resampling it coarser throws
+        # terrain away, so say so rather than decide it here.
+        if log and int(S.get("terrain_source") or 0) == 1 and cell_ft > 10.0:
+            log("step 2: DEM cell size {:.1f} ft ({:.1f} m). Your local tiles may be finer: set "
+                "'DEM cell size (ft)' to your tiles' cell (3.3 ft for 1 m LiDAR) to keep their "
+                "detail.".format(cell_ft, cell_ft * 0.3048))
     elif step == "3":
         put("DAMS", o("1"))
         put("WB", src("waterbodies"))
@@ -834,12 +1309,19 @@ def defaults(step, work, settings, log=None, prepare=False):
         put("DAMS", o("6") or o("5"))
         put("BPTS", bpts())
         put("DEMDIR", demdir())
-        put("TSRC", S["larger_clips"])
+        tsrc = larger_clips_index(S)                     # 0.28.0: follows the terrain source
+        put("TSRC", tsrc)
+        if log:
+            log("    " + larger_clips_text(S))
         put("LOCAL", S.get("local_dem"))
         put("ENGINE", S["engine"])
         put("EXE", S.get("exe"))
         put("SCEN", S["scenario"])
         put("CURVES", curves())
+        # 0.28.0: the preset is passed, so the Grid size box means what it says (with Custom) and
+        # the window can show the cell the engine will use (core/runplan.effective_cell)
+        from . import runplan as rpl
+        put("PRESET", rpl.preset_index(S))
         put("CELL_FT", float(S["grid_ft"] if S.get("grid_ft") is not None else 33.0))
         put("SIMH", float(S.get("simh") if S.get("simh") is not None else 12.0))
         put("SIMMAX", float(S.get("simmax") if S.get("simmax") is not None else 96.0))
@@ -850,6 +1332,10 @@ def defaults(step, work, settings, log=None, prepare=False):
             put("WORKERS", int(S["workers"]))
         if S.get("pregrow"):                                # 0.20.0: opt-in clip growth from the trace
             p["PREGROW"] = True
+        if S.get("both_scenarios"):                         # 0.28.0: top of dam AND sunny day
+            p["SCEN_BOTH"] = True
+        if not S.get("skip_done", True):                    # 0.28.0: force a re-run of every dam
+            p["SKIPDONE"] = False
         # 0.11: no-breach baseline and buildings as obstructions
         if S.get("baseline"):
             p["BASELINE"] = True
@@ -891,6 +1377,7 @@ def defaults(step, work, settings, log=None, prepare=False):
         put("CHART_FILE", S.get("chart_file"))
     elif step == "8":
         put("SIM", o("7"))
+        put("CURVES", curves())              # 0.28.0: the breach-parameter sensitivity row
         put("BLD", src("structures"))
         fields("structures", {"OCC": "occ_cls", "PRIM": "prim_occ"})
         put("ROADS", src("roads"))
@@ -898,7 +1385,16 @@ def defaults(step, work, settings, log=None, prepare=False):
         fields("rail", {"RAIL_PAX": "passenger", "RAIL_TRAINS": "trains_day"})
         put("LIFELINES", src("lifelines"))
         df = dams_folder(work, S)
-        if os.path.isdir(df):                               # tool 8 creates no folder
+        mosaic = os.path.join(out(work, "2") or "", "_local_mosaic.vrt")   # step 2's local DEM mosaic
+        if S.get("terrain_source") == 1 and os.path.isfile(mosaic):
+            put("DEM_FOR_RECORD", mosaic)                   # 0.26.0: the Runner starts with this DEM
+        if S.get("only_ids"):                               # 0.26.0: chosen dams get a dam folder
+            p["CREATE_DAM_FOLDERS"] = True
+            try:
+                os.makedirs(df, exist_ok=True)
+            except OSError:
+                pass
+        if os.path.isdir(df):                               # otherwise tool 8 creates no folder
             put("DAMS_FOLDER", df)
         put("CRIT", S["crit"])
         put("CHART_FILE", S.get("chart_file"))
@@ -939,7 +1435,10 @@ def defaults(step, work, settings, log=None, prepare=False):
         put("SCEN", S["scenario"])
         put("ENGINE", S["engine"])
         put("DEMDIR", demdir())
-        put("CELL_FT", float(S["grid_ft"] if S.get("grid_ft") is not None else 33.0))
+        # 0.28.0: tool 12 estimates the cell size step 7 will really use, not the box's
+        from . import runplan as rpl
+        eff = rpl.effective_cell(S)
+        put("CELL_FT", float(eff["cell_ft"] if eff["cell_ft"] else 0.0))
         put("SIMH", float(S.get("simh") if S.get("simh") is not None else 12.0))
         put("SIMMAX", float(S.get("simmax") if S.get("simmax") is not None else 96.0))
         if int(S.get("workers") or 0) > 0:
@@ -1004,7 +1503,51 @@ def one_dam_settings(settings, work, dam_id):
     S = dict(settings or {})
     S["only_ids"] = str(dam_id).strip()
     S["package_work"] = work
+    # 0.26.0: its dam.json goes to the main work folder's Dams folder (the Runner's and the
+    # Hazard Helper's folder of dam folders), not to one under one_dam/<ID>/
+    S["dams_folder"] = (settings or {}).get("dams_folder") or dams_folder(work, settings or {})
+    # 0.28.0: one dam is a minute of flood model, so it gets BOTH loading cases unless the
+    # engineer has already switched them on or off by hand for the county (core/scenarios.py:
+    # both_default). A county keeps one scenario - two would double hours into days.
+    S["both_scenarios"] = bool(S.get("both_one_dam", True))
     return S
+
+
+def only_ids_text(ids):
+    """0.26.0: the ONLY_IDS value of a run of chosen dams: the IDs joined by ', ' (tools 1 and 16
+    split the value on commas); blanks and repeats dropped, order kept."""
+    seen, out = set(), []
+    for x in ids or []:
+        s = str(x or "").strip()
+        if s and s.upper() not in seen:
+            seen.add(s.upper())
+            out.append(s)
+    return ", ".join(out)
+
+
+def selected_dams_name(ids):
+    """0.26.0: the folder name (under one_dam/) of a run of chosen dams: the IDs joined by '_'
+    up to three of them, else the first and a count ("DWR-1_and_4_more"); "" without IDs."""
+    ids = [x.strip() for x in only_ids_text(ids).split(",") if x.strip()]
+    if not ids:
+        return ""
+    if len(ids) <= 3:
+        return safe_name("_".join(ids))
+    return safe_name("{}_and_{}_more".format(ids[0], len(ids) - 1))
+
+
+def dam_row_for(work, settings, dam_id):
+    """0.26.0: the dam of this work folder as the row suite_home.point_window_at takes
+    ({"dam_id", "folder"}), for pointing the Runner's and the Hazard Helper's windows at it: the
+    dam folder under the Dams folder the chain hands dams over to (an existing folder of that ID,
+    a bare DWR number finding DWR-<number>, else <Dams folder>/<ID>). Returns (Dams folder, row),
+    or ("", None) without an ID."""
+    dam_id = str(dam_id or "").strip()
+    if not dam_id:
+        return "", None
+    root = dams_folder(work, settings or {})
+    folder = dam_folder_in([root], dam_id) or os.path.join(root, _runner_name(dam_id))
+    return root, {"dam_id": dam_id, "folder": folder}
 
 
 def one_dam_runs(work):
@@ -1115,7 +1658,9 @@ def write_run_settings(work, settings, log=None):
     out = os.path.join(work, RUN_SETTINGS)
     try:
         from ..damsuite import versions as vs
-        sf.save(out, name=sf.meta.get("name") or "settings used", versions={PLUGIN_KEY: vs.RELEASE.get(PLUGIN_KEY, "")})
+        from . import damrecord_io as _dio                     # 0.21.0: this plugin's own version
+        sf.save(out, name=sf.meta.get("name") or "settings used",
+                versions={PLUGIN_KEY: _dio.plugin_version() or vs.RELEASE.get(PLUGIN_KEY, "")})
     except Exception as e:                                       # noqa
         if log:
             log("settings record not written: {}".format(e))
@@ -1393,10 +1938,13 @@ class Chain(object):
         self.result = ""
         self.ok = False
         self._cancel = False
+        self._step_t0 = None
 
     def begin(self):
         self.ran, self.active, self.current, self.result, self.ok = [], True, None, "", False
         self._cancel = False
+        self._step_t0 = None
+        self._chain_t0 = _time.time()
         self._advance()
 
     def cancel(self):
@@ -1404,7 +1952,8 @@ class Chain(object):
 
     def _end(self, ok, text):
         self.active, self.ok, self.result, self.current = False, ok, text, None
-        self.log(("=== " if ok else "!!! ") + text)
+        total = _time.time() - self._chain_t0 if getattr(self, "_chain_t0", None) else 0
+        self.log(("=== " if ok else "!!! ") + text + (" ({:.0f}s total)".format(total) if total > 0 else ""))
         if self.on_end:
             self.on_end(ok, text)
 
@@ -1427,6 +1976,7 @@ class Chain(object):
                                     "tab, or open the step and fill it in.".format(
                                         step, TITLE[step], "; ".join(lacks)))
         self.current = step
+        self._step_t0 = _time.time()
         for line in chain_summary(step, self.work, S):
             self.log("    " + line)
         self.log(">>> Step {} - {}".format(step, TITLE[step]))
@@ -1452,5 +2002,6 @@ class Chain(object):
             self.log("    warning: step {}: {}; those dams get no class in the next step".format(
                 step, prob[1]))
         self.ran.append(step)
-        self.log("    step {} done".format(step))
+        elapsed = _time.time() - self._step_t0 if self._step_t0 is not None else 0
+        self.log("    step {} done ({:.0f}s)".format(step, elapsed))
         self._advance()

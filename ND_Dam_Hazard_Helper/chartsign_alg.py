@@ -46,10 +46,14 @@ class ChartSignOffAlgorithm(QgsProcessingAlgorithm):
         return ("Writes acer_tm11_charts.json - the depth-velocity danger chart file that ND "
                 "Dam Breach Runner and ND Dam Breach Screening (core/nd_hazard.py) read - from "
                 "ND Dam Hazard's own curves (the REG_05.2026 table, sampled every 0.1 ft/s), so all "
-                "three tools use the same chart. It is marked 'digitized' only when 'digitized "
-                "by' and 'checked by' are both filled in and name different people (a person "
-                "may not check their own work); otherwise the polygons are written for review "
-                "with status 'not digitized' and the other tools refuse the chart method.\n\n"
+                "three tools use the same chart. One engineer's sign-off is enough: the file is "
+                "marked 'digitized' and signed off by the name in 'Signed off by' (a second "
+                "engineer may be recorded in 'Checked by'; tick 'Require a second checker' to "
+                "demand one). Without a name the polygons are written for review with status "
+                "'not digitized' and the other tools refuse the chart method. With 'Install in "
+                "the plugins' the signed-off file replaces core/acer_tm11_charts.json of the "
+                "installed Runner and Screening, so their chart method uses it at once. The "
+                "plugins ship with the file signed off by Nicholas Bendickson (2026-10-12).\n\n"
                 "To check the curves against the printed figures, give a scan (PNG / JPEG) of "
                 "TM 11 Figure 2 and / or 3 and a calibration: two or more reference points "
                 "'x_px, y_px = velocity_ft/s, depth_ft' separated by ';' (two points: the axes "
@@ -75,15 +79,19 @@ class ChartSignOffAlgorithm(QgsProcessingAlgorithm):
                                        "v, d; ...'", defaultValue="", optional=True))
         P(QgsProcessingParameterString("DIGITIZED_FROM", "Digitized from (source document)",
                                        defaultValue="", optional=True))
-        P(QgsProcessingParameterString("DIGITIZED_BY", "Digitized by (name)", defaultValue="",
-                                       optional=True))
-        P(QgsProcessingParameterString("CHECKED_BY", "Checked by (name - another person)",
+        from .damsuite import tm11_curves as _tm
+        P(QgsProcessingParameterString("DIGITIZED_BY", "Signed off by (engineer; digitized by)",
+                                       defaultValue=_tm.SIGNED_OFF_BY, optional=True))
+        P(QgsProcessingParameterString("CHECKED_BY", "Checked by (optional second engineer)",
                                        defaultValue="", optional=True))
         P(QgsProcessingParameterString("DIGITIZED_ON", "Date (empty: today)", defaultValue="",
                                        optional=True))
         P(QgsProcessingParameterString("NOTES", "Notes", defaultValue="", optional=True))
-        P(QgsProcessingParameterBoolean("ALLOW_SELF_CHECK", "Allow the digitizer to check their "
-                                        "own work (not recommended)", defaultValue=False))
+        P(QgsProcessingParameterBoolean("REQUIRE_SECOND_CHECKER", "Require a second, different "
+                                        "engineer as checker", defaultValue=False))
+        P(QgsProcessingParameterBoolean("INSTALL_IN_PLUGINS", "Install the signed-off file in "
+                                        "the Breach Runner and the Screening (their "
+                                        "core/acer_tm11_charts.json)", defaultValue=True))
         P(QgsProcessingParameterFolderDestination("OUTPUT", "Output folder"))
         self.addOutput(QgsProcessingOutputFile("CHART_JSON", "Chart file (acer_tm11_charts.json)"))
         self.addOutput(QgsProcessingOutputFile("HOUSE_SVG", "Figure 2 overlay (SVG)"))
@@ -106,13 +114,14 @@ class ChartSignOffAlgorithm(QgsProcessingAlgorithm):
                     raise QgsProcessingException("Image not found: {}".format(img))
                 images[key] = img
             cals[key] = s(cal_p)
-        allow = self.parameterAsBool(parameters, "ALLOW_SELF_CHECK", context)
+        require = self.parameterAsBool(parameters, "REQUIRE_SECOND_CHECKER", context)
+        install = self.parameterAsBool(parameters, "INSTALL_IN_PLUGINS", context)
         try:
             res = CS.sign_off(out, digitized_by=s("DIGITIZED_BY"), checked_by=s("CHECKED_BY"),
                               digitized_from=s("DIGITIZED_FROM"),
                               digitized_on=s("DIGITIZED_ON") or datetime.date.today().isoformat(),
                               notes=s("NOTES"), images=images, calibrations=cals,
-                              require_different_checker=not allow)
+                              require_different_checker=require, install=install)
         except (ValueError, OSError) as e:
             raise QgsProcessingException(str(e)) from e
         except Exception as e:                       # never an unhandled crash

@@ -80,6 +80,38 @@ class QWidget(QObject):
         return True
 
 
+class QWizardPage(QWidget):
+    """3.18.0: a page of the wizard (wizard.py); the wizard that holds it answers wizard()."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._wizard = None
+        self._title, self._subtitle = "", ""
+
+    def setTitle(self, t):
+        self._title = t
+
+    def setSubTitle(self, t):
+        self._subtitle = t
+
+    def wizard(self):
+        return self._wizard
+
+
+class QWizard(QWidget):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.pages = []
+
+    def addPage(self, page):
+        page._wizard = self
+        self.pages.append(page)
+        return len(self.pages) - 1
+
+    def page(self, i):
+        return self.pages[i]
+
+
 class QDialog(QWidget):
     def closeEvent(self, event):
         event.accept()
@@ -351,6 +383,25 @@ class QRadioButton(QCheckBox):
     pass
 
 
+class QButtonGroup(QObject):
+    """Exclusive like Qt: checking one button unchecks the others."""
+
+    def __init__(self, *a):
+        super().__init__(a[0] if a else None)
+        self._buttons = []
+
+    def addButton(self, b, *a):
+        self._buttons.append(b)
+        b.toggled.connect(lambda on, b=b: on and [o.setChecked(False) for o in self._buttons
+                                                   if o is not b and o.isChecked()])
+
+    def buttons(self):
+        return list(self._buttons)
+
+    def checkedButton(self):
+        return next((b for b in self._buttons if b.isChecked()), None)
+
+
 class QAbstractItemView(QWidget):
     pass
 
@@ -570,6 +621,27 @@ class _QAction(QWidget):
 
 if not QT6:
     QAction = _QAction
+
+
+class QMenu(QWidget):
+    """A submenu: its entries (None = a separator) and the action that shows it (3.20.1)."""
+
+    def __init__(self, title="", parent=None):
+        super().__init__()
+        self.title = title
+        self.items = []
+        self._menu_action = _QAction(title)
+        self._menu_action.menu = lambda: self
+
+    def addAction(self, action):
+        self.items.append(action)
+        return action
+
+    def addSeparator(self):
+        self.items.append(None)
+
+    def menuAction(self):
+        return self._menu_action
 
 
 class QMessageBox(object):

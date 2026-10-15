@@ -43,9 +43,10 @@ TOOLS = (
      "Re-classifies this run's structures with the ND Dam Breach Runner / Screening rules "
      "(their nd_hazard.py) and explains every difference. This plugin stays the authority."),
     ("suite_charts_btn", "Chart sign-off...", "chartsignoff",
-     "Writes the ACER TM 11 chart file the Runner and Screening need, from this plugin's "
-     "curves, with overlays on your scans of Figs 2 and 3; 'digitized' only when two "
-     "different people are named. The tool records the names - it cannot confirm the check."),
+     "Writes the ACER TM 11 chart file the Runner and Screening read, from this plugin's "
+     "curves, with overlays on your scans of Figs 2 and 3, signed off by the engineer named "
+     "(one is enough; a second checker is optional) and installed in both plugins. They ship "
+     "with the file signed off by Nicholas Bendickson (2026-10-12)."),
     ("suite_review_btn", "Review a package...", "reviewpackage",
      "Reviewer's view of a submittal package: every file against MANIFEST.csv, the model "
      "chain, optional reproduction and a checklist. Nothing is written into the package."),
@@ -56,7 +57,7 @@ TOOLS = (
     ("suite_export_btn", "Export for Screening...", "suiteexport",
      "One GeoPackage in the ND Dam Breach Screening tool-0 schema from the offline pack or "
      "your downloads: structures with this plugin's habitability, roads with AADT, "
-     "railroads, flowlines, lifelines, NID dams; for this dam folder also its NHD "
+     "railroads, flowlines, lifelines, NID dams; for this dam folder also its 3DHP "
      "waterbodies, DWR dam lines / dams and DEM path (Get data for this dam)."),
     # v2.12
     ("suite_reviewed_btn", "Mark reviewed...", "markreviewed",

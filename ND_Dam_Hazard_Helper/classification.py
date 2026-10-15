@@ -496,6 +496,20 @@ def criteria_text(nd):
     return out
 
 
+def flood_cut_off_note(info):
+    """v2.28: the data-sources / warning sentence for a flood model the ND Dam Breach Runner cut
+    off (modelchain.read_flood_cut_off), or "" when `info` is empty. The class is not changed by
+    this; the sentence says why it may be low."""
+    if not info:
+        return ""
+    reason = str(info.get("reason") or "reason not given").strip()
+    detail = str(info.get("detail") or "").strip()
+    return ("Flood model INCOMPLETE: the ND Dam Breach Runner stopped the run while water was "
+            "still moving ({}{}). The inundated extent, and so the structures and roads found "
+            "in it and the class, may be low; run the model longer before relying on the "
+            "class.".format(reason, "; " + detail if detail else ""))
+
+
 def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, extra=None):
     zt = zone_table(structs)
     L = []
@@ -504,7 +518,25 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
     L.append("Hydraulic model: {}".format("1D (depth > 2 ft rule)" if one_d
                                           else "2D (depth-velocity curves)"))
     L.append("")
-    L.append("ND HAZARD CLASSIFICATION (screening): {}".format(nd["cls"].upper()))
+    # 2.30.0: the plain-language result card first - the class, the one reason for it, what
+    # would change it and the flags, for the dam owner and the county emergency manager who
+    # read this file before the criteria tables (resultcard.py builds it)
+    card = (extra or {}).get("card")
+    if card:
+        from . import resultcard as RC
+        L.extend(RC.lines(card))
+        L.append("")
+    # v2.28: a flood model the Runner cut off marks the class line incomplete (the class itself
+    # is not changed) and its sentence joins the data sources when the run did not add it
+    cut = (extra or {}).get("flood_cut_off")
+    suffix = ""
+    if cut:
+        suffix = "  |  incomplete: flood cut off ({})".format(
+            str(cut.get("reason") or "reason not given").strip())
+        note = flood_cut_off_note(cut)
+        if note and note not in sources:
+            sources = list(sources) + [note]
+    L.append("ND HAZARD CLASSIFICATION (screening): {}{}".format(nd["cls"].upper(), suffix))
     L.append("  Basis: " + ND_POLICY_REF)
     for r in nd["reasons"]:
         L.append("  - " + r)
@@ -541,6 +573,8 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
     extra = extra or {}
     for key, title in (("proposed", "PROPOSED DAM"),
                        ("scenarios", "SCENARIOS"), ("margin", "CLASSIFICATION MARGIN (5.3(f))"),
+                       ("whatif", "WHAT WOULD CHANGE THE CLASS - THE ITEMS NEAREST A "
+                                  "BOUNDARY (5.3(f))"),
                        ("nid", "NATIONAL INVENTORY OF DAMS - THIS DAM"),
                        ("changes", "CHANGES SINCE THE LAST RUN"),
                        ("method", "ACER ZONE METHOD"),
@@ -555,6 +589,9 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
                        ("access", "SOLE-ACCESS ROADS"),
                        ("dams", "DAMS IN SERIES (5.3(c))"),
                        ("lifelines", "LIFELINE / CRITICAL FACILITIES (5.2.2)"),
+                       ("lifeline_detail", "LIFELINE DETAIL - ALTERNATIVE ROUTE AND A SECOND "
+                                           "FACILITY (5.2.2)"),
+                       ("history", "CLASSIFICATION HISTORY OF THIS DAM"),
                        ("crossings", "BRIDGES, CULVERTS AND CROSSINGS"),
                        ("future", "FUTURE DEVELOPMENT (5.3(b))"),
                        ("eap", "EMERGENCY ACTION PLAN OUTPUTS"),

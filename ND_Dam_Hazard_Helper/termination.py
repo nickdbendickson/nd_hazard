@@ -277,7 +277,7 @@ def stations_from_line(line, depth_sampler, analysis_crs, transform_ctx, lat=Non
 
 def trace_line(depth_sampler, arr_sampler, analysis_crs, transform_ctx, lat, **kw):
     """(line, notes) of the channel centerline, made by traveltime.build (a
-    centerline layer, or the NHD flowlines traced downstream from the dam;
+    centerline layer, or the 3DHP flowlines traced downstream from the dam;
     same orientation and river mile 0). kw: centerline_layer, flowline_layer,
     dam_point, spacing_mi, search_ft, max_mi, snap_ft, clip."""
     r = TT.build(depth_sampler, arr_sampler, None, analysis_crs, transform_ctx, lat, **kw)

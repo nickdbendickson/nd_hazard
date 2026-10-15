@@ -25,6 +25,17 @@ from nd_dam_screening.plugin import NDDamScreeningPlugin  # noqa: E402
 import _gpkg  # noqa: E402
 
 work = tempfile.mkdtemp(prefix="suite09_")
+
+
+def _meta_version():
+    """0.26.0: the plugin's version from metadata.txt (the checks below used to pin a literal)."""
+    import configparser
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
+    return cp["general"]["version"]
+
+
+VERSION = _meta_version()
 D, S, I = "double", "string", "int"
 pt = lambda x, y: QgsGeometry.fromPointXY(QgsPointXY(x, y))
 ND = "/home/claude/ND_Dam_Hazard_Helper"
@@ -38,7 +49,7 @@ assert idn == {"dam_id": "DWR-5289", "name": "Test Dam", "nid_id": "ND00123", "d
                "existing_hazard_class": "Significant"}, idn
 assert dri.identity({"dam_id": "NID-ND00999", "hazard_cla": "Low"}) == {
     "dam_id": "NID-ND00999", "nid_id": "ND00999", "existing_hazard_class": "Low"}
-assert dri.plugin_version() == "0.20.0"
+assert dri.plugin_version() == VERSION and VERSION.count(".") == 2
 assert dri.screening_result({"tri_result": "clear", "hz_class": "Low"}, "tool 8")["triage"] == "clear"
 assert dri.screening_result({}, "tool 7b") == {"triage": "not run", "hz_class": None, "border": None,
                                               "gaps": None, "by": "tool 7b"}
@@ -225,7 +236,7 @@ assert abs(f1["height_ft"] - 20.0) < 1e-6 and abs(f1["storage_acft"] - 500.0) < 
 assert (f1["x"], f1["y"], f1["crs"]) == (round(BX, 3), round(BY, 3), "EPSG:5070")
 assert abs(f1["lon"] + 100.5) < 1e-6 and abs(f1["lat"] - 47.0) < 1e-6
 assert f1["existing_hazard_class"] == "Significant" and "surface_area_ac" not in f1
-assert rec.sources["height_ft"]["tool"] == "ndscreen" and rec.sources["height_ft"]["version"] == "0.20.0"
+assert rec.sources["height_ft"]["tool"] == "ndscreen" and rec.sources["height_ft"]["version"] == VERSION
 st = rec.latest("screened")
 assert st["tool"] == "ndscreen" and st["result"]["triage"] == "needs 2D" and st["result"]["hz_class"] == "High"
 assert st["result"]["border"] == "no" and st["result"]["gaps"] == "road 3: AADT not given"

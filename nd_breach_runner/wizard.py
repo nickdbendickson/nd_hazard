@@ -25,11 +25,13 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 
 from . import wizard_logic as wl
 from .core import breach as brmod
 from .core import nd_data
+from .core import nd_counties as cty
 
 TITLE = "ND Dam Breach Runner"
 
@@ -87,6 +89,118 @@ def _project_layers(kind):
 def _layer(layer_id):
     from qgis.core import QgsProject
     return QgsProject.instance().mapLayer(layer_id) if layer_id else None
+
+
+# 3.18.0: the DEM download of the terrain page (the same tool the Runner window's DEM box runs)
+def _to_lonlat(x, y, crs):
+    """x / y in `crs` to WGS 84 lon / lat with QGIS's transform."""
+    from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY,
+                           QgsProject)
+    tf = QgsCoordinateTransform(QgsCoordinateReferenceSystem(crs),
+                                QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
+    p = tf.transform(QgsPointXY(x, y))
+    return p.x(), p.y()
+
+
+def _algorithm_missing(alg_id):
+    """True when Processing's registry says there is no such algorithm; False when it has it
+    or cannot be asked (running it then says what is wrong)."""
+    try:
+        from qgis.core import QgsApplication
+        return QgsApplication.processingRegistry().algorithmById(alg_id) is None
+    except Exception:
+        return False
+
+
+def _gdal_translate(src, dst):
+    """A VRT (or any raster) as a compressed GeoTIFF, with QGIS's GDAL (as dialog.py does)."""
+    from osgeo import gdal
+    ds = gdal.Translate(dst, src, format="GTiff",
+                        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"])
+    if ds is None:
+        raise RuntimeError("GDAL could not write {}".format(dst))
+    ds = None
+
+
+def _process_events():
+    try:
+        from qgis.PyQt.QtWidgets import QApplication
+        QApplication.processEvents()
+    except Exception:
+        pass
+
+
+def _county_test(lyr, county, mapping):
+    """3.13.1: f -> True when feature f of `lyr` is in `county` (its point inside the county's
+    outline; a point outside every county - just over the state line - goes by the layer's
+    county field). Everything passes with no county."""
+    if not county:
+        return lambda f: True
+    from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsGeometry,
+                           QgsProject)
+    tr = QgsCoordinateTransform(lyr.crs(), QgsCoordinateReferenceSystem("EPSG:4326"),
+                                QgsProject.instance())
+    low = {f.name().lower(): f.name() for f in lyr.fields()}
+    cfield = low.get("county") or low.get("countystate") or low.get("county_name")
+
+    def test(f):
+        g = f.geometry()
+        if g is None or g.isEmpty():
+            return False
+        try:
+            g = QgsGeometry(g)                   # a copy: the layer's feature is not changed
+            g.transform(tr)
+            p = g.centroid().asPoint()           # a point's centroid is the point
+            c = cty.county_of(p.x(), p.y())
+        except Exception:                                        # noqa - unreadable geometry
+            c = ""
+        if not c and cfield:
+            c = cty.normalize(str(f[cfield] or "").split(",")[0])
+        return c == county
+    return test
+
+
+def _feature_label(f, _id_field, mapping):
+    """3.13.0: 'ID  name (height ft, storage ac-ft)' for the dam list; a DWR row with no NID ID
+    is DWR-<structure_id>."""
+    try:
+        v = wl.dam_values_from_attrs(f, mapping)
+    except Exception:                                            # noqa - a label only
+        v = {}
+    did = v.get("DAM_ID") or "feature {}".format(f.id())
+    parts = [did]
+    if v.get("DAM_NAME"):
+        parts.append(v["DAM_NAME"])
+    nums = []
+    if v.get("HEIGHT_FT") is not None:
+        nums.append("{:g} ft".format(v["HEIGHT_FT"]))
+    if v.get("STORAGE_ACFT") is not None:
+        nums.append("{:,.0f} ac-ft".format(v["STORAGE_ACFT"]))
+    return "  ".join(parts) + (" ({})".format(", ".join(nums)) if nums else "")
+
+
+def _suite_dwr_layer():
+    """(layer id, note) of the suite data folder's DWR dam inventory: the project's layer of that
+    file, else the file added to the project. ('', '') when there is none."""
+    try:
+        from .damsuite import suitedata as SD
+        path = SD.dwr_layers(SD.data_folder()).get("dwr_dams") or ""
+    except Exception:                                            # noqa
+        return "", ""
+    if not path or not os.path.isfile(path):
+        return "", ""
+    from qgis.core import QgsProject, QgsVectorLayer
+    want = os.path.normcase(os.path.abspath(path))
+    for lyr in QgsProject.instance().mapLayers().values():
+        src = str(lyr.source() or "").split("|")[0]
+        if isinstance(lyr, QgsVectorLayer) and src and \
+                os.path.normcase(os.path.abspath(src)) == want:
+            return lyr.id(), "The DWR dam inventory of the suite data folder is chosen."
+    lyr = QgsVectorLayer(path, "DWR dams (suite data)", "ogr")
+    if not lyr.isValid():
+        return "", ""
+    QgsProject.instance().addMapLayer(lyr)
+    return lyr.id(), "The DWR dam inventory of the suite data folder was added to the project."
 
 
 def _find_models():
@@ -211,6 +325,17 @@ def _classes():
         def show_problems(self, errors):
             _message("warning", "Please fix:\n\n- " + "\n- ".join(errors), parent=self)
 
+        def _scrolled_layout(self):
+            """Return a VBoxLayout for this page's content, wrapped in a QScrollArea."""
+            content = W.QWidget()
+            sa = W.QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setWidget(content)
+            page_lay = W.QVBoxLayout(self)
+            page_lay.setContentsMargins(0, 0, 0, 0)
+            page_lay.addWidget(sa)
+            return W.QVBoxLayout(content)
+
         def check(self, page):
             """Validate this page's answers; show the errors and return False if any."""
             wiz = self.wizard()
@@ -229,11 +354,18 @@ def _classes():
             self.setSubTitle("Pick the layer and the dam in it; the fields are matched by name "
                              "and you can correct any value.")
             self.layer_crs = ""
-            outer = W.QVBoxLayout(self)
+            outer = self._scrolled_layout()
             form = W.QFormLayout()
             self.layer = W.QComboBox()
             self.feature = W.QComboBox()
+            # 3.13.1: list only the dams of one county
+            self.county = W.QComboBox()
+            self.county.addItem(cty.ALL, "")
+            for name in cty.names():
+                self.county.addItem(name, name)
+            self.county.setToolTip("List only the dams whose point is in this county.")
             form.addRow("Dam layer", self.layer)
+            form.addRow("County", self.county)
             form.addRow("Dam (feature)", self.feature)
             outer.addLayout(form)
             self.note = W.QLabel("")
@@ -267,6 +399,7 @@ def _classes():
             self.record_note.setWordWrap(True)
             outer.addWidget(self.record_note)
             self.layer.currentIndexChanged.connect(self.layer_changed)
+            self.county.currentIndexChanged.connect(self.layer_changed)
             self.feature.currentIndexChanged.connect(self.values_from_feature)
             self.folder.editingFinished.connect(self.values_from_record)
             self.value_edit["DAM_ID"].editingFinished.connect(self.values_from_record)
@@ -276,12 +409,38 @@ def _classes():
             a = self.answers()
             self.folder.setText(a.get("dams_folder") or os.path.join(
                 os.path.expanduser("~"), "ndbreach_dams"))
-            fill_layers(self.layer, "vector", True, a.get("layer_id", ""))
+            # 3.13.0: no layer chosen yet: the DWR dam inventory of the suite data folder (added
+            # to the project when it is not there yet)
+            self.dwr_note = ""
+            keep = a.get("layer_id", "")
+            if not keep:
+                keep, self.dwr_note = _suite_dwr_layer()
+            fill_layers(self.layer, "vector", True, keep)
             self.layer_changed()
-            # 3.9.0: the dam the Runner window gave, when no layer feature gave one
-            did = str((a.get("dam") or {}).get("DAM_ID") or "")
-            if did and not self.value_edit["DAM_ID"].text().strip():
-                self.value_edit["DAM_ID"].setText(did)
+            if self.dwr_note:
+                self.note.setText(self.dwr_note + " " + self.note.text())
+            # 3.9.0 / 3.18.0: the dam the Runner window gave: the layer's feature with that ID
+            # when the list has it, else the record's values alone (before, the first feature of
+            # the layer stayed selected, so the wizard opened on another dam than the window's)
+            did = str((a.get("dam") or {}).get("DAM_ID") or "").strip()
+            if did:
+                wanted = {did.upper(), "DWR-" + did.upper()}
+                found = -1
+                for i in range(self.feature.count()):
+                    head = (self.feature.itemText(i).split() or [""])[0].upper()
+                    if head in wanted:
+                        found = i
+                        break
+                if found >= 0:
+                    self.feature.blockSignals(True)
+                    self.feature.setCurrentIndex(found)
+                    self.feature.blockSignals(False)
+                    self.values_from_feature()
+                else:
+                    for _key, param, _label, _kind, _req in wl.DAM_FIELDS:
+                        self.value_edit[param].setText("")
+                    self.point_edit.setText("")
+                    self.value_edit["DAM_ID"].setText(did)
             self.values_from_record()
 
         @_safe(what="reading the dam's dam.json")
@@ -321,14 +480,19 @@ def _classes():
                 combo.blockSignals(False)
             self.feature.blockSignals(True)
             self.feature.clear()
+            county = self.county.currentData() or ""
+            n_listed = 0
             if lyr is not None:
                 id_field = guess["mapping"].get("F_ID")
                 selected = list(lyr.selectedFeatureIds())
-                for k, f in enumerate(lyr.getFeatures()):
-                    if k >= 5000:
+                keep = _county_test(lyr, county, guess["mapping"])
+                for f in lyr.getFeatures():
+                    if n_listed >= 5000:
                         break
-                    label = str(f[id_field]) if id_field else "feature {}".format(f.id())
-                    self.feature.addItem(label, f.id())
+                    if not keep(f):
+                        continue
+                    n_listed += 1
+                    self.feature.addItem(_feature_label(f, id_field, guess["mapping"]), f.id())
                 if selected:
                     i = self.feature.findData(selected[0])
                     if i >= 0:
@@ -342,9 +506,10 @@ def _classes():
                 self.layer_crs = lyr.crs().authid()
                 miss = guess["missing"]
                 self.note.setText(
-                    "Fields matched: {}.{}".format(
+                    "Fields matched: {}.{}{}".format(
                         len(guess["mapping"]), " Not found: {}.".format(", ".join(miss))
-                        if miss else ""))
+                        if miss else "",
+                        " {} dam(s) in {} County.".format(n_listed, county) if county else ""))
             self.point_label.setText("Location (x, y) in {}".format(self.layer_crs or "?"))
             self.values_from_feature()
 
@@ -427,9 +592,29 @@ def _classes():
             self.n.setRange(0.005, 1.0)
             self.n.setSingleStep(0.005)
             self.n.setValue(0.06)
-            self.dem_note = W.QLabel("")      # 3.9.0: "(from dam folder)"
+            self.dem_note = W.QLabel("")      # 3.9.0: "(from dam folder)"; 3.18.0: the download
             self.dem_note.setWordWrap(True)
+            # 3.18.0: the Runner window's DEM download for this dam (ND Dam Breach Screening's
+            # tool), 10 m unless 1 m is chosen; the file becomes the DEM above
+            self.dem_res = W.QComboBox()
+            for cell, label in wl.DEM_RESOLUTIONS:
+                self.dem_res.addItem(label, cell)
+            self.dem_res.setToolTip("10 m is the usual choice. 1 m over the whole area a run may "
+                                    "need is a very large file and a long download.")
+            self.dem_download = W.QPushButton("Download DEM for this dam")
+            self.dem_download.setToolTip(
+                "USGS 3DEP around the dam point, the same download as the Runner window's DEM "
+                "box: written into the dam folder as data/dem_<cell>m.tif (EPSG:5070, metres), "
+                "recorded in dam.json and chosen as the DEM. Needs ND Dam Breach Screening.")
+            self.dem_download.clicked.connect(self.download_dem)
+            dl = W.QWidget()
+            dl_row = W.QHBoxLayout(dl)
+            dl_row.setContentsMargins(0, 0, 0, 0)
+            dl_row.addWidget(self.dem_download)
+            dl_row.addWidget(self.dem_res)
+            dl_row.addStretch(1)
             form.addRow("DEM", self.dem)
+            form.addRow("", dl)
             form.addRow("", self.dem_note)
             form.addRow("DEM elevation units", self.z)
             form.addRow("NLCD land cover (optional)", self.nlcd)
@@ -447,6 +632,45 @@ def _classes():
             fill_layers(self.manning, "raster", True, a.get("manning_id", ""))
             self.z.setCurrentIndex(max(self.z.findData(a.get("z_units", "auto")), 0))
             self.n.setValue(a.get("manning_n", 0.06))
+
+        @_safe(what="the DEM download")
+        def download_dem(self, *_):
+            """3.18.0: run the DEM download tool for the wizard's dam and take its file as the
+            DEM. The tool's own dialog shows the progress (it runs the download in the
+            background, as from the Runner window); this page's note says what happened."""
+            a = self.answers()
+            idx = max(0, self.dem_res.currentIndex())
+            cell_m = wl.dem_cell_m(idx)
+            params, problems = wl.dem_download_params(a, idx, to_lonlat=_to_lonlat)
+            if problems:
+                self.dem_note.setText("The DEM cannot be downloaded yet. " + " ".join(problems))
+                return
+            if _algorithm_missing(wl.DEM_DOWNLOAD_ALG):
+                self.dem_note.setText(wl.DEM_NOT_INSTALLED)
+                return
+            os.makedirs(params["OUT"], exist_ok=True)
+            self.dem_note.setText("Downloading the {} DEM for {} into {}. The progress is in "
+                                  "the tool's window; the wizard waits for it.".format(
+                                      self.dem_res.currentText(), params["DAM_ID"],
+                                      params["OUT"]))
+            _process_events()
+            import processing
+            t0 = time.time()
+            self.dem_download.setEnabled(False)
+            try:
+                result = processing.execAlgorithmDialog(wl.DEM_DOWNLOAD_ALG, params)
+            finally:
+                self.dem_download.setEnabled(True)
+            path, notes = wl.finish_dem_download(a, result, cell_m, translate=_gdal_translate,
+                                                 since=t0)
+            if not path:
+                self.dem_note.setText("No DEM was downloaded ({}). The DEM choice is "
+                                      "unchanged.".format(" ".join(notes) or
+                                                          "the tool's window was closed"))
+                return
+            fill_layers(self.dem, "raster", False, a.get("dem_id", ""), a.get("dem_name", ""))
+            self.dem_note.setText("DEM downloaded and chosen: {}{}".format(
+                path, "".join(" " + n for n in notes)))
 
         @_safe(default=False, what="the terrain page")
         def validatePage(self):
@@ -470,7 +694,7 @@ def _classes():
             Page.__init__(self)
             self.setTitle("Scenario")
             self.setSubTitle("Sunny-day failure, or a flood (PMF) with and without the breach.")
-            outer = W.QVBoxLayout(self)
+            outer = self._scrolled_layout()
             form = W.QFormLayout()
             self.method, self.scenario = W.QComboBox(), W.QComboBox()
             for m in wl.METHOD_IDS:
@@ -480,6 +704,11 @@ def _classes():
             form.addRow("Breach", self.method)
             form.addRow("Scenario", self.scenario)
             outer.addLayout(form)
+            # 3.20.0: what ND Dam Breach Screening ran for this dam, and where that came from
+            self.handoff = W.QLabel("")
+            self.handoff.setWordWrap(True)
+            self.handoff.setStyleSheet("color: gray;")
+            outer.addWidget(self.handoff)
             self.flood = W.QGroupBox("Flood scenario inputs")
             f2 = W.QFormLayout(self.flood)
             box1, self.inflow = path_row(self, "CSV files (*.csv);;All files (*)")
@@ -503,6 +732,11 @@ def _classes():
         @_safe(what="the scenario page")
         def initializePage(self):
             a = self.answers()
+            # 3.20.0: the screening's own method, scenario and cell size before the boxes are
+            # filled, so the page opens on what the screen ran rather than on piping at 10 m
+            wl.apply_screening_handoff(a)
+            self.handoff.setText(" ".join(x for x in (a.get("handoff_note"),
+                                                      a.get("handoff_missing")) if x))
             self.method.setCurrentIndex(max(self.method.findData(a.get("method")), 0))
             self.scenario.setCurrentIndex(max(self.scenario.findData(a.get("scenario")), 0))
             self.inflow.setText(a.get("inflow_csv", ""))
@@ -536,7 +770,7 @@ def _classes():
             self.setTitle("Models and cell size")
             self.setSubTitle("A finer cell is more accurate and much slower: LISFLOOD-FP's "
                              "run time grows about with the cube of 1/cell size.")
-            outer = W.QVBoxLayout(self)
+            outer = self._scrolled_layout()
             form = W.QFormLayout()
             self.tier = W.QComboBox()
             for t in wl.TIER_IDS:
@@ -550,6 +784,10 @@ def _classes():
             form.addRow("Models", self.tier)
             form.addRow("Cell size (m; 10 m = 32.8 ft)", self.cell)
             outer.addLayout(form)
+            self.handoff = W.QLabel("")                      # 3.20.0
+            self.handoff.setWordWrap(True)
+            self.handoff.setStyleSheet("color: gray;")
+            outer.addWidget(self.handoff)
             self.button = W.QPushButton("Estimate the run time")
             self.result = W.QLabel("")
             self.result.setWordWrap(True)
@@ -568,6 +806,9 @@ def _classes():
         @_safe(what="the models page")
         def initializePage(self):
             a = self.answers()
+            wl.apply_screening_handoff(a)                        # 3.20.0
+            self.handoff.setText(" ".join(x for x in (a.get("handoff_note"),
+                                                      a.get("handoff_missing")) if x))
             self.tier.setCurrentIndex(max(self.tier.findData(a.get("tier")), 0))
             self.cell.setValue(a.get("cell_m", 10.0))
             self.result.setText("Press the button to time a small test flood on this computer "
@@ -606,7 +847,7 @@ def _classes():
             Page.__init__(self)
             self.setTitle("Review")
             self.setSubTitle("Check the values, then open the tool.")
-            lay = W.QVBoxLayout(self)
+            lay = self._scrolled_layout()
             self.text = W.QPlainTextEdit()
             self.text.setReadOnly(True)
             lay.addWidget(self.text)

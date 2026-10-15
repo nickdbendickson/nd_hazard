@@ -16,6 +16,22 @@ the suite's (Suite data and servers) and the first one chosen becomes the suite'
 opens with the window's Dams folder, dam and DEM; the DEM download box takes the dam point from
 dam.json, writes into <dam folder>/data/ and puts the DEM into the DEM choice, the map and
 dam.json.
+
+3.20.0, so the window fits a laptop screen (it asked for 902 px and wanted 1,433):
+  * the 8-row DEM download box is a collapsible group and collapses itself once the dam has a
+    DEM - which is most visits, since a DEM is downloaded once per dam. The tool buttons are
+    the point of this window and they now start above the fold, "Run breach model" included.
+  * the four model-run settings (grid size, simulated time, longest simulated time, force
+    ANUGA) moved off the always-visible header onto an Advanced tab. They are engineering
+    choices that are set once and then left alone, and every one of them can still be changed
+    in the tool's own dialog.
+  * the grey "(from dam folder) ..." note has its own full-width row, so it no longer draws
+    over the row under it, and the long path is in its tooltip instead of on the row.
+  * the scroll areas and the log may shrink, so the window's own minimum height does.
+  * every grey Run button says why in its tooltip and in the status line under the tabs
+    (core/runblock.py: the suite's set-up errors plus what this plugin can see cheaply).
+  * when the dam was handed over by the screening, the page says what the screen ran and
+    where that came from (core/screenhandoff.py).
 """
 import json
 import os
@@ -25,7 +41,7 @@ from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QDoubleSpinBox, QCheckBox,
-    QGroupBox,
+    QGroupBox, QScrollArea,
 )
 
 from . import popup_logic as pl
@@ -36,6 +52,7 @@ except AttributeError:                  # pragma: no cover
     _YES = QMessageBox.Yes
 
 TITLE = "ND Dam Breach Runner"
+ADVANCED_TAB = "Advanced"         # 3.20.0: the run settings that used to sit on the header
 SCOPE = "NDBreachRunner"          # QgsProject entry scope
 ENTRY = "state"
 DISCLAIMER = ("Screening / engineering model results. Every threshold and parameter is the "
@@ -51,6 +68,42 @@ def plugin_version():
         return ""
 
 
+TAB_MIN_H = 170           # 3.20.0: a scroll area may shrink to this, so the window may too
+LOG_MIN_H = 44
+# 3.20.0: the window must fit a 768 px laptop screen with room for the title bar and the task
+# bar; the layout's own minimum decides the rest
+MIN_HEIGHT = 560
+
+
+def _scroll_tab(w):
+    """Wrap a tab widget in a QScrollArea so tall pages are reachable on small screens.
+
+    3.20.0: with a small minimum height of its own - a scroll area that refuses to shrink
+    makes the whole window refuse to shrink, which is how the window came to ask for 902 px."""
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setWidget(w)
+    try:
+        sa.setMinimumHeight(TAB_MIN_H)
+    except Exception:                                            # pragma: no cover - noqa
+        pass
+    return sa
+
+
+def _escape_tab_mnemonics(widget):
+    """1.18: a single '&' in a tab title is Qt's keyboard-shortcut marker and is not shown
+    ('Setup & Run' read 'Setup Run'); '&&' shows one '&'. Applied once the tabs are built."""
+    try:
+        from qgis.PyQt.QtWidgets import QTabWidget
+        for tw in widget.findChildren(QTabWidget):
+            for i in range(tw.count()):
+                t = tw.tabText(i)
+                if "&" in t and "&&" not in t:
+                    tw.setTabText(i, t.replace("&", "&&"))
+    except Exception:                                            # noqa
+        pass
+
+
 class NDBreachRunnerDialog(QDialog):
     """The popup window. `iface` is optional (used by the wizard)."""
 
@@ -60,12 +113,22 @@ class NDBreachRunnerDialog(QDialog):
         self._loading = True
         self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())
         self.setMinimumWidth(820)
+        self.setMinimumHeight(MIN_HEIGHT)                        # 3.20.0: fits 768 px
+        try:
+            from qgis.PyQt.QtWidgets import QApplication
+            self.setMaximumHeight(max(700, QApplication.primaryScreen().geometry().height() - 80))
+        except Exception:
+            pass
         self.tool_button = {}
+        self.tool_tip = {}                # 3.20.0: each button's own text, before the reasons
+        self._dem_box_collapsed_once = False
+        self._dem_box_touched = False     # the user opened or closed it: never fight that
         self._pending_dem = ""
         self._auto_point = ""             # 3.9.0: what the DEM box filled in (replaced on a dam change)
         self._auto_out = ""
         self.dem_point = self.dem_out = None    # the DEM box (when Screening is installed)
         self._build()
+        _escape_tab_mnemonics(self)
         self._load_state()
         self._loading = False
         try:
@@ -118,9 +181,18 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(QLabel("DEM:"), 2, 0)
         grid.addWidget(self.dem_combo, 2, 1)
         grid.addWidget(b, 2, 2)
-        self.dem_note = QLabel("")        # 3.9.0: "(from dam folder) ..." when the choice is empty
+        # 3.9.0: "(from dam folder) ..." when the choice is empty. 3.20.0: its own full-width
+        # row (it used to share a row with the grid size and draw over it), grey, and the long
+        # path lives in the tooltip instead of on the row.
+        self.dem_note = QLabel("")
         self.dem_note.setWordWrap(True)
-        grid.addWidget(self.dem_note, 3, 1)
+        self.dem_note.setStyleSheet("color: gray;")
+        grid.addWidget(self.dem_note, 3, 0, 1, 3)
+        # 3.20.0: where the values came from, when the screening handed this dam over
+        self.handoff_note = QLabel("")
+        self.handoff_note.setWordWrap(True)
+        self.handoff_note.setStyleSheet("color: gray;")
+        grid.addWidget(self.handoff_note, 4, 0, 1, 3)
         self.grid_m = QDoubleSpinBox()
         self.grid_m.setRange(0.5, 500.0)
         self.grid_m.setDecimals(1)
@@ -144,13 +216,8 @@ class NDBreachRunnerDialog(QDialog):
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
         self.force_anuga.toggled.connect(self._changed)
-        grid.addWidget(QLabel("Grid size (m):"), 4, 0)
-        grid.addWidget(self.grid_m, 4, 1)
-        grid.addWidget(QLabel("Simulated time (h):"), 5, 0)
-        grid.addWidget(self.simh, 5, 1)
-        grid.addWidget(QLabel("Longest simulated time (h):"), 6, 0)
-        grid.addWidget(self.simmax, 6, 1)
-        grid.addWidget(self.force_anuga, 7, 1)
+        # 3.20.0: the four run settings are on the Advanced tab, not on the header; the header
+        # keeps only what tells the window WHICH dam it is working on
         lay.addLayout(grid)
         lay.addWidget(self._dem_download_box())
 
@@ -160,14 +227,24 @@ class NDBreachRunnerDialog(QDialog):
 
         self.tabs = QTabWidget()
         for tab, tools in pl.TABS:
-            self.tabs.addTab(self._build_tab(tab, tools), tab)
-        self.tabs.addTab(self._build_settings_tab(), "Settings")        # 3.5: the suite settings grid
+            self.tabs.addTab(_scroll_tab(self._build_tab(tab, tools)), tab)
+        self.tabs.addTab(_scroll_tab(self._build_advanced_tab()), ADVANCED_TAB)
+        self.tabs.addTab(_scroll_tab(self._build_settings_tab()), "Settings")
         lay.addWidget(self.tabs, 1)
+
+        # 3.20.0: why the grey buttons are grey, in words, under the tabs
+        self.ready_label = QLabel("")
+        self.ready_label.setWordWrap(True)
+        lay.addWidget(self.ready_label)
 
         lay.addWidget(QLabel("Log"))
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
+        try:
+            self.log_edit.setMinimumHeight(LOG_MIN_H)            # 3.20.0: may shrink
+        except Exception:                                        # pragma: no cover - noqa
+            pass
         lay.addWidget(self.log_edit)
         row = QHBoxLayout()
         self.close_btn = QPushButton("Close")
@@ -186,6 +263,7 @@ class NDBreachRunnerDialog(QDialog):
             lay = QVBoxLayout()
             lay.addWidget(QLabel("ND Dam Breach Screening is not installed, so the DEM download is unavailable."))
             box.setLayout(lay)
+            self.dem_box = box
             return box
         box = QGroupBox("Download a DEM (USGS 3DEP or ND DWR LiDAR)")
         grid = QGridLayout()
@@ -197,12 +275,6 @@ class NDBreachRunnerDialog(QDialog):
         self.dem_ascii.setChecked(False)
         self.dem_imagine = QCheckBox("DEM_Imagine")
         self.dem_imagine.setChecked(True)
-        self.work_crs = QComboBox()
-        self.work_crs.addItems(["Keep source CRS", "EPSG:5070 metres", "EPSG:26914 UTM 14N metres",
-                                "EPSG:2265 ND North feet", "EPSG:2266 ND South feet"])
-        self.work_crs.setToolTip("3DEP is metres in EPSG:5070. QL2 Imagine is metres in UTM. "
-                                 "ASCII_Grids_ft is feet. Pick the CRS the model should use; "
-                                 "the download is warped to it.")
         self.dem_scope = QComboBox()
         self.dem_scope.addItems(["Dam", "County", "State"])
         self.dem_point = QLineEdit()
@@ -217,13 +289,15 @@ class NDBreachRunnerDialog(QDialog):
                                    "largest domain side (MAX_EXTENT_MI).")
         self.dem_county = QComboBox()
         self.dem_county.addItems(dd.county_names())
-        self.dem_dl_cell = QDoubleSpinBox()
-        self.dem_dl_cell.setRange(1.0, 100.0)
-        self.dem_dl_cell.setValue(pl.DEM_CELL_M)
-        self.dem_dl_cell.setSuffix(" m")
+        # 0.24.0: resolution choice; output is always EPSG:5070 float32 GeoTIFF metres
+        self.dem_resolution = QComboBox()
+        self.dem_resolution.addItems(["10 m", "1 m"])
+        self.dem_resolution.setToolTip(
+            "Output: EPSG:5070, float32 GeoTIFF, metres.\n"
+            "USGS 3DEP native: EPSG:5070, metres, GeoTIFF.\n"
+            "ND DWR QL2 native: feet, EPSG:3721/2266, Erdas Imagine .img at 1 m — warped.")
         self.dem_out = QLineEdit()
-        self.dem_out.setToolTip("3.9.0: <dam folder>/data when a dam is chosen; the DEM is then "
-                                "saved as data/dem_<cell>m.tif and recorded in dam.json.")
+        self.dem_out.setToolTip("Folder for the tiles and the standardised GeoTIFF.")
         browse = QPushButton("Browse...")
         browse.clicked.connect(self._browse_dem_folder)
         counties = QPushButton("Counties on the map")
@@ -234,36 +308,101 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(self.dem_source, 0, 1)
         grid.addWidget(self.dem_ascii, 0, 2)
         grid.addWidget(self.dem_imagine, 0, 3)
-        grid.addWidget(QLabel("ND LiDAR path"), 1, 0)
+        # 3.20.0: the ND LiDAR path row (an FTP placeholder) is only shown for Source = ND
+        # LiDAR; with USGS 3DEP chosen it was an FTP address nobody should type
+        self.dem_ftp_label = QLabel("ND LiDAR path")
+        grid.addWidget(self.dem_ftp_label, 1, 0)
         grid.addWidget(self.dem_ftp, 1, 1, 1, 3)
-        grid.addWidget(QLabel("3DEP area"), 2, 0)
+        grid.addWidget(QLabel("Area"), 2, 0)
         grid.addWidget(self.dem_scope, 2, 1)
+        grid.addWidget(QLabel("Resolution"), 2, 2)
+        grid.addWidget(self.dem_resolution, 2, 3)
         grid.addWidget(QLabel("Dam point"), 3, 0)
         grid.addWidget(self.dem_point, 3, 1)
         grid.addWidget(self.dem_buffer, 3, 2)
         grid.addWidget(QLabel("County"), 4, 0)
         grid.addWidget(self.dem_county, 4, 1)
-        grid.addWidget(QLabel("Cell"), 4, 2)
-        grid.addWidget(self.dem_dl_cell, 4, 3)
+        grid.addWidget(counties, 4, 2, 1, 2)
         grid.addWidget(QLabel("Folder"), 5, 0)
         grid.addWidget(self.dem_out, 5, 1)
         grid.addWidget(browse, 5, 2)
         grid.addWidget(go, 5, 3)
-        grid.addWidget(QLabel("Work CRS"), 6, 0)
-        grid.addWidget(self.work_crs, 6, 1)
-        grid.addWidget(counties, 6, 2, 1, 2)
-        box.setLayout(grid)
+        # item 2+7: inline format facts + time estimate label
+        self.dem_info_label = QLabel("")
+        self.dem_info_label.setWordWrap(True)
+        self.dem_info_label.setStyleSheet("color: gray;")
+        grid.addWidget(self.dem_info_label, 6, 0, 1, 4)
+        self.dem_source.currentIndexChanged.connect(self._update_dem_info)
+        self.dem_resolution.currentIndexChanged.connect(self._update_dem_info)
+        # 3.20.0: the eight rows live in a body widget the group box can hide, so this box -
+        # which matters once per dam - stops pushing the tool buttons off a laptop screen
+        body = QWidget()
+        body.setLayout(grid)
+        outer = QVBoxLayout()
+        outer.addWidget(body)
+        box.setLayout(outer)
+        self.dem_box, self.dem_body = box, body
+        try:
+            box.setCheckable(True)
+            box.setChecked(True)
+            box.setToolTip("A DEM is downloaded once per dam. Untick to fold this away and "
+                           "give the tool buttons the room.")
+            box.toggled.connect(self._dem_box_toggled)
+        except Exception:                                        # noqa - an older Qt
+            pass
+        self._update_dem_info()
         return box
+
+    def _dem_box_toggled(self, on):
+        """The user opened or closed the DEM box: show or hide its rows, and remember that the
+        choice is theirs now (the window never folds it again by itself)."""
+        try:
+            self._dem_box_touched = True
+            self.dem_body.setVisible(bool(on))
+        except Exception:                                        # noqa - never raise in a slot
+            pass
+
+    def _collapse_dem_box(self, have_dem):
+        """Fold the DEM download box away once the dam has a DEM - once, and never against a
+        choice the user has made."""
+        box = getattr(self, "dem_box", None)
+        if box is None or self._dem_box_touched or self._dem_box_collapsed_once:
+            return False
+        if not have_dem:
+            return False
+        try:
+            box.setChecked(False)
+            self.dem_body.setVisible(False)
+        except Exception:                                        # noqa
+            return False
+        self._dem_box_collapsed_once = True
+        self._dem_box_touched = False
+        return True
+
+    def _update_dem_info(self):
+        try:
+            self.dem_ftp_label.setVisible(self.dem_source.currentIndex() == 1)
+            self.dem_ftp.setVisible(self.dem_source.currentIndex() == 1)
+        except Exception:                                        # noqa - never raise in a slot
+            pass
+        try:
+            src = self.dem_source.currentIndex()
+            res = self.dem_resolution.currentIndex()
+            if src == 0:
+                txt = ("Output: EPSG:5070 float32 GeoTIFF, 10 m, metres.  ~12 s/dam." if res == 0
+                       else "Output: EPSG:5070 float32 GeoTIFF, 1 m, metres.  ~90 s/dam (large file).")
+            else:
+                txt = ("Output: EPSG:5070 float32 GeoTIFF, 10 m, metres.  QL2 .img warped from feet.  ~30 s/dam." if res == 0
+                       else "Output: EPSG:5070 float32 GeoTIFF, 1 m, metres.  QL2 .img warped from feet.  ~60 s/dam.")
+            self.dem_info_label.setText(txt)
+        except Exception:                                        # noqa
+            pass
 
     def _browse_dem_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "DEM folder", self.dem_out.text())
         if folder:
             self.dem_out.setText(folder)
 
-
-    def _work_crs(self):
-        text = self.work_crs.currentText()
-        return "" if text.startswith("Keep") else text.split()[0]
 
     def _show_counties(self):
         from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
@@ -395,18 +534,17 @@ class NDBreachRunnerDialog(QDialog):
         except OSError:
             pass
         s = self.settings()
-        cell = float(self.dem_dl_cell.value())
+        resolution_idx = self.dem_resolution.currentIndex()
         result = processing.execAlgorithmDialog("nddam:downloaddem", {
             "SOURCE": self.dem_source.currentIndex(),
             "SCOPE": self.dem_scope.currentIndex(),
             "DAM_POINT": self.dem_point.text().strip(),
             "BUFFER_MI": float(self.dem_buffer.value()),
             "COUNTY": self.dem_county.currentText(),
-            "CELL": float(self.dem_dl_cell.value()),
+            "RESOLUTION": resolution_idx,  # 0.24.0: 0=10m, 1=1m
             "DWR_PATH": self.dem_ftp.text().strip(),
             "ASCII_FT": self.dem_ascii.isChecked(),
             "IMAGINE": self.dem_imagine.isChecked(),
-            "WORK_CRS": self._work_crs(),
             "OUT": folder,
             # 3.9.0: the dam (ND Dam Breach Screening 0.16.0 and later use them; older ones
             # ignore them)
@@ -415,7 +553,8 @@ class NDBreachRunnerDialog(QDialog):
         })
         # QGIS's execAlgorithmDialog returns the results of the last run (empty when cancelled)
         if isinstance(result, dict) and result.get("VRT"):
-            return self._dem_downloaded(result["VRT"], folder, cell)
+            cell_m = 10.0 if resolution_idx == 0 else 1.0
+            return self._dem_downloaded(result["VRT"], folder, cell_m)
         return ""
 
     def _build_tab(self, tab, tools):
@@ -449,8 +588,10 @@ class NDBreachRunnerDialog(QDialog):
         grid = QGridLayout()
         for i, (alg, label, tip) in enumerate(tools):
             btn = QPushButton(label)
-            btn.setToolTip(tip + ("" if alg == pl.WIZARD else
-                                  "\n(Processing: {}:{})".format(pl.PROVIDER, alg)))
+            own = tip + ("" if alg == pl.WIZARD else
+                         "\n(Processing: {}:{})".format(pl.PROVIDER, alg))
+            btn.setToolTip(own)
+            self.tool_tip[alg] = own          # 3.20.0: kept, so a reason can be added to it
             btn.clicked.connect(lambda _c=False, a=alg: self._open_tool(a))
             self.tool_button[alg] = btn
             grid.addWidget(btn, i // 2, i % 2)
@@ -482,6 +623,158 @@ class NDBreachRunnerDialog(QDialog):
         lay.addStretch(1)
         w.setLayout(lay)
         return w
+
+    # ------------------------------------------------------- the advanced tab --
+    def _build_advanced_tab(self):
+        """3.20.0: the run settings that used to sit on the header above the tabs.
+
+        They are engineering choices - the grid the flood is solved on, how long it is
+        simulated, whether ANUGA gives the final results - set once for a dam and then left
+        alone, and every one of them can still be changed in the tool's own dialog. Keeping
+        them on the header cost four rows of a window that did not fit a laptop screen."""
+        w = QWidget()
+        lay = QVBoxLayout()
+        head = QLabel("The values the run tools open with. The tool's own dialog can still "
+                      "change every one of them before anything runs.")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        grid = QGridLayout()
+        grid.addWidget(QLabel("Grid size (m):"), 0, 0)
+        grid.addWidget(self.grid_m, 0, 1)
+        grid.addWidget(QLabel("Simulated time (h):"), 1, 0)
+        grid.addWidget(self.simh, 1, 1)
+        grid.addWidget(QLabel("Longest simulated time (h):"), 2, 0)
+        grid.addWidget(self.simmax, 2, 1)
+        grid.addWidget(self.force_anuga, 3, 1)
+        lay.addLayout(grid)
+        self.handoff_label = QLabel("")
+        self.handoff_label.setWordWrap(True)
+        lay.addWidget(self.handoff_label)
+        row = QHBoxLayout()
+        self.handoff_btn = QPushButton("Use the screening's values")
+        self.handoff_btn.setToolTip("Set the grid size here to the cell size ND Dam Breach "
+                                   "Screening recorded for this dam in dam.json.")
+        self.handoff_btn.clicked.connect(lambda _c=False: self._apply_handoff())
+        row.addWidget(self.handoff_btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+        lay.addWidget(self._life_loss_box())
+        lay.addStretch(1)
+        w.setLayout(lay)
+        return w
+
+    # ------------------------------------------------- loss of life (3.20.0) --
+    def _life_loss_box(self):
+        """Where an engineer enters and signs the fatality rate table (feature 12).
+
+        The table is a file the plugin reads (core/fatality_rates.json), signed off exactly as
+        the ACER TM 11 chart file is: this window only records the names it is given, and until
+        a name is there the reports say loss of life is not estimated."""
+        from .core import lifeloss as LL
+        box = QGroupBox("Loss of life: fatality rate table")
+        lay = QVBoxLayout()
+        note = QLabel(
+            "Population at risk, flood severity and warning time are always reported. Loss of "
+            "life is estimated only from a rate table an engineer has entered and signed: a "
+            "fatality rate is engineering judgement, not a plugin's value. Fractions of the "
+            "population at risk, 0 to 1, in every cell.")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        grid = QGridLayout()
+        self.rate_edits = {}
+        for c, band in enumerate(LL.LOSS.WARNING_BANDS):
+            grid.addWidget(QLabel(LL.LOSS.WARNING_LABELS[band]), 0, c + 1)
+        for r, sev in enumerate(LL.LOSS.SEVERITIES):
+            grid.addWidget(QLabel(sev), r + 1, 0)
+            for c, band in enumerate(LL.LOSS.WARNING_BANDS):
+                e = QLineEdit()
+                e.setPlaceholderText("0 to 1")
+                self.rate_edits[(sev, band)] = e
+                grid.addWidget(e, r + 1, c + 1)
+        lay.addLayout(grid)
+        row = QGridLayout()
+        self.rate_signer = QLineEdit()
+        self.rate_signer.setToolTip("The engineer who signs these rates off. One engineer is "
+                                    "enough; a second checker is optional.")
+        self.rate_checker = QLineEdit()
+        self.rate_source = QLineEdit()
+        self.rate_source.setPlaceholderText("where the rates come from (publication, table, "
+                                            "date)")
+        row.addWidget(QLabel("Signed off by:"), 0, 0)
+        row.addWidget(self.rate_signer, 0, 1)
+        row.addWidget(QLabel("Checked by:"), 1, 0)
+        row.addWidget(self.rate_checker, 1, 1)
+        row.addWidget(QLabel("Source:"), 2, 0)
+        row.addWidget(self.rate_source, 2, 1)
+        lay.addLayout(row)
+        self.rate_status = QLabel("")
+        self.rate_status.setWordWrap(True)
+        lay.addWidget(self.rate_status)
+        buttons = QHBoxLayout()
+        b = QPushButton("Save and sign the rate table")
+        b.clicked.connect(lambda _c=False: self._save_rates())
+        buttons.addWidget(b)
+        b2 = QPushButton("Open the rate table file")
+        b2.clicked.connect(lambda _c=False: self._open_rate_file())
+        buttons.addWidget(b2)
+        buttons.addStretch(1)
+        lay.addLayout(buttons)
+        box.setLayout(lay)
+        self._fill_rates()
+        return box
+
+    def _fill_rates(self):
+        """Put the rate table file's values in the boxes and say what its status is."""
+        try:
+            from .core import lifeloss as LL
+            table, problem = LL.load()
+            if table is None:
+                self.rate_status.setText(problem or "no rate table file")
+                return
+            rates = table.get("rates") or {}
+            for (sev, band), e in (self.rate_edits or {}).items():
+                v = (rates.get(sev) or {}).get(band)
+                e.setText("" if v in (None, "") else "{:g}".format(float(v)))
+            self.rate_signer.setText(table.get("signed_off_by") or "")
+            self.rate_checker.setText(table.get("checked_by") or "")
+            self.rate_source.setText(table.get("source") or "")
+            usable, text = LL.status_text(table)
+            self.rate_status.setText(("Loss of life IS estimated. " if usable else
+                                      "Loss of life is not estimated. ") + text)
+        except Exception as e:                                   # noqa - never raise in the UI
+            self.rate_status.setText("the rate table could not be read ({})".format(e))
+
+    def _save_rates(self):
+        """Write the rate table file with what is in the boxes, then say what its status is."""
+        try:
+            from .core import lifeloss as LL
+            values = {}
+            for (sev, band), e in (self.rate_edits or {}).items():
+                values.setdefault(sev, {})[band] = e.text().strip()
+            info = LL.write_rate_file(LL.plugin_file(), values,
+                                      signed_off_by=self.rate_signer.text().strip(),
+                                      checked_by=self.rate_checker.text().strip(),
+                                      source=self.rate_source.text().strip())
+            for bad in info.get("bad") or []:
+                self._log("!!! fatality rate not accepted: {}".format(bad))
+            self._log("Fatality rate table written: {} ({})".format(info["path"],
+                                                                     info["reason"]))
+            self._fill_rates()
+            return info
+        except Exception as e:                                   # noqa
+            self._log("!!! the rate table was not written ({})".format(e))
+            QMessageBox.information(self, TITLE,
+                                    "The fatality rate table was not written ({}).".format(e))
+            return None
+
+    def _open_rate_file(self):
+        try:
+            from .core import lifeloss as LL
+            p = LL.plugin_file()
+            if os.path.isfile(p):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+        except Exception as e:                                   # noqa
+            self._log("!!! the rate table file could not be opened ({})".format(e))
 
     # ------------------------------------------------------- the settings tab --
     def _build_settings_tab(self):
@@ -769,13 +1062,95 @@ class NDBreachRunnerDialog(QDialog):
         self.add_btn.setEnabled(have and bool(pl.result_files(folder)))
         # 3.9.0: an empty DEM choice is the dam folder's DEM (never replaces a choice)
         dem, from_folder = pl.dem_for(s, folder if have else "")
-        self.dem_note.setText("{} {}".format(pl.FROM_DAM_FOLDER, dem) if from_folder else "")
+        # 3.20.0: the row shows the file name, the whole path is in the tooltip - a 1,100 px
+        # path on the row is what used to run over the row below it
+        self.dem_note.setText("{} {}".format(pl.FROM_DAM_FOLDER, os.path.basename(dem))
+                              if from_folder else "")
+        self.dem_note.setToolTip(dem if from_folder else "")
         self.dem_combo.setToolTip(
             "The DEM filled into the model tools (a raster layer of the project or a file). "
             + ("Empty: the dam folder's DEM, {}.".format(dem) if from_folder else
                "Empty: the dam folder's DEM when 'Get data for this dam' has recorded one, else "
                "choose it in the tool's dialog."))
         self._prefill_dem_box()
+        self._collapse_dem_box(bool(dem))                        # 3.20.0
+        self._refresh_handoff(folder if have else "")            # 3.20.0
+        self._refresh_ready(s, folder if have else "", dem)      # 3.20.0
+
+    # -------------------------------------------- the screening hand-off (3.20.0) --
+    def _refresh_handoff(self, folder):
+        """Show what the screening ran for this dam, and offer its values.
+
+        Reading is cheap (one dam.json and one manifest) and it never raises: a dam that was
+        never screened simply shows nothing."""
+        self._handoff = {}
+        try:
+            from .core import screenhandoff as SH
+            info = SH.read(folder) if folder else {}
+            self._handoff = info
+            if SH.from_screening(info):
+                text = "Screening: {} {}".format(SH.values_text(info), SH.source_text(info))
+                missing = SH.missing_text(info)
+                self.handoff_note.setText(text)
+                self.handoff_label.setText(text + ("\n" + missing if missing else ""))
+                self.handoff_btn.setEnabled(info.get("cell_m") is not None)
+            else:
+                self.handoff_note.setText("")
+                self.handoff_label.setText(SH.missing_text(info) if folder else "")
+                self.handoff_btn.setEnabled(False)
+        except Exception as e:                                   # noqa - never raise in the UI
+            self.handoff_note.setText("")
+            self._log("!!! the screening hand-off could not be read: {}".format(e))
+
+    def _apply_handoff(self):
+        """Set the grid size to the cell size the screening recorded (the button on Advanced).
+
+        Only the grid size lives in this window; the breach method and the scenario are the run
+        tool's own parameters and are filled in when the tool opens (popup_logic.defaults)."""
+        info = getattr(self, "_handoff", None) or {}
+        cell = info.get("cell_m")
+        if not cell:
+            return False
+        try:
+            from .core import screenhandoff as SH
+            self.grid_m.setValue(float(cell))
+            self._log("Grid size set to {:g} m {}".format(float(cell), SH.source_text(info)))
+            self._changed()
+            return True
+        except Exception as e:                                   # noqa
+            self._log("!!! the screening's grid size was not applied: {}".format(e))
+            return False
+
+    # ---------------------------------------------- why a button is grey (3.20.0) --
+    def _refresh_ready(self, s, folder, dem):
+        """Enable or grey every tool button, and say why in its tooltip and the status line."""
+        try:
+            from .core import runblock as RB
+            from .damsuite import suitecheck as SC
+            try:
+                items = SC.check()
+            except Exception:                                    # noqa
+                items = []
+            h, st_acft = RB.dam_values(folder)       # one dam.json read for every button
+            values = {"HEIGHT_FT": h, "STORAGE_ACFT": st_acft}
+            states = {}
+            for alg, btn in (self.tool_button or {}).items():
+                got = RB.state(alg, folder=folder, dem=dem, dams_folder=s["dams_folder"],
+                               dam_id=s["dam_id"], items=items, values=values)
+                states[alg] = got
+                btn.setEnabled(bool(got["ok"]))
+                btn.setToolTip(RB.tooltip(alg, got["why"], self.tool_tip.get(alg, "")))
+            # the status line says the run tool's reason first: that is the button people came
+            # for, and "needs a DEM" is the answer to most visits
+            first = next((states[a]["status"] for a in RB.RUN_TOOLS
+                          if a in states and not states[a]["ok"]), "")
+            if not first:
+                first = next((g["status"] for g in states.values() if not g["ok"]), "")
+            self.ready_label.setText(first or "Ready: every tool of this window can run for "
+                                              "this dam.")
+        except Exception as e:                                   # noqa - never raise in the UI
+            self.ready_label.setText("")
+            self._log("!!! the readiness check failed: {}".format(e))
 
     def _refresh_models(self):
         """Which of LISFLOOD-FP / ANUGA are found. Not part of refresh(): looking for a conda
@@ -892,12 +1267,25 @@ class NDBreachRunnerDialog(QDialog):
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _open_other(self, folder_name, label):
+        """Open a sibling plugin's window pointed at this window's dam (1.18: the window is
+        started when it is installed but not loaded, and it gets the Dams folder and the dam)."""
         try:
-            from qgis.utils import plugins
-            plug = plugins.get(folder_name)
-            if plug is None:
-                raise KeyError("{} is not installed or not enabled".format(label))
-            plug.run_plugin()
+            from . import suite_home
+            plug, started = suite_home.load_plugin_object(folder_name)
+            if plug is None or not hasattr(plug, "run_plugin"):
+                raise KeyError("{} is not installed, or it could not be started".format(label))
+            dlg = plug.run_plugin()
+            if dlg is None:
+                dlg = getattr(plug, "dialog", None)
+            if started:
+                self._log(">>> {} was installed but not loaded: it has been started".format(label))
+            s = self.settings()
+            key = {"ND_Dam_Hazard_Helper": "ndhazard", "nd_dam_screening": "ndscreen"}.get(folder_name, "")
+            if dlg is not None and key and s["dams_folder"]:
+                done = suite_home.point_window_at(dlg, key, s["dams_folder"],
+                                                  {"folder": self.folder(), "dam_id": s["dam_id"]})
+                if done:
+                    self._log(">>> {} opened on {}".format(label, s["dam_id"] or s["dams_folder"]))
         except Exception as e:                                   # noqa
             QMessageBox.information(self, TITLE, "{} could not be opened ({}).".format(label, e))
 

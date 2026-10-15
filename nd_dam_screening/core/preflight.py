@@ -25,6 +25,13 @@ import time
 from . import workflow as wf
 from . import inventory as inv
 from . import settings_groups as SG
+from ..damsuite import netproxy       # QGIS's proxy setting applies (0.28.2)
+
+
+def _q(name):
+    """A GeoPackage table or column name as a quoted SQL identifier ("" doubles a quote), so a
+    layer whose name holds a quote is read instead of breaking the query. 0.28.1."""
+    return '"' + str(name).replace('"', '""') + '"'
 
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 THREEDEP_URL = ("https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer?f=json")
@@ -34,7 +41,9 @@ GB = 1024.0 ** 3
 PER_DAM_MB = 40.0
 MIN_FREE_GB = 2.0
 DWR_EXPECTED = ("structure_", "dam_name", "max_dam_he", "normal_vol", "max_pool_v", "hazard_cla", "status")
-STRUCT_FIELDS = (("occ_cls", "OCC_CLS"), ("prim_occ", "PRIM_OCC"))
+# 0.26.0: the NSI names (occtype / bldgtype) beside the ND package names, so an NSI-only structures
+# layer does not warn; each inner tuple is one group of alternatives (any one of them will do)
+STRUCT_FIELDS = (("occ_cls", "OCC_CLS", "occtype", "OCCTYPE"), ("prim_occ", "PRIM_OCC", "bldgtype", "BLDGTYPE"))
 LISFLOOD_ENGINES = (0, 1)
 
 
@@ -64,8 +73,8 @@ class Env(object):
                 g = con.execute("SELECT column_name, geometry_type_name, srs_id FROM gpkg_geometry_columns "
                                 "WHERE table_name=?", (lname,)).fetchone()
                 gcol, gtype, srs = (g[0], g[1], g[2]) if g else (None, "", None)
-                cols = [r[1] for r in con.execute('PRAGMA table_info("{}")'.format(lname))]
-                n = con.execute('SELECT COUNT(*) FROM "{}"'.format(lname)).fetchone()[0]
+                cols = [r[1] for r in con.execute('PRAGMA table_info({})'.format(_q(lname)))]
+                n = con.execute('SELECT COUNT(*) FROM {}'.format(_q(lname))).fetchone()[0]
                 crs = ""
                 if srs is not None:
                     r = con.execute("SELECT organization, organization_coordsys_id FROM gpkg_spatial_ref_sys "
@@ -91,7 +100,7 @@ class Env(object):
             try:
                 if lname is None:
                     lname = con.execute("SELECT table_name FROM gpkg_contents WHERE data_type='features'").fetchone()[0]
-                rows = con.execute('SELECT DISTINCT "{}" FROM "{}"'.format(field, lname)).fetchall()
+                rows = con.execute('SELECT DISTINCT {} FROM {}'.format(_q(field), _q(lname))).fetchall()
             finally:
                 con.close()
         except sqlite3.Error:
@@ -109,9 +118,9 @@ class Env(object):
             try:
                 if lname is None:
                     lname = con.execute("SELECT table_name FROM gpkg_contents WHERE data_type='features'").fetchone()[0]
-                have = {r[1] for r in con.execute('PRAGMA table_info("{}")'.format(lname))}
-                sel = ", ".join('"{}"'.format(f) if f in have else "NULL" for f in fields)
-                return [tuple(r) for r in con.execute('SELECT {} FROM "{}" ORDER BY fid'.format(sel, lname))]
+                have = {r[1] for r in con.execute('PRAGMA table_info({})'.format(_q(lname)))}
+                sel = ", ".join(_q(f) if f in have else "NULL" for f in fields)
+                return [tuple(r) for r in con.execute('SELECT {} FROM {} ORDER BY fid'.format(sel, _q(lname)))]
             finally:
                 con.close()
         except sqlite3.Error:
@@ -123,7 +132,7 @@ class Env(object):
         t0 = time.time()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "nd-dam-screening-preflight"})
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with netproxy.urlopen(req, timeout=self.timeout) as r:
                 code = getattr(r, "status", 200)
             return (code < 400), "answered in {:.1f} s (HTTP {})".format(time.time() - t0, code)
         except urllib.error.HTTPError as e:
@@ -167,6 +176,26 @@ def _slot(S, work, slot):
         return (S.get(slot) or "").strip()
 
 
+def pending_suite_clip(ref, work):
+    """0.28.0: True when `ref` is a <work>/0_suite_data/<slot>.gpkg clip that the DATA STEP will
+    write when the run starts, and it is not there yet.
+
+    The four suite-data clips (DWR dams, dam lines, water bodies, structures with the offline
+    pack or Download) are cut out of the pack - or downloaded - by the first step that needs
+    them, as the run starts. The preflight asks for them before that, so every new work folder
+    got four "could not open" warnings for files that were never meant to exist yet. A file that
+    is about to be written is not a problem; a file that is there and cannot be read still is."""
+    path = str(ref or "").partition("|")[0]
+    if not path or not work:
+        return False
+    try:
+        inside = os.path.dirname(os.path.abspath(path)) == os.path.abspath(
+            os.path.join(work, wf.SUITE_DIR))
+    except (OSError, ValueError):
+        return False
+    return bool(inside) and not os.path.isfile(path)
+
+
 def run_checks(work, settings, steps=None, env=None, n_dams=None):
     """The preflight list for a work folder, the window's settings and the steps that would run
     (default: the chain plan). Never raises; a check that cannot be made says so."""
@@ -207,10 +236,12 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                              "Free space on this drive or use a smaller cell size / corridor."))
     out.append(check(OK, "Steps that would run", plan, ""))
 
-    # -- terrain
-    needs_terrain = any(k in steps for k in ("2", "16")) or ("7" in steps and int(S.get("larger_clips") or 0) > 0)
+    # -- terrain (0.28.0: the step 7 larger-clip source is resolved, not read raw - the window's
+    # default is "follow the terrain source")
+    clips = wf.larger_clips_index(S)
+    needs_terrain = any(k in steps for k in ("2", "16")) or ("7" in steps and clips > 0)
     if needs_terrain:
-        local = int(S.get("terrain_source") or 0) == 1 or ("7" in steps and int(S.get("larger_clips") or 0) == 2
+        local = int(S.get("terrain_source") or 0) == 1 or ("7" in steps and clips == 2
                                                            and not any(k in steps for k in ("2", "16")))
         if local:
             folder = (S.get("local_dem") or "").strip()
@@ -226,6 +257,16 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
             else:
                 out.append(check(FAIL, "Local LiDAR DEM", "no DEM tiles in {}".format(folder or "(no folder)"),
                                  "Point 'Local DEM folder' at the folder of .tif / .img tiles, or use 3DEP."))
+            # 0.28.0: the cached cell follows the SOURCE, and 10 m is the 3DEP source. Your own
+            # tiles are usually 1 m, and clipping them at 10 m throws that terrain away, so the
+            # one setting that cannot be guessed from here is named before the run.
+            if "2" in steps and float(S.get("dem_cell_ft") or 0) > 10.0:
+                out.append(check(WARN, "Cached DEM cell size",
+                                 "{:.1f} ft ({:.1f} m) from a local DEM folder".format(
+                                     float(S["dem_cell_ft"]), float(S["dem_cell_ft"]) * 0.3048),
+                                 "Your tiles are probably finer: set 'DEM cell size (ft)' to their "
+                                 "cell (3.3 ft for 1 m LiDAR). Step 2 cannot read it back off the "
+                                 "tiles, so it uses what the box says."))
         else:
             ok, detail = env.url_ok(THREEDEP_URL)
             out.append(check(OK if ok else FAIL, "USGS 3DEP service", detail,
@@ -251,6 +292,18 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
         if workers > cpus:
             out.append(check(WARN, "Dams at the same time", "{} asked, {} CPU(s) here".format(workers, cpus),
                              "Lower it to the CPU count or less."))
+    # -- 0.28.0: the truncation this release is about. A flood that reaches the edge of the step 2
+    # clip and cannot grow stops there, and the result reads like a finished answer.
+    if "7" in steps:
+        from . import incomplete as ic
+        from . import runplan as rpl
+        why = ic.settings_reason(S, clips)
+        out.append(check(WARN if why else OK, "Flood cut off at the clip edge",
+                         why or wf.larger_clips_text(S).split(": ", 1)[-1],
+                         "Set 'Step 7 terrain for larger clips' to the terrain source (or leave it "
+                         "following it): a flood that reaches the clip edge then loads a larger clip "
+                         "instead of stopping." if why else ""))
+        out.append(check(OK, "Flood grid cell size", rpl.cell_label(S)))
 
     # -- layers
     def layer(slot, label, needed, geometry=None, fields=(), any_of=(), empty_ok=False):
@@ -263,6 +316,10 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
             return None
         info = env.layer_info(ref)
         if info is None:
+            if pending_suite_clip(ref, work):                    # 0.28.0: not written yet, by design
+                out.append(check(OK, label, "written by the data step when the run starts ({})".format(
+                    os.path.basename(str(ref).partition("|")[0]))))
+                return None
             out.append(check(WARN, label, "{} - the preflight could not open it here".format(ref),
                              "Check the layer opens in QGIS; a project layer is fine, the check reads files."))
             return None
@@ -350,9 +407,24 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                 out.append(check(OK, "ACER TM 11 charts", chart or "the plugin's chart file"))
             except Exception as e:                               # noqa
                 out.append(check(FAIL, "ACER TM 11 charts", str(e)[:200],
-                                 "Digitize and sign off the charts in ND Dam Hazard, or choose another criterion."))
+                                 "Sign the charts off in ND Dam Hazard (Dam suite > Chart sign-off, one engineer is "
+                                 "enough), or choose another criterion."))
         else:
             out.append(check(OK, "Hazard criterion", "no chart file needed"))
+    # -- 0.28.0: the suite's own set-up (damsuite.suitecheck), named here rather than only on the
+    # suite home. WARN, not FAIL: a run whose layers are all chosen by hand needs none of it.
+    try:
+        from ..damsuite import suitecheck as SC
+        items = SC.check()
+        stop = SC.blocking(items)
+        if stop:
+            out.append(check(WARN, "Suite set-up", "; ".join(
+                "{}: {}".format(i.get("label") or i.get("key"), i.get("text") or "") for i in stop),
+                "; ".join(i["fix"] for i in stop if i.get("fix"))))
+        else:
+            out.append(check(OK, "Suite set-up", SC.summary_text(items)))
+    except Exception as e:                                       # noqa - never stops the check list
+        out.append(check(WARN, "Suite set-up", "could not be checked: {}".format(e)))
     # -- other plugins
     if "7b" in steps:
         v = env.plugin_version("ndbreach")
@@ -391,6 +463,52 @@ def summary(checks):
 
 def ready(checks):
     return not any(c["status"] == FAIL for c in checks)
+
+
+def blocking_reasons(checks=None, suite_items=None, work=None, busy=False):
+    """0.28.0: why a Run button is grey, named - the text the button's tooltip and the status
+    line both show.
+
+    Three sources, in the order a user meets them: the suite is not set up
+    (damsuite.suitecheck.blocking - the folder, the pack, the charts), the work folder is not
+    chosen, and the preflight found a failure. A grey button with no reason is the complaint this
+    answers, so an empty list means the button should be enabled."""
+    out = []
+    if busy:
+        out.append("a run is going on: Stop it first")
+    if work is not None and not str(work or "").strip():
+        out.append("no work folder chosen")
+    elif work is not None and not os.path.isdir(str(work)):
+        out.append("the work folder does not exist: {}".format(work))
+    items = suite_items
+    if items is None:
+        try:
+            from ..damsuite import suitecheck as SC
+            items = SC.check()
+        except Exception:                                        # noqa - a check is never a crash
+            items = []
+    try:
+        from ..damsuite import suitecheck as SC
+        for i in SC.blocking(items):
+            out.append("{}: {}{}".format(i.get("label") or i.get("key"), i.get("text") or "",
+                                         " - " + i["fix"] if i.get("fix") else ""))
+    except Exception:                                            # noqa
+        pass
+    for c in checks or []:
+        if c.get("status") == FAIL:
+            out.append("{}: {}{}".format(c.get("title"), c.get("detail") or "",
+                                         " - " + c["fix"] if c.get("fix") else ""))
+    seen, uniq = set(), []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+def blocking_text(reasons, lead="Cannot run: "):
+    """The reasons as one line ("" when nothing blocks the run)."""
+    return (lead + "; ".join(reasons)) if reasons else ""
 
 
 MARK = {OK: "OK  ", WARN: "WARN", FAIL: "FAIL", SKIP: "--  "}

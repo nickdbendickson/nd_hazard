@@ -827,6 +827,7 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
     grid = _Grid(_ft_units(200.0, analysis_crs, lat))
     a_to_clip = clip.transform_from(analysis_crs) if clip is not None else None
     outside = 0
+    no_crs = []          # 2.23.0: layers with no valid CRS (the empty-inventory message)
 
     # --- footprints ---------------------------------------------------------
     # The first outline source defines the buildings; outlines of further
@@ -852,6 +853,8 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
         if not olyr.isValid():
             continue
         reader = _SourceReader(ofam, olyr)
+        if not olyr.crs().isValid():
+            no_crs.append(olyr.name())
         xf = QgsCoordinateTransform(olyr.crs(), analysis_crs, transform_ctx)
         if not xf.isValid() and olyr.crs() != analysis_crs:
             raise RuntimeError("The coordinate transformation {} -> {} for the structure layer '{}' is invalid "
@@ -900,6 +903,8 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
         if layer is None or not layer.isValid():
             continue
         reader = _SourceReader(family, layer)
+        if not layer.crs().isValid():
+            no_crs.append(layer.name())
         xf = QgsCoordinateTransform(layer.crs(), analysis_crs, transform_ctx)
         if not xf.isValid() and layer.crs() != analysis_crs:
             raise RuntimeError("The coordinate transformation {} -> {} for the structure layer '{}' is invalid "
@@ -1038,11 +1043,19 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
     for rec in structs:
         _interpret(rec, **rules)
     if not structs and outside > 0:
+        # 2.23.0: say which it is - a layer with no CRS, or layers that cover somewhere else
+        if no_crs:
+            why = ("{} has no CRS, so its coordinates could not be placed (longitude/latitude "
+                   "may have been read as projected coordinates). Set the layer's CRS.".format(
+                       ", ".join("'{}'".format(n) for n in sorted(set(no_crs)))))
+        else:
+            why = ("The layers have a CRS, so this is an extent mismatch, not a missing CRS: "
+                   "they cover somewhere else, or the study area is not where the dam is. "
+                   "Check the layers and the dam point.")
         raise InventoryRejected(
             "All {} structure feature(s) fell outside the study area, so the inventory "
-            "is empty. This is usually a layer with no CRS (longitude/latitude read as "
-            "projected coordinates). The dam was not classified; an empty inventory is "
-            "not Low.".format(outside))
+            "is empty. {} The dam was not classified; an empty inventory is "
+            "not Low.".format(outside, why))
     log_message("Structure inventory: {} buildings ({} with outlines) - {} habitable, "
                 "{} unverified, {} not habitable; {} points moved onto nearby outlines; "
                 "{} features outside the study area{}".format(

@@ -211,7 +211,7 @@ from nd_dam_screening.dialog import NDDamScreeningDialog, STATE_TEXT  # noqa: E4
 
 QgsProject.instance().__dict__.pop("_entries", None)
 dlg = NDDamScreeningDialog()
-assert set(dlg.step_button) == set(wf.KEYS) and dlg.tabs.count() == 6 and len(dlg.step_button) == 21
+assert set(dlg.step_button) == set(wf.KEYS) and dlg.tabs.count() == 7 and len(dlg.step_button) == 21
 assert [dlg.tabs.tabText(i) for i in range(6)] == ["Simple", "All steps", "Inputs", "Settings", "Review", "Results"]
 assert not dlg.step_button["1"].isEnabled() and not dlg.next_btn.isEnabled()      # no work folder yet
 assert "Choose or create a work folder" in dlg.hint_label.text()
@@ -428,9 +428,22 @@ assert d7["BASELINE"] is True and d7["BASELINE_CFS"] == 120.0 and d7["BUILDINGS"
 assert d7["BUILDING_RAISE_FT"] == 12.0 and d7["BUILDING_N"] == 0.2
 d7 = wf.defaults("7", W, {})
 assert "BASELINE" not in d7 and "BUILDINGS" not in d7 and "BLD" not in d7
-# 0.20.0: the clip grows from the downstream trace only when the settings ask for it
-assert "PREGROW" not in d7 and wf.DEFAULT_SETTINGS["pregrow"] is False
+# 0.20.0 / 0.28.0: the clip grows from the downstream trace, now by default (a flood cut off at
+# the clip edge reads like a finished answer); switched off, the parameter is simply not passed
+assert d7["PREGROW"] is True and wf.DEFAULT_SETTINGS["pregrow"] is True
 assert wf.defaults("7", W, {"pregrow": True})["PREGROW"] is True
+assert "PREGROW" not in wf.defaults("7", W, {"pregrow": False})
+# 0.28.0: the larger-clip source follows the terrain source, and the preset is passed so the
+# Grid size box is not silently overruled by QGIS's own default (Quick screen)
+assert wf.DEFAULT_SETTINGS["larger_clips"] == wf.CLIPS_FOLLOW
+assert wf.defaults("7", W, {})["TSRC"] == wf.CLIPS_3DEP
+assert wf.defaults("7", W, {"terrain_source": 1, "local_dem": "/lidar"})["TSRC"] == wf.CLIPS_LOCAL
+assert wf.defaults("7", W, {"larger_clips": 0})["TSRC"] == wf.CLIPS_CACHE
+assert wf.defaults("7", W, {})["PRESET"] == 0 and wf.defaults("7", W, {"preset": 3})["PRESET"] == 3
+# 0.28.0: both loading cases and the resume switch are only passed when they differ from the tool
+assert "SCEN_BOTH" not in wf.defaults("7", W, {}) and "SKIPDONE" not in wf.defaults("7", W, {})
+assert wf.defaults("7", W, {"both_scenarios": True})["SCEN_BOTH"] is True
+assert wf.defaults("7", W, {"skip_done": False})["SKIPDONE"] is False
 assert wf.defaults("8", W, {"incremental": True})["INCREMENTAL"] is True and "INCREMENTAL" not in wf.defaults("8", W, {})
 d11 = wf.defaults("11", W, {"ref_folder": "/ref", "ref_units": 1, "scenario": 0})
 assert d11["SIM"].endswith("7_simulations.gpkg") and d11["SIMDIR"].endswith("7_simulations") if wf.exists(W, "7", "OUTDIR") else True

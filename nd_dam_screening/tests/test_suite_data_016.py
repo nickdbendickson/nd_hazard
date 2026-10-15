@@ -308,24 +308,24 @@ assert prov.GET_DATA().name() == "getdamdata" and prov.GET_DATA().group() == "Sc
 print("OK (provider: data-aware tools 1 and 16, getdamdata)")
 
 # ---------------------------------------------------------------------------------------------
-# 6. the DEM box: its own 10 m cell, a dam ID with a folder, values remembered, Qt6-safe Yes
+# 6. the DEM box: resolution combobox (0=10m, 1=1m), a dam ID with a folder, values remembered
 from qgis import processing as qproc  # noqa: E402
 from qgis.core import QgsSettings  # noqa: E402
 from nd_dam_screening.dialog import NDDamScreeningDialog  # noqa: E402
 os.environ["NDSUITE_DAMS"] = dams
 dlg = NDDamScreeningDialog()
-assert dlg.dem_dl_cell.value() == 10.0
+assert dlg.dem_resolution.currentIndex() == 0              # default 10 m
 dlg.dem_dam_id.setText("DWR-77")
 dlg.dem_scope.setCurrentIndex(2)                           # state: asks first (answered Yes)
 del qproc.DIALOGS[:]
 sent = dlg._open_dem_download()
 assert qproc.DIALOGS and qproc.DIALOGS[-1][0] == "nddam:downloaddem"
-assert sent["CELL"] == 10.0 and sent["DAM_ID"] == "DWR-77" and sent["DAMS_FOLDER"] == dams and "OUT" not in sent
+assert sent["RESOLUTION"] == 0 and sent["DAM_ID"] == "DWR-77" and sent["DAMS_FOLDER"] == dams and "OUT" not in sent
 assert QgsSettings().value("ndscreen/dem_box/dam_id") == "DWR-77"
-dlg.dem_dl_cell.setValue(3.0)
+dlg.dem_resolution.setCurrentIndex(1)                      # switch to 1 m
 dlg._save_dem_box()
 dlg2 = NDDamScreeningDialog()                              # next session: the box's values are back
-assert dlg2.dem_dl_cell.value() == 3.0 and dlg2.dem_dam_id.text() == "DWR-77"
+assert dlg2.dem_resolution.currentIndex() == 1 and dlg2.dem_dam_id.text() == "DWR-77"
 assert QgsSettings().value("ndscreen/dem_box/scope") == 2
 # a dam ID without a folder and no output folder: asked for a folder, nothing opened
 dlg2.dem_dam_id.setText("NOPE-1")

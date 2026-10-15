@@ -38,8 +38,10 @@ Depth and velocity at a structure are the maxima at its location; they may occur
 different times, so the chart point is an upper bound (conservative).
 
 The chart boundaries are polygons in (velocity ft/s, depth ft) digitized from the figures and
-stored in `acer_tm11_charts.json` with who digitized and checked them. Until that file says
-"digitized", the chart method refuses to run (ChartsNotDigitized) rather than guess.
+stored in `acer_tm11_charts.json` with the engineer who digitized and signed them off (one
+engineer is enough since suite 1.14.1; a second checker is optional). Until that file says
+"digitized" and names the engineer, the chart method refuses to run (ChartsNotDigitized) rather
+than guess. The file shipped with the plugin is signed off (damsuite.tm11_curves.SIGNED_OFF_BY).
 """
 import datetime
 import hashlib
@@ -182,38 +184,51 @@ class ChartSet:
     digitized_by: str = ""
     digitized_on: str = ""
     checked_by: str = ""
+    signed_off_by: str = ""
+    signed_off_on: str = ""
     notes: str = ""
     charts: dict = field(default_factory=dict)       # key -> DangerChart
     path: str = ""
     sha256: str = ""
 
     @property
+    def signer(self):
+        """The engineer who signed the charts off: signed_off_by, else the digitizer, else the
+        checker. One name is enough (suite 1.14.1); a second checker is optional."""
+        return (self.signed_off_by or "").strip() or (self.digitized_by or "").strip() or \
+            (self.checked_by or "").strip()
+
+    @property
+    def signed_on(self):
+        return (self.signed_off_on or "").strip() or (self.digitized_on or "").strip()
+
+    @property
     def ready(self):
         return self.status == "digitized" and CHART_HOUSE in self.charts and \
-            CHART_MOBILE in self.charts and bool(self.digitized_by.strip()) and \
-            bool(self.checked_by.strip())
+            CHART_MOBILE in self.charts and bool(self.signer)
 
     def chart(self, mobile):
         if not self.ready:
             have = CHART_HOUSE in self.charts and CHART_MOBILE in self.charts
             raise ChartsNotDigitized(
-                "The ACER TM 11 depth-velocity charts are not digitized and checked in {} (status: "
-                "'{}', digitized by '{}', checked by '{}'). {}Load a digitized and checked chart "
+                "The ACER TM 11 depth-velocity charts are not signed off in {} (status: "
+                "'{}', digitized by '{}', signed off by '{}'). {}Load a signed-off chart "
                 "file, or, for these 2D results, use the conservative method (every inundated "
                 "habitable structure counted as potentially lethal). The 2 ft depth rule is only "
                 "allowed for a 1D model (5.2.1.1).".format(
                     self.path or "the chart file", self.status, self.digitized_by,
-                    self.checked_by,
-                    "The zone polygons are in the file, but it does not record a person who "
-                    "digitized them and a different person who checked them: fill in "
-                    "digitized_by / checked_by and set status 'digitized' (ND Dam Hazard > Chart "
-                    "sign-off writes the file that way). " if have else ""))
+                    self.signer,
+                    "The zone polygons are in the file, but it does not record the engineer who "
+                    "signed them off: fill in signed_off_by (or digitized_by) and set status "
+                    "'digitized' (ND Dam Hazard > Chart sign-off writes the file that way; one "
+                    "engineer is enough). " if have else ""))
         return self.charts[CHART_MOBILE if mobile else CHART_HOUSE]
 
     def info(self):
         return {"status": self.status, "source": self.source,
                 "digitized_from": self.digitized_from, "digitized_by": self.digitized_by,
                 "digitized_on": self.digitized_on, "checked_by": self.checked_by,
+                "signed_off_by": self.signer, "signed_off_on": self.signed_on,
                 "file": self.path, "sha256": self.sha256}
 
 
@@ -226,7 +241,8 @@ def load_charts(path=None):
     cs = ChartSet(status=d.get("status", "not digitized"), source=d.get("source", CHART_REFERENCE),
                   digitized_from=d.get("digitized_from", ""), digitized_by=d.get(
                       "digitized_by", ""), digitized_on=d.get("digitized_on", ""),
-                  checked_by=d.get("checked_by", ""), notes=d.get("notes", ""), path=path,
+                  checked_by=d.get("checked_by", ""), signed_off_by=d.get("signed_off_by", ""),
+                  signed_off_on=d.get("signed_off_on", ""), notes=d.get("notes", ""), path=path,
                   sha256=hashlib.sha256(raw).hexdigest())
     for key, c in (d.get("charts") or {}).items():
         if not c:
@@ -246,7 +262,8 @@ def load_charts(path=None):
 def save_charts(path, cs):
     d = {"status": cs.status, "source": cs.source, "digitized_from": cs.digitized_from,
          "digitized_by": cs.digitized_by, "digitized_on": cs.digitized_on,
-         "checked_by": cs.checked_by, "notes": cs.notes,
+         "checked_by": cs.checked_by, "signed_off_by": cs.signed_off_by,
+         "signed_off_on": cs.signed_off_on, "notes": cs.notes,
          "charts": {k: {"title": c.title, "figure": c.figure, "v_max_fts": c.v_max_fts,
                         "d_max_ft": c.d_max_ft, "tolerance": c.tolerance,
                         "high": [list(p) for p in c.high],
@@ -746,15 +763,26 @@ def classify(structures=(), roads=(), railroads=(), lifelines=(), downstream_dam
 
 
 # ------------------------------------------------------------------------------ output
+def class_label(c):
+    """Human-readable class with a note when the conservative rule is the only reason for High."""
+    cls = c.hazard_class
+    if cls == HIGH and c.settings.get("lethality") == LETHALITY_ALL_WET:
+        return "{} (conservative: TM 11 chart not signed off)".format(cls)
+    return cls
+
+
 def markdown(c, dam_id="", title="Hazard classification"):
+    lbl = class_label(c)
     lines = ["# {}{}".format(title, ": " + dam_id if dam_id else ""), "",
-             "**Class: {}**".format(c.hazard_class.upper()), "",
+             "**Class: {}**".format(lbl.upper()), "",
              "Basis: {}. Lethality: {}.".format(c.policy, LETHALITY_LABELS.get(
                  c.settings.get("lethality"), c.settings.get("lethality"))), ""]
     if c.charts:
-        lines += ["Charts: {} (status {}, digitized by {}, checked by {}, SHA-256 {}).".format(
+        lines += ["Charts: {} (status {}, digitized by {}, signed off by {}{}, SHA-256 {}).".format(
             c.charts.get("source"), c.charts.get("status"), c.charts.get("digitized_by") or "-",
-            c.charts.get("checked_by") or "-", (c.charts.get("sha256") or "")[:12]), ""]
+            c.charts.get("signed_off_by") or c.charts.get("checked_by") or "-",
+            " on " + c.charts["signed_off_on"] if c.charts.get("signed_off_on") else "",
+            (c.charts.get("sha256") or "")[:12]), ""]
     if c.governing:
         lines += ["## Governing", ""]
         lines += ["- {} ({}){}".format(f.reason, f.section,

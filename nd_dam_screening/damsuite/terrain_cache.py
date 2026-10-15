@@ -20,7 +20,10 @@ Decisions:
   * Tiles never expire on their own (terrain does not change between runs); `clear` removes a
     service / cell folder, and `max_age_days` in `get` re-downloads older tiles on request.
   * A failed tile stops the request with the tiles that failed (no DEM with a hole is returned).
-Pure Python standard library; GDAL (osgeo) only in `normalize` and only when installed.
+  * 1.9.0: a tile whose single request fails is asked for again as 2 x 2 quarters and joined
+    (`fetch_split`, needs GDAL); the grid and the tile size do not change, so caches stay valid.
+Pure Python standard library; GDAL (osgeo) only in `normalize` / `fetch_split` and only when
+installed.
 """
 import math
 import os
@@ -198,9 +201,14 @@ def get(box, cell, cdir, fetch_tile, vrt_path, tile_px=TILE_PX, max_age_days=Non
         else:
             part = _part_name(p)
             try:
-                fetch_tile(tb, cell, (tile_px, tile_px), part)
-                if not _is_tiff(part):
-                    raise TerrainError("the answer is not a GeoTIFF")
+                try:
+                    fetch_tile(tb, cell, (tile_px, tile_px), part)
+                    if not _is_tiff(part):
+                        raise TerrainError("the answer is not a GeoTIFF")
+                except Exception as e:                           # noqa
+                    # 1.9.0: a big tile can time out as one request; ask for it in quarters
+                    if not fetch_split(fetch_tile, tb, cell, tile_px, part, log=log, why=e):
+                        raise
                 if normalize_tiles:
                     normalize(part)
                 os.replace(part, p)
@@ -223,6 +231,61 @@ def get(box, cell, cdir, fetch_tile, vrt_path, tile_px=TILE_PX, max_age_days=Non
               tile_px=tile_px)
     return {"vrt": vrt_path, "tiles": [tile_path(cdir, ix, iy) for ix, iy, _tb in want],
             "fetched": fetched, "cached": cached, "box": sb}
+
+
+SPLIT_MIN_PX = 1000             # tiles this size or larger are asked for in quarters on failure
+
+
+def fetch_split(fetch_tile, tb, cell, tile_px, out_path, log=None, why=""):
+    """1.9.0: download one cache tile as 2 x 2 requests of half the size and join them into
+    out_path (the tile's grid and size are unchanged, so the cache stays valid). Used when the
+    whole-tile request failed (the DamSafety audit saw a 3DEP export of ~3,200 px time out).
+    Needs GDAL; returns False (nothing written) without it, for a small tile, or when a quarter
+    fails too."""
+    if tile_px < SPLIT_MIN_PX or tile_px % 2:
+        return False
+    try:
+        from osgeo import gdal
+        if not hasattr(gdal, "BuildVRT"):
+            return False
+    except Exception:                                            # noqa
+        return False
+    half = tile_px // 2
+    step = half * cell
+    parts = []
+    try:
+        for i in range(2):
+            for j in range(2):
+                qb = (tb[0] + i * step, tb[1] + j * step, tb[0] + (i + 1) * step,
+                      tb[1] + (j + 1) * step)
+                q = "{}.q{}{}.tif".format(out_path, i, j)
+                parts.append(q)
+                fetch_tile(qb, cell, (half, half), q)
+                if not _is_tiff(q):
+                    return False
+        vrt = out_path + ".q.vrt"
+        parts.append(vrt)
+        ds = gdal.BuildVRT(vrt, parts[:4], outputBounds=tuple(tb), xRes=cell, yRes=cell)
+        if ds is None:
+            return False
+        ds = None
+        ds = gdal.Translate(out_path, vrt, format="GTiff", width=tile_px, height=tile_px,
+                            projWin=(tb[0], tb[3], tb[2], tb[1]))
+        if ds is None:
+            return False
+        ds = None
+        if log:
+            log("terrain: tile {} came in 4 parts (the whole tile failed: {})".format(
+                os.path.basename(out_path).split(".")[0], why))
+        return _is_tiff(out_path)
+    except Exception:                                            # noqa
+        return False
+    finally:
+        for q in parts:
+            try:
+                os.remove(q)
+            except OSError:
+                pass
 
 
 def arcgis_fetcher(service, http_get):

@@ -15,7 +15,8 @@ import os
 import shutil
 import subprocess
 import sys
-import urllib.request
+
+from ..damsuite import netproxy                  # QGIS's proxy setting applies (3.20.2)
 
 MICROMAMBA_VERSION = "2.9.0-0"
 URL = ("https://github.com/mamba-org/micromamba-releases/releases/download/{v}/"
@@ -106,7 +107,7 @@ def download(url, dest, expected_sha256, log=None, cancel=None, opener=None):
     last = None
     for attempt in range(3):
         try:
-            with (opener or urllib.request.urlopen)(url, timeout=60) as r, open(part, "wb") as f:
+            with (opener or netproxy.urlopen)(url, timeout=60) as r, open(part, "wb") as f:
                 while True:
                     if cancel and cancel():
                         raise Cancelled("cancelled")
@@ -125,8 +126,9 @@ def download(url, dest, expected_sha256, log=None, cancel=None, opener=None):
     if last is not None:
         _rm(part)
         raise SetupError("Could not download {}: {}. This needs the internet once (github.com "
-                         "and conda.anaconda.org must be reachable; behind a proxy set the "
-                         "HTTPS_PROXY environment variable).".format(url, last))
+                         "and conda.anaconda.org must be reachable; behind a proxy set it in QGIS "
+                         "(Settings > Options > Network) or in the HTTPS_PROXY environment "
+                         "variable).".format(url, last))
     got = sha256_of(part)
     if got != expected_sha256:
         _rm(part)
@@ -164,7 +166,7 @@ def _clean_env(home):
     for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH"):
         env.pop(k, None)
     env["MAMBA_ROOT_PREFIX"] = os.path.join(home, "root")
-    return env
+    return netproxy.env_for("https://conda.anaconda.org/", env)     # 3.20.2: QGIS's proxy
 
 
 def _run(cmd, env, log, cancel):

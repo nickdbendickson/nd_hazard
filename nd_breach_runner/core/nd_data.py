@@ -92,19 +92,22 @@ def lut_table(lut=None):
 # --------------------------------------------------------------------------------------
 # Normalised (lower case, letters and digits only) names to look for, most likely first. The
 # North Dakota State Water Commission inventory and the National Inventory of Dams
-# both use variants of these; the match is by name, so check what it picked.
+# both use variants of these; the match is by name, so check what it picked. 3.13.0: the ND DWR
+# inventory's max_pool_vol / max_pool_area (at the top of dam). Its max_pool_elev is on a local
+# datum, so it is not a top-of-dam elevation here.
 FIELD_SYNONYMS = {
     "F_ID": ["nidid", "nid_id", "damid", "dam_id", "nationalid", "ndid", "id", "damnumber",
              "damno", "swcid", "structureid", "nidfedid"],
     "F_NAME": ["damname", "name", "dam_name", "structurename"],
     "F_HEIGHT": ["damheight", "nidheight", "height", "structuralheight", "hydraulicheight",
                  "damheightft", "heightft", "hgt"],
-    "F_STORAGE": ["maxstorage", "nidstorage", "storage", "maxstorageacft", "storageacft",
+    "F_STORAGE": ["maxstorage", "nidstorage", "maxpoolvol", "storage", "maxstorageacft",
+                  "storageacft",
                   "topofdamstorage", "maximumstorage", "storagetop", "normalstorage"],
     "F_TOP": ["topofdam", "topofdamelevation", "topofdamelev", "damcrest", "crestelevation",
               "crestelev", "topdam", "topelev"],
     "F_AREA": ["surfacearea", "surfaceareaac", "surfaceareaacres", "reservoirarea", "area",
-               "maxsurfacearea", "surfarea"],
+               "maxsurfacearea", "surfarea", "maxpoolarea"],
     "F_PMF": ["pmfelevation", "pmfelev", "pmfwse", "pmfmaxelevation", "maxpmfelev",
               "pmflevel"],
     "F_BOTTOM": ["breachbottom", "breachbottomelevation", "breachbottomelev", "bottomelev",

@@ -4,10 +4,28 @@
 Run on any computer with internet access - QGIS is NOT needed, any Python
 3.7+ works (QGIS's own Python too):
 
-    python build_nd_pack.py                      -> nd_offline_pack.zip here
-    python build_nd_pack.py --out D:/nd_pack.zip
+    python build_nd_pack.py                      -> ND_Dam_Suite_Pack/ here (2.24.0)
+    python build_nd_pack.py --out D:/ND_Dam_Suite_Pack
+    python build_nd_pack.py --out D:/nd_pack.zip (the one-file pack of older releases)
     python build_nd_pack.py --only nsi,usa --refresh    (update two data sets)
     python build_nd_pack.py --list               (what it downloads)
+
+1.19.0 (builder 1.3): the whole pack from one run. Flowlines and waterbodies come from the USGS
+3D Hydrography Program (3DHP_flowlines, 3DHP_waterbodies; they replace NHD_*), the aquatic
+barrier layers from the SARP services behind tool.aquaticbarriers.org (SARP_dams,
+SARP_surveyed_crossings), the DWR and HIFLD layers from the files in the suite data folder's
+dwr/ and hifld/ (or --files; DWR_dams from the DWR service when there is no file) and the NLCD
+2021 land cover from the MRLC web coverage service (needs GDAL: inside QGIS).
+3DHP: the web service is read in 0.25 degree tiles (a state-wide request times out); when the National
+Map's 3DHP national file (zip / gdb / gpkg) is in the suite data folder's 3dhp/ (or --files) the
+flowlines and waterbodies are cut out of it instead.
+
+2.24.0: the pack is a folder with one GeoPackage per layer (damsuite.gpkgpack: manifest.json,
+LAYERS.txt with each layer and its source, <theme>/<name>.gpkg). The downloads still go into
+the working file first (<folder>_work/, resume as below); then every data set fetched in this
+run (or missing from the folder) is written to its GeoPackage. Layers the folder holds that
+this builder does not fetch (the DWR files, HIFLD layers, land cover added to the pack) are
+kept. An --out ending in .zip writes the older one-file pack instead.
 
 It fetches every data set the plugin downloads - for all of North Dakota
 (its bounding box plus a 0.1 degree margin, so the plugin's 2-3 mile
@@ -52,12 +70,15 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor, wait as _cf_wait, FIRST_COMPLETED
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if __package__:                      # imported by the plugin (QGIS)
     from . import constants as C
     from . import osm_parse as O
+    from . import packfiles as PF
+    from .damsuite import hydro3dhp as H3
+    from .damsuite.netproxy import urlopen      # QGIS's proxy setting applies (1.16.2)
     from .offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME, ND_BBOX,
                                DEFAULT_PAD_DEG, PackError, STATUS_PARTIAL,
                                write_clean_copy)
@@ -66,11 +87,15 @@ else:                                # run as a script: the plugin folder is bes
         sys.path.insert(0, HERE)
     import constants as C            # noqa: E402  (no QGIS imports in these three)
     import osm_parse as O            # noqa: E402
+    import packfiles as PF           # noqa: E402
+    from damsuite import hydro3dhp as H3   # noqa: E402
+    from damsuite.netproxy import urlopen  # noqa: E402
     from damsuite.offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME,  # noqa: E402
                                        ND_BBOX, DEFAULT_PAD_DEG, PackError,
                                        STATUS_PARTIAL, write_clean_copy)
 
-BUILDER_VERSION = "1.2"
+BUILDER_VERSION = "1.3"
+NLCD_NAME = "NLCD_2021_landcover"
 TIMEOUT_S = 180
 RETRIES = 5
 NSI_TILE_DEG = C.DOWNLOAD_TILE_DEG           # the plugin's tile size (the API is happy)
@@ -537,13 +562,15 @@ def arcgis_ids(url, bbox, where="1=1", depth=0):
     try:
         d = http_json(url.rstrip("/") + "/query", dict(_envelope(bbox), where=where,
                                                          returnIdsOnly="true", f="json"),
-                      post=True, retries=3 if depth else RETRIES, what="object ids")
+                      post=True, retries=2 if depth else 3, what="object ids")
         ids = d.get("objectIds") or []
         return set(int(i) for i in ids)
     except BuildCancelled:
         raise
     except BuildError:
-        if depth >= 3:
+        # 1.19.0: a slow service (3DHP: HTTP 504 for a whole-state id list) answers a smaller box -
+        # split sooner and deeper (4^5 boxes at most)
+        if depth >= 5:
             raise
         out = set()
         for q in _split4(bbox):
@@ -677,11 +704,104 @@ def _uid_arcgis(oid_field):
     return uid
 
 
-def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
+def _known_fields(info, out_fields, log):
+    """1.19.0: the wanted fields the layer really has (a field list written for one service
+    version must not fail the whole layer); "*" stays."""
+    if not out_fields or out_fields == "*":
+        return "*"
+    have = {str(f.get("name")).lower(): f.get("name") for f in info.get("fields") or []}
+    if not have:
+        return out_fields
+    want = [x.strip() for x in out_fields.split(",") if x.strip()]
+    keep = [have[x.lower()] for x in want if x.lower() in have]
+    lost = [x for x in want if x.lower() not in have]
+    if lost:
+        log("  fields the layer does not have (left out): {}".format(", ".join(lost)))
+    return ",".join(keep) if keep else "*"
+
+
+def _grid(b, n):
+    x0, y0, x1, y1 = b
+    dx, dy = (x1 - x0) / n, (y1 - y0) / n
+    return [(x0 + i * dx, y0 + j * dy, x0 + (i + 1) * dx, y0 + (j + 1) * dy)
+            for j in range(n) for i in range(n)]
+
+
+def _arcgis_tile_job(url, tile, oid, size, out_fields, precision):
+    """One tile on a worker: every feature touching the box, paged by offset."""
+    feats, offset = [], 0
+    while True:
+        params = dict(_envelope(tile), where="1=1", outFields=out_fields, outSR="4326",
+                      f="geojson", resultOffset=offset, resultRecordCount=size)
+        if oid:
+            params["orderByFields"] = "{} ASC".format(oid)
+        if precision is not None:
+            params["geometryPrecision"] = str(precision)
+        d = http_json(url.rstrip("/") + "/query", params, post=True, retries=RETRIES + 3,
+                      what="tile")
+        page = d.get("features", []) if isinstance(d, dict) else []
+        feats.extend(page)
+        exceeded = bool(d.get("exceededTransferLimit") or
+                        (d.get("properties") or {}).get("exceededTransferLimit"))
+        if not page or (len(page) < size and not exceeded):
+            return feats
+        offset += len(page)
+
+
+def fetch_arcgis_tiles(ctx, url, bbox, tile_deg, out_fields="*", precision=None,
+                       transform=None):
+    """1.19.0: a heavy layer (3DHP: HTTP 504 for a state-wide id list, but small boxes answer) is read
+    in tiles of tile_deg degrees, each tile paged by offset; a tile that touches two boxes is kept
+    once (the feature id). A finished tile is stored at once, so a rerun reads only what is missing."""
+    info = http_json(url.rstrip("/"), {"f": "json"}, what="layer description")
+    out_fields = _known_fields(info, out_fields, ctx.log)
+    transform = transform or (lambda feats: feats)
+    oid = info.get("objectIdField") or next(
+        (f.get("name") for f in info.get("fields") or []
+         if f.get("type") == "esriFieldTypeOID"), None)
+    size = max(1, min(1000, int(info.get("maxRecordCount") or 1000)))
+    uid = _uid_arcgis(oid)
+    tiles = _tiles(bbox, tile_deg)
+    ctx.log("  {} tiles of {} degree".format(len(tiles), tile_deg))
+    have, keys = _resume_tiles(ctx, tiles)
+    failed = []
+    done = [len(have)]
+
+    def got(args, res):
+        if isinstance(res, Exception):
+            failed.append((args[1], str(res)))
+        else:
+            ctx.writer.add(transform(res), uid, chunk=_tile_key(args[1]))
+        done[0] += 1
+        ctx.sub(100.0 * done[0] / len(tiles), "{} of {} tiles, {:,} features".format(
+            done[0], len(tiles), ctx.writer._cur["n"]))
+    _pool(ctx, ctx.workers, [(_arcgis_tile_job, (url, t, oid, size, out_fields, precision))
+                             for t, k in zip(tiles, keys) if k not in have], got)
+    if failed:
+        if len(failed) > max(2, len(tiles) // 20):
+            raise BuildError("{} of {} tiles failed, e.g. {}".format(
+                len(failed), len(tiles), failed[0][1]))
+        note = "{} tile(s) could not be read: {}".format(len(failed), "; ".join(
+            "{:.2f},{:.2f}".format(t[0], t[1]) for t, _e in failed))
+        ctx.log("  WARNING: " + note)
+        ctx.gaps = [tuple(t) for t, _e in failed]
+        ctx.status = STATUS_PARTIAL
+        return note
+    return ""
+
+
+def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None, transform=None, id_grid=1,
+                 tile_deg=None):
     """Whole-area ArcGIS layer: the object ids first, then the features by
     id in parallel chunks. Services that cannot list ids are paged by
-    offset. Returns a note."""
+    offset. Returns a note. transform(features) -> features is applied to
+    every batch before it is stored (3DHP: the NHD-style properties).
+    tile_deg: read in tiles of that size instead (see fetch_arcgis_tiles)."""
+    if tile_deg:
+        return fetch_arcgis_tiles(ctx, url, bbox, tile_deg, out_fields, precision, transform)
     info = http_json(url.rstrip("/"), {"f": "json"}, what="layer description")
+    out_fields = _known_fields(info, out_fields, ctx.log)
+    transform = transform or (lambda feats: feats)
     oid = info.get("objectIdField") or next(
         (f.get("name") for f in info.get("fields") or []
          if f.get("type") == "esriFieldTypeOID"), None)
@@ -689,12 +809,21 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
     size = max(1, min(IDS_CHUNK, mrc))
     uid = _uid_arcgis(oid)
     try:
-        ids = sorted(arcgis_ids(url, bbox))
+        if id_grid > 1:             # 1.19.0: a heavy layer (3DHP) times out on the whole state
+            found = set()
+            boxes = _grid(bbox, id_grid)
+            for k, q in enumerate(boxes):
+                ctx.sub(0.0, "listing features, area {} of {}".format(k + 1, len(boxes)))
+                found |= arcgis_ids(url, q)
+            ids = sorted(found)
+        else:
+            ids = sorted(arcgis_ids(url, bbox))
     except BuildCancelled:
         raise
     except BuildError as e:
         ctx.log("  object ids not listed ({}) - reading pages instead".format(e))
-        return _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid)
+        return _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid,
+                                   transform)
     done_ids = _resume_ids(ctx, ids)
     ctx.log("  {:,} features".format(len(ids)))
     if not ids:
@@ -714,6 +843,7 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
             missing.extend(ch)
         else:
             feats, miss = res
+            feats = transform(feats)
             if miss:                # not wholly read: no chunk record - read again next run
                 missing.extend(miss)
                 ctx.writer.add(feats, uid)
@@ -743,7 +873,8 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
     return note
 
 
-def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid):
+def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, transform=None):
+    transform = transform or (lambda feats: feats)
     offset, page = 0, 0
     size = max(1, min(2000, mrc))
     # v2.8.0: a page is a chunk too (key = offset and size; payload = how many
@@ -773,7 +904,7 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid):
         if precision is not None:
             params["geometryPrecision"] = str(precision)
         d = http_json(url.rstrip("/") + "/query", params, post=True, what="page")
-        feats = d.get("features", []) if isinstance(d, dict) else []
+        feats = transform(d.get("features", []) if isinstance(d, dict) else [])
         exceeded = bool(d.get("exceededTransferLimit") or
                         (d.get("properties") or {}).get("exceededTransferLimit"))
         added = ctx.writer.add(feats, uid, chunk=key,
@@ -903,7 +1034,6 @@ def fetch_osm(ctx, bbox, make_query, parse):
 def datasets():
     """[(name, label, group, kind, spec)] - name = the plugin's download
     name, so the plugin finds each data set under the name it asks for."""
-    nhd_fields = "gnis_name,gnis_id,ftype,fcode,reachcode,lengthkm"
     d = [
         ("NSI_structures", "USACE National Structure Inventory", "nsi", "nsi", {}),
         ("NDGISHUB_address_points", "ND GIS Hub site / structure address points", "address",
@@ -934,11 +1064,23 @@ def datasets():
         d.append(("lifeline_" + key, label, "lifelines", "arcgis", {"url": url}))
     d += [
         ("NBI_bridges", "National Bridge Inventory", "bridges", "arcgis", {"url": C.NBI_URL}),
-        ("NHD_flowlines", "USGS NHD flowlines (name and type only)", "nhd", "arcgis",
-         {"url": C.NHD_FLOWLINE_URL, "fields": nhd_fields, "precision": 6}),
-        ("NHD_waterbodies", "USGS NHD waterbodies (name, type and area only)", "nhd", "arcgis",
-         {"url": C.NHD_WATERBODY_URL, "fields": "gnis_name,gnis_id,ftype,fcode,areasqkm",
-          "precision": 6}),
+        ("3DHP_flowlines", "USGS 3DHP flowlines (3D Hydrography Program)", "hydro", "arcgis",
+         _hydro_spec(C.NHD_FLOWLINE_URL, True)),
+        ("3DHP_waterbodies", "USGS 3DHP waterbodies (3D Hydrography Program)", "hydro", "arcgis",
+         _hydro_spec(C.NHD_WATERBODY_URL, False)),
+        ("SARP_dams", "Aquatic barrier dams - SARP (tool.aquaticbarriers.org)", "barriers",
+         "arcgis", {"url": C.SARP_DAMS_URL, "fields": SARP_DAM_FIELDS, "precision": 6,
+                    "source": "Southeast Aquatic Resources Partnership (SARP) aquatic barrier "
+                              "prioritization, dams (the data behind tool.aquaticbarriers.org, "
+                              "Great Plains / Intermountain West region)",
+                    "used_by": "reference (fish passage / dam inventory cross-check)"}),
+        ("SARP_surveyed_crossings", "Aquatic barrier road-stream crossings, surveyed - SARP",
+         "barriers", "arcgis",
+         {"url": C.SARP_CROSSINGS_URL, "fields": SARP_CROSSING_FIELDS, "precision": 6,
+          "source": "Southeast Aquatic Resources Partnership (SARP) aquatic barrier "
+                    "prioritization, assessed (field-surveyed) road-stream crossings (the data "
+                    "behind tool.aquaticbarriers.org, Great Plains / Intermountain West region)",
+          "used_by": "reference (culverts and bridges on streams)"}),
         ("OSM_lifelines", "OpenStreetMap lifeline facilities", "osm", "osm",
          {"query": O.overpass_query, "parse": O.overpass_to_features}),
         ("OSM_crossings", "OpenStreetMap culverts / fords / rail bridges", "osm", "osm",
@@ -950,8 +1092,65 @@ def datasets():
         ("OSM_places", "OpenStreetMap cities / towns / villages", "osm", "osm",
          {"query": O.places_query, "parse": O.place_features}),
     ]
+    d += file_datasets()
     d += suite_datasets()
     return d
+
+
+# 1.19.0: pack fields kept from the SARP services (they have 257 / 236 fields; a field the layer
+# lacks is left out with a note - _known_fields)
+SARP_DAM_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,NIDID,River,StreamSizeClass,"
+                   "YearCompleted,Height,Length,Width,Hazard,Construction,Purpose,Passability,"
+                   "Condition,Feasibility,StorageVolume,WaterbodyAcres,Fatality,LowheadDam,"
+                   "Diversion,Canal,Intermittent,StreamOrder,TotDASqKm,StateRegulated,"
+                   "FERCRegulated,Removed,YearRemoved,YearSurveyed,OwnerType,BarrierOwnerType,"
+                   "SourceLink,NHDPlusID,Snapped,HUC8,HUC12,State,County")
+SARP_CROSSING_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,CrossingCode,SurveyID,River,"
+                        "StreamSizeClass,Road,RoadType,CrossingType,Constriction,"
+                        "PotentialProject,BarrierSeverity,SARP_Score,ProtocolUsed,Resurveyed,"
+                        "Removed,YearRemoved,YearSurveyed,Condition,Canal,Intermittent,"
+                        "StreamOrder,TotDASqKm,OwnerType,BarrierOwnerType,SourceLink,NHDPlusID,"
+                        "Snapped,HUC8,HUC12,State,County")
+
+
+def _hydro_spec(url, flow):
+    """The 3DHP layer's spec; a data-source file that points the address at the older NHD service
+    gets that service's own fields (and no transform)."""
+    if H3.is_3dhp_url(url):
+        return {"url": url, "fields": H3.FLOW_FIELDS if flow else H3.WB_FIELDS, "precision": 6,
+                "tile_deg": 0.25,
+                "transform": H3.normalise_flowlines if flow else H3.normalise_waterbodies,
+                "source": "USGS 3D Hydrography Program (3DHP_all MapServer, layer {}); "
+                          "NHD-style gnis_name / gnis_id / ftype / fcode added to the 3DHP "
+                          "properties".format(H3.layer_of_url(url)),
+                "used_by": "Hazard (travel time), Breach Runner (culverts), Screening (pool "
+                           "area)"}
+    return {"url": url, "precision": 6, "fields": "gnis_name,gnis_id,ftype,fcode,reachcode,"
+            "lengthkm" if flow else "gnis_name,gnis_id,ftype,fcode,areasqkm"}
+
+
+def file_datasets():
+    """1.19.0: the layers that come from files (DWR exports, HIFLD downloads) and the NLCD raster.
+    kind "file": packfiles scans the suite data folder's dwr/ and hifld/ (and --files); the DWR
+    dams fall back to the DWR service when no file is found. kind "raster": the MRLC web
+    coverage service, written as a GeoPackage raster (needs GDAL)."""
+    out = []
+    for name, label, _src, _g, _b in PF.KNOWN:
+        if name in PF.OSM_NAMES:         # listed in datasets() as Overpass downloads; a file wins
+            continue
+        spec = {}
+        if name == "DWR_dams":
+            spec = {"fallback": {"url": C.DWR_DAMS_URL, "precision": 6,
+                                 "source": "ND DWR dams inventory, public service (95 of the "
+                                           "export's 109 fields); a DWR export file in dwr/ "
+                                           "replaces it",
+                                 "used_by": "Screening, Breach Runner"}}
+        out.append((name, label, "dwr" if name.startswith("DWR") else "hifld", "file", spec))
+    out.append((NLCD_NAME, "NLCD 2021 land cover, North Dakota, 30 m (EPSG:5070)", "landcover",
+                "raster", {"service": "mrlc_nlcd2021_wcs",
+                           "source": "USGS / MRLC National Land Cover Database 2021 (MRLC WCS)",
+                           "used_by": "Screening, Breach Runner (Manning's n)"}))
+    return out
 
 
 # 2.17.0: data sets the suite's dam data reads (damsuite.damdata.PACK_SETS) from the servers
@@ -999,8 +1198,13 @@ class _Ctx(object):
         self.gaps = []                       # boxes that could not be read
 
 
+_GROUP_ALIASES = {"nhd": "hydro", "3dhp": "hydro", "nlcd": "landcover", "sarp": "barriers",
+                  "NHD_flowlines": "3DHP_flowlines", "NHD_waterbodies": "3DHP_waterbodies"}
+
+
 def _pick(names_or_groups, table):
-    want = set(x.strip() for x in (names_or_groups or "").split(",") if x.strip())
+    want = set(_GROUP_ALIASES.get(x.strip(), x.strip())
+               for x in (names_or_groups or "").split(",") if x.strip())
     if not want:
         return None
     known = set(n for n, *_r in table) | set(g for _n, _l, g, _k, _s in table)
@@ -1011,11 +1215,14 @@ def _pick(names_or_groups, table):
 
 
 def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refresh=False,
-          sources_file=None, progress=None, log=None):
+          sources_file=None, progress=None, log=None, files=None, box=None):
     """Build (or resume / update) the pack and write out_zip. progress(pct,
     msg) and log(msg) are optional callbacks; an exception raised by
     progress (a cancel) stops the build - the finished data sets are kept
-    for the next run. Returns the manifest."""
+    for the next run. Returns the manifest. box: (xmin, ymin, xmax, ymax) lon / lat of another
+    area than North Dakota. files: extra folders searched for the DWR / HIFLD
+    layer files (the suite data folder's dwr/ and hifld/ are always searched; folder packs
+    only)."""
     log = log or print
     progress = progress or (lambda p, m: None)
     _CANCEL.clear()
@@ -1028,13 +1235,29 @@ def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refr
                 sources_file, len(C.SOURCE_OVERRIDES)))
     table = datasets()
     only_set, skip_set = _pick(only, table), _pick(skip, table) or set()
-    todo = [t for t in table if (only_set is None or t[0] in only_set or t[2] in only_set)
-            and t[0] not in skip_set and t[2] not in skip_set]
-    bbox = (ND_BBOX[0] - pad, ND_BBOX[1] - pad, ND_BBOX[2] + pad, ND_BBOX[3] + pad)
+    chosen = [t for t in table if (only_set is None or t[0] in only_set or t[2] in only_set)
+              and t[0] not in skip_set and t[2] not in skip_set]
+    todo = [t for t in chosen if t[3] not in ("file", "raster")]
+    file_todo = [t for t in chosen if t[3] == "file"]
+    raster_todo = [t for t in chosen if t[3] == "raster"]
+    bbox = tuple(float(v) for v in box) if box else \
+        (ND_BBOX[0] - pad, ND_BBOX[1] - pad, ND_BBOX[2] + pad, ND_BBOX[3] + pad)
     out_zip = os.path.abspath(out_zip)
-    if not out_zip.lower().endswith(".zip"):
-        out_zip += ".zip"
-    work = os.path.splitext(out_zip)[0] + "_work"
+    # 2.24.0: a folder pack (one GeoPackage per layer) unless the name ends in .zip
+    folder_pack = not out_zip.lower().endswith(".zip")
+    if (file_todo or raster_todo) and not folder_pack:
+        log("The layer files and the land cover are added to a pack FOLDER only (not to a "
+            ".zip): {}".format(", ".join(t[0] for t in file_todo + raster_todo)))
+        file_todo, raster_todo = [], []
+    left_out = {}                            # 1.19.0: what could not be put in, and why
+    if folder_pack and any(t[0] in ("3DHP_flowlines", "3DHP_waterbodies") for t in todo):
+        todo = _add_3dhp_bulk(out_zip, todo, bbox, files, refresh, progress, log)
+    if file_todo:
+        todo += _add_layer_files(out_zip, file_todo, bbox, files, refresh, left_out, progress,
+                                 log)
+    if folder_pack and any(t[0] in PF.OSM_NAMES for t in todo):
+        todo = _add_osm_files(out_zip, todo, bbox, files, refresh, progress, log)
+    work = (out_zip.rstrip("\\/") if folder_pack else os.path.splitext(out_zip)[0]) + "_work"
     os.makedirs(work, exist_ok=True)
     db = os.path.join(work, DB_NAME)
     log("Offline data pack for North Dakota - area {:.3f}, {:.3f} to {:.3f}, {:.3f} "
@@ -1082,6 +1305,21 @@ def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refr
     finally:
         manifest = writer.manifest()
         writer.close(finalize=False)
+    if folder_pack:
+        progress(95.0, "Writing the GeoPackages...")
+        manifest = _write_folder(db, out_zip, manifest, log, progress,
+                                 extra_info={t[0]: {k: t[4][k] for k in ("source", "used_by")
+                                                    if t[4].get(k)} for t in todo})
+        if raster_todo:
+            manifest = _add_rasters(out_zip, raster_todo, bbox, refresh, left_out, failures,
+                                    progress, log)
+        if left_out:
+            manifest.setdefault("left_out", {}).update(left_out)
+            _gp().write_manifest(out_zip, manifest)
+        manifest["_failures"] = failures
+        _report(manifest, failures, log, out_zip)
+        progress(100.0, "Offline data pack written")
+        return manifest
     progress(99.0, "Writing the zip...")
     manifest = _write_zip(db, out_zip, manifest, log)
     ok = [k for k, v in manifest["datasets"].items() if v.get("status") == "complete"]
@@ -1133,7 +1371,7 @@ def _run_one(ctx, name, label, kind, spec, bbox):
         kept = None                          # count of an incomplete result already stored
         for k, url in enumerate(urls):
             try:
-                n = _run_one(ctx, name, label, "arcgis", {"url": url}, bbox)
+                n = _run_one(ctx, name, label, "arcgis", dict(spec, url=url, urls=None), bbox)
             except BuildCancelled:
                 raise
             except _NET_ERRORS as e:
@@ -1169,7 +1407,8 @@ def _run_one(ctx, name, label, kind, spec, bbox):
             note = fetch_nsi(ctx, bbox)
         elif kind == "arcgis":
             note = fetch_arcgis(ctx, url, bbox, spec.get("fields", "*"),
-                                spec.get("precision"))
+                                spec.get("precision"), spec.get("transform"),
+                                spec.get("id_grid", 1), spec.get("tile_deg"))
         elif kind == "osm":
             note = fetch_osm(ctx, bbox, spec["query"], spec["parse"])
         else:
@@ -1195,7 +1434,9 @@ def _signature(kind, spec, bbox):
     """What must be equal for stored chunks of an interrupted run to be
     reused: the settings that change what a chunk holds."""
     if kind == "arcgis":
-        return "arcgis|{}|{}".format(spec.get("fields", "*"), spec.get("precision"))
+        tr = spec.get("transform")
+        return "arcgis|{}|{}{}".format(spec.get("fields", "*"), spec.get("precision"),
+                                       "|" + tr.__name__ if tr is not None else "")
     if kind == "nsi":
         return "nsi|{}".format(NSI_TILE_DEG)
     if kind == "osm":
@@ -1206,6 +1447,314 @@ def _signature(kind, spec, bbox):
         except Exception:
             return "osm|{}".format(OVERPASS_TILE_DEG)
     return kind
+
+
+def _gp():
+    try:
+        from .damsuite import gpkgpack as GP
+    except ImportError:                                          # outside QGIS
+        from damsuite import gpkgpack as GP                      # noqa
+    return GP
+
+
+def _add_layer_files(pack, file_todo, bbox, extra_folders, refresh, left_out, progress, log):
+    """1.19.0: the DWR / HIFLD layer files into the pack folder (before the downloads). Returns the
+    entries to download instead (the DWR dams from the DWR service when there is no file)."""
+    GP = _gp()
+    try:
+        from .damsuite import suitedata as SD
+    except ImportError:
+        from damsuite import suitedata as SD                     # noqa
+    try:
+        data = SD.data_folder()
+    except Exception:                                            # noqa
+        data = ""
+    extra = [extra_folders] if isinstance(extra_folders, str) else list(extra_folders or [])
+    try:
+        saved = SD.layer_files_folder()
+    except Exception:                                            # noqa
+        saved = ""
+    folders = PF.folders_for(data, extra + ([saved] if saved else []))
+    progress(0.0, "Looking for the DWR / HIFLD layer files...")
+    log("Layer files (DWR exports, HIFLD downloads): searching {}".format(
+        ", ".join(folders) or "no folder (set the suite data folder, or use --files)"))
+    found = PF.scan(folders)
+    names = {t[0] for t in file_todo}
+    for n, p in sorted(found.items()):
+        if n in names:
+            log("  found {}: {}".format(n, p))
+    added, problems = PF.add_files(pack, found, bbox=bbox, only=names, replace=refresh, log=log)
+    have = (GP.read_manifest(pack) or {}).get("datasets") or {}
+    fallback = []
+    for name, label, group, _k, spec in file_todo:
+        if name in added or (name in have and name not in problems):
+            continue
+        if name in problems:
+            log("  {}: NOT added - {}".format(name, problems[name]))
+        fb = spec.get("fallback")
+        if fb and name not in have:
+            log("  {}: no usable file - the public service is used".format(name))
+            fallback.append((name, label + " (public service)", group, "arcgis", fb))
+        elif name not in have:
+            left_out[name] = problems.get(name) or PF.missing_text(name)
+            log("  {}: not in the pack - {}".format(name, left_out[name]))
+    return fallback
+
+
+def _add_osm_files(pack, todo, bbox, extra_folders, refresh, progress, log):
+    """The OpenStreetMap layers (OSM_*) that exist as files - made from a Geofabrik extract by the
+    ND Data Updater (its osm_layers folder) or nd_osm_download.py - go into the pack from the file;
+    the Overpass API (which answers HTTP 429 / 504 for state-sized requests) is tried only for
+    the others. The suite data folder's osm_layers/, --files and the Layer files folder are
+    searched. Returns `todo` without the data sets the files supplied."""
+    try:
+        from .damsuite import suitedata as SD
+    except ImportError:
+        from damsuite import suitedata as SD                     # noqa
+    try:
+        data = SD.data_folder()
+    except Exception:                                            # noqa
+        data = ""
+    extra = [extra_folders] if isinstance(extra_folders, str) else list(extra_folders or [])
+    try:
+        saved = SD.layer_files_folder()
+    except Exception:                                            # noqa
+        saved = ""
+    folders = PF.folders_for(data, extra + ([saved] if saved else []))
+    names = {t[0] for t in todo} & set(PF.OSM_NAMES)
+    found = {k: v for k, v in PF.scan(folders).items() if k in names}
+    if not found:
+        return todo
+    progress(0.0, "Reading the OpenStreetMap layer files...")
+    for n, p in sorted(found.items()):
+        log("  found {}: {}".format(n, p))
+    added, problems = PF.add_files(pack, found, bbox=bbox, only=names, replace=refresh, log=log)
+    have = (_gp().read_manifest(pack) or {}).get("datasets") or {}
+    for n, msg in sorted(problems.items()):
+        log("  {}: NOT added from the file - {}; the Overpass API is tried".format(n, msg))
+    return [t for t in todo if not (t[0] in found and (t[0] in added or (
+        t[0] in have and t[0] not in problems)))]
+
+
+def _add_3dhp_bulk(pack, todo, bbox, extra_folders, refresh, progress, log):
+    """1.19.0: when the 3DHP national file (National Map download; the suite data folder's 3dhp/
+    folder, or --files) is at hand, the flowlines and waterbodies are cut out of it - the web
+    service answers HTTP 504 / 502 to state-sized requests. Returns `todo` without the data sets
+    the file supplied; a missing file or a failure leaves them to the web service."""
+    try:
+        from .damsuite import suitedata as SD
+    except ImportError:
+        from damsuite import suitedata as SD                     # noqa
+    try:
+        data = SD.data_folder()
+    except Exception:                                            # noqa
+        data = ""
+    extra = [extra_folders] if isinstance(extra_folders, str) else list(extra_folders or [])
+    try:
+        saved = SD.layer_files_folder()
+    except Exception:                                            # noqa
+        saved = ""
+    path = PF.scan_3dhp(PF.folders_3dhp(data, extra + ([saved] if saved else [])))
+    if not path:
+        return todo
+    names = {t[0] for t in todo} & {"3DHP_flowlines", "3DHP_waterbodies"}
+    log("3DHP national file found: {} - the flowlines and waterbodies are cut out of it".format(
+        path))
+    progress(0.0, "Cutting the 3DHP flowlines and waterbodies out of {}...".format(
+        os.path.basename(path)))
+    added, problems = PF.add_3dhp(pack, path, bbox=bbox, only=names, replace=refresh, log=log)
+    have = (_gp().read_manifest(pack) or {}).get("datasets") or {}
+    for n, msg in sorted(problems.items()):
+        log("  {}: NOT added from the file - {}; the web service is tried".format(n, msg))
+    return [t for t in todo if not (t[0] in names and (t[0] in added or (
+        t[0] in have and t[0] not in problems)))]
+
+
+def _nlcd_tiles(box, step):
+    x0, y0, x1, y1 = box
+    nx, ny = int(math.ceil((x1 - x0) / step)), int(math.ceil((y1 - y0) / step))
+    for j in range(ny):
+        for i in range(nx):
+            yield (x0 + i * step, y0 + j * step, min(x1, x0 + (i + 1) * step),
+                   min(y1, y0 + (j + 1) * step))
+
+
+def _add_rasters(pack, raster_todo, bbox, refresh, left_out, failures, progress, log):
+    """1.19.0: the NLCD 2021 land cover (MRLC web coverage service, 30 m, EPSG:5070) as a
+    GeoPackage raster of the pack: the state's box fetched in 90 km tiles and joined. Needs GDAL
+    (QGIS has it)."""
+    GP = _gp()
+    try:
+        from .damsuite import services as SV
+        from .damsuite import terrain_cache as TC
+    except ImportError:
+        from damsuite import services as SV                      # noqa
+        from damsuite import terrain_cache as TC                 # noqa
+    man = GP.load_or_new(pack, bbox)
+    for name, label, _g, _k, spec in raster_todo:
+        if name in (man.get("rasters") or {}) and not refresh:
+            log("[raster] {}: already in the pack (kept - --refresh fetches it again)".format(name))
+            continue
+        log("[raster] {}".format(label))
+        try:
+            from osgeo import gdal, osr                          # noqa
+        except ImportError:
+            left_out[name] = "needs GDAL to write a raster: run the build inside QGIS"
+            log("  NOT built - " + left_out[name])
+            continue
+        service = next((s for s in SV.BUILTIN if s["id"] == spec.get("service")), None)
+        if service is None:
+            left_out[name] = "no land-cover service in the services list"
+            continue
+        t0 = time.time()
+        try:
+            _fetch_nlcd(pack, man, name, label, service, bbox, spec, gdal, osr, SV, TC,
+                        progress, log)
+            log("  done in {:.0f} s".format(time.time() - t0))
+        except BuildCancelled:
+            raise
+        except Exception as e:                                   # noqa - report, go on
+            failures.append((label, str(e)))
+            log("  FAILED: {}".format(e))
+    GP.write_manifest(pack, man)
+    return man
+
+
+def _fetch_nlcd(pack, man, name, label, service, bbox, spec, gdal, osr, SV, TC, progress, log):
+    import tempfile
+    src = osr.SpatialReference()
+    src.ImportFromEPSG(4326)
+    dst = osr.SpatialReference()
+    dst.ImportFromEPSG(5070)
+    for s in (src, dst):
+        try:
+            s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        except AttributeError:
+            pass
+    tr = osr.CoordinateTransformation(src, dst)
+    xs, ys = [], []
+    x0, y0, x1, y1 = bbox
+    for k in range(21):                      # the box's edge, so the curved edges are covered
+        f = k / 20.0
+        for lon, lat in ((x0 + f * (x1 - x0), y0), (x0 + f * (x1 - x0), y1),
+                         (x0, y0 + f * (y1 - y0)), (x1, y0 + f * (y1 - y0))):
+            px, py, _z = tr.TransformPoint(lon, lat)
+            xs.append(px)
+            ys.append(py)
+    cell = 30.0
+    box = TC.snap((min(xs), min(ys), max(xs), max(ys)), cell)
+    tiles = list(_nlcd_tiles(box, 3000 * cell))
+    log("  {:.0f} x {:.0f} km in {} tiles".format((box[2] - box[0]) / 1000, (box[3] - box[1]) / 1000,
+                                                 len(tiles)))
+    work = tempfile.mkdtemp(prefix="nd_nlcd_")
+    parts = []
+    try:
+        for i, t in enumerate(tiles):
+            _check_cancel()
+            size = (int(round((t[2] - t[0]) / cell)), int(round((t[3] - t[1]) / cell)))
+            url = SV.wcs_coverage_url(service, t, size)
+            progress(96.0 + 3.0 * i / len(tiles), "{}: tile {} of {}".format(label, i + 1,
+                                                                             len(tiles)))
+            p = os.path.join(work, "t{:03d}.tif".format(i))
+            data = None
+            for attempt in range(RETRIES):
+                try:
+                    req = Request(url, headers={"User-Agent": _ua()})
+                    with urlopen(req, timeout=TIMEOUT_S) as r:
+                        data = r.read()
+                    if data[:4] in (b"II*\x00", b"MM\x00*"):
+                        break
+                    raise BuildError("the land-cover service sent no GeoTIFF: {!r}".format(
+                        bytes(data[:80])))
+                except _NET_ERRORS as e:
+                    data = None
+                    if attempt + 1 >= RETRIES:
+                        raise BuildError("land-cover tile {}: {}".format(i + 1, _short(e)))
+                    time.sleep(_backoff_s("error", attempt))
+            with open(p, "wb") as fh:
+                fh.write(data)
+            parts.append(p)
+        vrt = os.path.join(work, "nlcd.vrt")
+        gdal.BuildVRT(vrt, parts)
+        tif = os.path.join(work, "nlcd.tif")
+        gdal.Translate(tif, vrt, format="GTiff", creationOptions=["COMPRESS=LZW", "TILED=YES"])
+        info = {"label": label, "source": spec.get("source") or "", "url": service["url"],
+                "fetched": time.strftime("%Y-%m-%d"), "used_by": spec.get("used_by") or ""}
+        _gp().add_raster_file(pack, man, name, tif, info, log)
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _write_folder(db, folder, manifest, log, progress=None, extra_info=None):
+    """2.24.0: the data sets of the working file as the pack folder's GeoPackages - those the
+    folder lacks or holds from an older fetch; the rest stay as they are.
+
+    1.5.0: the folder's own copy is kept, never overwritten or dropped, when it is the better
+    one. That is a layer the user replaced with their own file (``replaced``), a layer the folder
+    holds with a fetch date at least as new as the working file's (the 3DHP flowlines /
+    waterbodies cut straight to the folder from the National Map file, or an OSM file layer), and
+    any usable folder copy when this run's fetch of that layer failed (status not usable). Before,
+    every such layer was rewritten from the working file, so the user's own file and the 3DHP cut
+    were silently put back and a failed re-fetch dropped a good layer out of the pack."""
+    GP = _gp()
+    have = (GP.read_manifest(folder) or {}).get("datasets") or {}
+
+    def _folder_has(h):
+        return bool(h) and os.path.isfile(os.path.join(folder, *(h.get("file") or "?").split("/")))
+
+    todo = set()
+    kept = []
+    for name, v in (manifest.get("datasets") or {}).items():
+        h = have.get(name) or {}
+        work_usable = v.get("status") in ("complete", STATUS_PARTIAL)
+        if not _folder_has(h):
+            # the folder lacks it: write it from the work file, or (when this run could not fetch
+            # it either) let convert_v1 record it under left_out so LAYERS.txt says it is missing
+            todo.add(name)
+            continue
+        # the folder already holds a usable copy of this layer
+        if h.get("replaced"):
+            kept.append("{} (your own file)".format(name)); continue
+        if not work_usable:
+            kept.append("{} (this run's fetch failed; the pack keeps the copy it had)".format(name))
+            continue
+        if h.get("fetched") == v.get("fetched") and h.get("count") == v.get("count"):
+            continue                           # identical: nothing to write
+        if (h.get("fetched") or "") >= (v.get("fetched") or ""):
+            kept.append("{} (the pack's copy is newer)".format(name)); continue
+        todo.add(name)                         # the work file's copy is genuinely newer
+    for k in kept:
+        log("  kept the pack's own copy of " + k)
+    log("Writing {} data set(s) to {} (one GeoPackage each)...".format(len(todo), folder))
+    sub = (lambda p, m="": progress(95.0 + 4.0 * p / 100.0, "GeoPackages: " + m)) \
+        if progress else None
+    man = GP.convert_v1(db, folder, only=todo, log=log, progress=sub, extra_info=extra_info)
+    # 1.19.0: the 3DHP layers replace the NHD ones of an earlier pack
+    for old, new in (("NHD_flowlines", "3DHP_flowlines"), ("NHD_waterbodies", "3DHP_waterbodies")):
+        if new in (man.get("datasets") or {}) and old in (man.get("datasets") or {}):
+            GP.remove_dataset(folder, man, old, "replaced by {} (USGS 3DHP) on {}".format(
+                new, time.strftime("%Y-%m-%d")))
+            log("  {} removed: {} replaces it".format(old, new))
+            GP.write_manifest(folder, man)
+    return man
+
+
+def _report(manifest, failures, log, out):
+    ds = manifest.get("datasets") or {}
+    total = sum(int(v.get("count") or 0) for v in ds.values())
+    log("")
+    log("Pack written: {} - {} layers, {:,} features (LAYERS.txt lists each layer and its "
+        "source)".format(out, len(ds), total))
+    for k, v in sorted((manifest.get("left_out") or {}).items()):
+        log("  NOT in the pack: {} - {}".format(k, v))
+    for k, v in sorted(ds.items()):
+        if v.get("status") == STATUS_PARTIAL or v.get("gaps"):
+            log("  INCOMPLETE (used with a warning; run again to retry): {} - {}".format(
+                k, v.get("note") or "features missing"))
+    if failures:
+        log("Run the same command again later to retry what failed (finished data sets "
+            "are kept).")
 
 
 def _write_zip(db, out_zip, manifest, log):
@@ -1255,7 +1804,9 @@ def _write_zip(db, out_zip, manifest, log):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Build the ND Dam Hazard Helper offline data pack (North Dakota).")
-    ap.add_argument("--out", default="nd_offline_pack.zip", help="zip to write")
+    ap.add_argument("--out", default="ND_Dam_Suite_Pack",
+                    help="pack folder to write (one GeoPackage per layer), or a .zip for the "
+                         "older one-file pack")
     ap.add_argument("--pad", type=float, default=DEFAULT_PAD_DEG,
                     help="margin around North Dakota's bounding box, degrees (default "
                          "%(default)s; 0 = the box itself)")
@@ -1268,13 +1819,21 @@ def main(argv=None):
                     help="requests at once (default {})".format(C.DOWNLOAD_WORKERS))
     ap.add_argument("--sources", help="the plugin's data-source file (JSON) to use its "
                                       "addresses")
+    ap.add_argument("--files", action="append", default=None,
+                    help="a folder with the DWR / HIFLD layer files (can be repeated; the suite "
+                         "data folder's dwr/ and hifld/ are searched too)")
+    ap.add_argument("--box", help="build a pack for another area: xmin,ymin,xmax,ymax in lon / lat "
+                                  "(default: North Dakota plus --pad)")
     ap.add_argument("--list", action="store_true", help="list the data sets and stop")
     a = ap.parse_args(argv)
     if a.list:
         for name, label, group, kind, spec in datasets():
             src = spec.get("url") or ", ".join(spec.get("urls") or []) or \
                 ", ".join(u for _n, u in spec.get("choices") or []) or \
-                (C.NSI_API_URL if kind == "nsi" else C.OVERPASS_URL)
+                ("a file in dwr/ or hifld/" + (" (else " + spec["fallback"]["url"] + ")"
+                                                if spec.get("fallback") else "")
+                 if kind == "file" else "MRLC web coverage service" if kind == "raster" else
+                 C.NSI_API_URL if kind == "nsi" else C.OVERPASS_URL)
             print("{:<32} group {:<10} {}\n{:<32} {}".format(name, group, label, "", src))
         return 0
 
@@ -1294,7 +1853,8 @@ def main(argv=None):
         sys.stdout.flush()
     try:
         man = build(a.out, a.pad, a.only, a.skip, a.workers, a.refresh, a.sources,
-                    progress, log)
+                    progress, log, files=a.files,
+                    box=[float(v) for v in a.box.split(",")] if a.box else None)
     except (KeyboardInterrupt, BuildCancelled):
         print("\nStopped - the finished data sets are kept; run the same command to go on.")
         return 2

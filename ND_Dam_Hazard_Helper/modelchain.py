@@ -58,6 +58,7 @@ Nothing here needs QGIS. Nothing has been run in a real QGIS.
 """
 
 import csv
+import json
 import os
 import re
 import shutil
@@ -67,6 +68,7 @@ from .constants import SUBDIR_QA, OUTPUT_FOLDER_NAME
 
 CHECK_CSV = "Model_Chain_Check.csv"
 CHECK_TXT = "Model_Chain_Check.txt"
+RUN_REPORT_NAME = "run_report.json"          # v2.28: the Runner's report next to its manifest
 QA_MANIFEST_COPY = "run_manifest.json"       # the manifest the classification was checked with
 PACKAGE_RECORD_DIR = "02_Method_and_record"
 FIELDS = ["Scenario", "Raster", "Classified_Path", "Recorded_SHA256", "Current_SHA256",
@@ -578,6 +580,69 @@ def package_files(out_folder, dam_folder=None):
     except Exception:
         return out
     return out
+
+
+# -------------------------------------------------------- the Runner's report --
+def find_run_report(dam_folder):
+    """v2.28: the ND Dam Breach Runner's run_report.json for a dam folder, or None.
+
+    Looked for in this order: the file the newest "modelled" status of <dam>/dam.json points
+    at (its result's "run_report", relative to the dam folder), run_report.json next to the
+    newest Runner manifest (damsuite.chain.find_runner_manifest), and
+    <dam>/_breach_model/run_report.json. A report file path is returned as given. Never
+    raises."""
+    if not dam_folder:
+        return None
+    try:
+        if os.path.isfile(dam_folder):
+            return dam_folder if os.path.basename(dam_folder).lower() == RUN_REPORT_NAME \
+                else None
+        if not os.path.isdir(dam_folder):
+            return None
+        cands = []
+        try:
+            from .damsuite import dam_record as DR
+            rec = DR.load(dam_folder)
+            mod = rec.latest("modelled") if rec is not None else None
+            res = mod.get("result") if mod is not None and isinstance(mod.get("result"), dict) \
+                else {}
+            rel = str(res.get("run_report") or "")
+            if rel:
+                cands.append(rel if os.path.isabs(rel) else os.path.join(dam_folder, rel))
+        except Exception:            # a broken dam.json: the other places are still looked at
+            pass
+        man = CH.find_runner_manifest(dam_folder)
+        if man:
+            cands.append(os.path.join(os.path.dirname(man), RUN_REPORT_NAME))
+        cands.append(os.path.join(dam_folder, CH.MODEL_FOLDER, RUN_REPORT_NAME))
+        for p in cands:
+            if os.path.isfile(p):
+                return p
+    except Exception:
+        return None
+    return None
+
+
+def read_flood_cut_off(dam_folder):
+    """v2.28: {"reason", "detail", "path"} when the Runner's run_report.json says the flood
+    model stopped while water was still moving - report["cut_off"] = {"reason": "duration cap"
+    | "domain-run limit" | "largest domain side", "detail": "..."} - and None when there is no
+    report or it has no such key. Never raises."""
+    path = find_run_report(dam_folder)
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            report = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    cut = report.get("cut_off") if isinstance(report, dict) else None
+    if not cut:
+        return None
+    if not isinstance(cut, dict):                # a bare true / text: still a cut-off
+        cut = {"reason": "" if isinstance(cut, bool) else str(cut), "detail": ""}
+    return {"reason": str(cut.get("reason") or "").strip() or "reason not given",
+            "detail": str(cut.get("detail") or "").strip(), "path": path}
 
 
 def readme_line(out_folder):

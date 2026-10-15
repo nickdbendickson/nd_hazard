@@ -42,6 +42,7 @@ class NDBreachRunnerPlugin:
         self.iface = iface
         self.provider = None
         self.actions = []
+        self.tools_menu, self.tool_actions = None, []   # 3.20.1: the "Breach tools" submenu
         self.suite_actions = []           # 3.5: entries in the shared Plugins > ND Dam Suite menu
         self.action = None
         self.dialog = None
@@ -84,10 +85,25 @@ class NDBreachRunnerPlugin:
         self.data_action.triggered.connect(self.run_suite_data)
         self.iface.addPluginToMenu(MENU, self.data_action)
         self.actions.append(self.data_action)
-        sep0 = QAction(self.iface.mainWindow())
-        sep0.setSeparator(True)
-        self.iface.addPluginToMenu(MENU, sep0)
-        self.actions.append(sep0)
+        # 3.13.0: the dam folder's data layers (and the suite's DWR dams / dam lines) in the project
+        self.fill_action = QAction("Load the dam's data layers...", self.iface.mainWindow())
+        self.fill_action.setObjectName("NDBreachRunnerLoadDamLayersAction")
+        self.fill_action.triggered.connect(self.run_load_layers)
+        self.iface.addPluginToMenu(MENU, self.fill_action)
+        self.actions.append(self.fill_action)
+        # 3.20.1: the 30 tools sit in one "Breach tools" submenu. The menu was 40 lines long, and
+        # a new user had to read past all of them to find the window. Every tool is still there,
+        # and in the Processing toolbox.
+        try:
+            from qgis.PyQt.QtWidgets import QMenu
+            self.tools_menu = QMenu("Breach tools", self.iface.mainWindow())
+        except Exception:                                        # noqa - no QMenu: the old flat menu
+            self.tools_menu = None
+        if self.tools_menu is None:
+            sep0 = QAction(self.iface.mainWindow())
+            sep0.setSeparator(True)
+            self.iface.addPluginToMenu(MENU, sep0)
+            self.actions.append(sep0)
         items = [("Guided setup for one dam (wizard)...", "wizard:"),
                  ("Run breach model for one dam...", "ndbreach:rundam"),
                  ("Run breach models for a layer of dams...", "ndbreach:batch"),
@@ -122,8 +138,12 @@ class NDBreachRunnerPlugin:
                  ("Check the model installation...", "ndbreach:check"),
                  ("Set up ANUGA (one-time download)...", "ndbreach:setupanuga"),
                  ("Self-test in this QGIS...", "ndbreach:selftest")]
+        self.tool_actions = []
         for item in items:
             if item is None:
+                if self.tools_menu is not None:
+                    self.tools_menu.addSeparator()
+                    continue
                 sep = QAction(self.iface.mainWindow())
                 sep.setSeparator(True)
                 self.iface.addPluginToMenu(MENU, sep)
@@ -132,8 +152,15 @@ class NDBreachRunnerPlugin:
             label, alg = item
             a = QAction(label, self.iface.mainWindow())
             a.triggered.connect(lambda _=False, alg=alg: self._open(alg))
-            self.iface.addPluginToMenu(MENU, a)
-            self.actions.append(a)
+            self.tool_actions.append(a)
+            if self.tools_menu is not None:
+                self.tools_menu.addAction(a)
+            else:
+                self.iface.addPluginToMenu(MENU, a)
+                self.actions.append(a)
+        if self.tools_menu is not None:
+            self.iface.addPluginToMenu(MENU, self.tools_menu.menuAction())
+            self.actions.append(self.tools_menu.menuAction())
         s = QAction("Model paths (Processing options)...", self.iface.mainWindow())
         s.triggered.connect(self._settings)
         self.iface.addPluginToMenu(MENU, s)
@@ -231,6 +258,37 @@ class NDBreachRunnerPlugin:
         return suite_data.open_suite_data(self, self.iface, "ndbreach", self.iface.mainWindow(),
                                           dam_folder=self.popup_dam_folder())
 
+    def run_load_layers(self, *args):
+        """3.13.0: load the layers a run of this dam would take from the dam folder (suite_fill)."""
+        from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+        from . import suite_fill
+        from .damsuite import suitedata as SD
+        folder = self.popup_dam_folder()
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(
+                self.iface.mainWindow(), "Dam folder (the one with dam.json)",
+                SD.dams_folder() or os.path.expanduser("~"))
+        if not folder:
+            return
+        try:
+            added, there, bad = suite_fill.load_layers(folder)
+        except Exception as e:                                   # noqa - say it, never crash
+            QMessageBox.warning(self.iface.mainWindow(), "Load the dam's data layers",
+                                "Could not load the layers: {}".format(e))
+            return
+        lines = []
+        if added:
+            lines.append("Added: " + ", ".join(added) + ".")
+        if there:
+            lines.append("Already in the project: " + ", ".join(there) + ".")
+        if bad:
+            lines.append("Not readable: " + ", ".join(bad) + ".")
+        if not lines:
+            lines.append("The dam folder has no data yet. Run Get data for this dam first, or "
+                         "set the suite data folder (Suite data and servers).")
+        QMessageBox.information(self.iface.mainWindow(), "Load the dam's data layers",
+                                "\n".join(lines))
+
     def run_plugin(self, *args):
         """Open the window; one instance, re-created if Qt has destroyed it."""
         if not self._dialog_alive():
@@ -240,6 +298,7 @@ class NDBreachRunnerPlugin:
         self.dialog.show()
         self.dialog.raise_()
         self.dialog.activateWindow()
+        return self.dialog                  # 1.18: the suite hand-offs point the window at a dam
 
     def _open(self, alg):
         if alg == "wizard:":
@@ -259,6 +318,13 @@ class NDBreachRunnerPlugin:
         for a in self.actions:
             self.iface.removePluginMenu(MENU, a)
         self.actions = []
+        self.tool_actions = []
+        if getattr(self, "tools_menu", None) is not None:
+            try:
+                self.tools_menu.deleteLater()
+            except (RuntimeError, AttributeError):
+                pass
+            self.tools_menu = None
         try:
             from . import suite_home
             suite_home.remove_suite_actions(self.iface, self.suite_actions)

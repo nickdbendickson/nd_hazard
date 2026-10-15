@@ -9,8 +9,9 @@ table the engineer digitized from REG_05.2026 (damsuite.tm11_curves, read
 through constants.HAZARD_COEFFICIENTS as TableCurve objects, linear between
 the tabulated velocities); until v2.10.0 they were quartic fits. nd_hazard.py
 wants zone POLYGONS in
-(velocity ft/s, depth ft) and refuses the chart method until a person has
-digitized them and another person has checked them. This module:
+(velocity ft/s, depth ft) and refuses the chart method until an engineer has
+signed them off (one engineer is enough since 2.28.1; a second checker is
+optional). This module:
 
 * charts_from_curves() - samples the curves (default every 0.1 ft/s, plus every
   tabulated velocity of the table, so no corner of the table is cut) and
@@ -27,9 +28,11 @@ digitized them and another person has checked them. This module:
   digitizing tolerance band (nd_hazard puts a point that close to a higher
   zone INTO that zone - ND 5.3); the result reports how many and how far.
 * write_chart_file() - the JSON nd_hazard.load_charts() reads. Status
-  "digitized" only when both names are given and are not the same person
-  (rule REQUIRE_DIFFERENT_CHECKER, can be switched off); otherwise
-  "not digitized" with the polygons kept for review. The notes say what the
+  "digitized" when an engineer is named (signed_off_by = the digitizer, else
+  the checker; REQUIRE_DIFFERENT_CHECKER, off by default, demands a second
+  person as checker); otherwise "not digitized" with the polygons kept for
+  review. install_in_plugins() copies the file over core/acer_tm11_charts.json
+  of the installed Runner and Screening. The notes say what the
   curves are; the file never says a check happened that the user did not
   record - the tool only records the names it is given.
 * overlay_svg() - the engineer's scan of the printed figure (PNG / JPEG,
@@ -50,6 +53,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import sys
 
@@ -60,9 +64,9 @@ FORMAT_NOTE = "nd_hazard chart file (acer_tm11_charts.json), MODULE 1.1.0 format
 CHART_FILE_NAME = "acer_tm11_charts.json"
 DEFAULT_STEP_FTS = 0.1          # curve sampling step (ft/s)
 DEFAULT_TOLERANCE = 0.01        # nd_hazard digitizing tolerance (share of each axis)
-# A person may not check their own digitization. Switch off only where the
-# agency allows it (e.g. a one-person office) - the record then says so.
-REQUIRE_DIFFERENT_CHECKER = True
+# One engineer's sign-off is enough (2.28.1, as the dam safety engineer decided); a second
+# checker may be recorded. True demands a different person as checker - the record says which.
+REQUIRE_DIFFERENT_CHECKER = False
 # (velocity steps, depth steps) of the equivalence grid of a sign-off, plus the
 # points either side of each curve (about 12,000 points a chart: ~7 s each)
 EQUIVALENCE_GRID = (101, 81)
@@ -442,24 +446,27 @@ def _norm_name(s):
 
 
 def signoff_status(digitized_by, checked_by, require_different=None):
-    """(status, reason): "digitized" only with both names given and - unless the
-    rule is switched off - not the same name (case and spacing ignored; the tool
+    """(status, reason): "digitized" when an engineer is named - the digitizer, else the
+    checker (one engineer is enough). With require_different (REQUIRE_DIFFERENT_CHECKER) a
+    second, different person must be named as checker (case and spacing ignored; the tool
     cannot tell initials from a full name, so use the same form for both)."""
     req = REQUIRE_DIFFERENT_CHECKER if require_different is None else bool(require_different)
     a, b = _norm_name(digitized_by), _norm_name(checked_by)
     if not a and not b:
-        return "not digitized", "no names given: nobody has recorded the digitization or a check"
-    if not a:
-        return "not digitized", "'digitized by' is empty"
-    if not b:
-        return "not digitized", "'checked by' is empty: the chart has not been recorded as checked"
-    if a == b and req:
+        return "not digitized", "no engineer named: nobody has signed the charts off"
+    if req and not a:
+        return "not digitized", "'signed off by' is empty (a second checker alone is not a sign-off)"
+    if req and not b:
+        return "not digitized", ("'checked by' is empty: a second engineer must check (rule "
+                                 "REQUIRE_DIFFERENT_CHECKER)")
+    if req and a == b:
         return "not digitized", ("the same person is named as digitizer and checker: a person may "
                                  "not check their own work (rule REQUIRE_DIFFERENT_CHECKER)")
-    if a == b:
-        return "digitized", ("digitized and checked by the same person - allowed only because the "
-                             "different-checker rule was switched off")
-    return "digitized", "digitized and checked by two different people (as entered)"
+    if a and b and a != b:
+        return "digitized", "signed off by {}, checked by {} (as entered)".format(
+            str(digitized_by).strip(), str(checked_by).strip())
+    return "digitized", "signed off by {} (one engineer; no second checker recorded)".format(
+        str(digitized_by or checked_by).strip())
 
 
 def write_chart_file(path, digitized_from="", digitized_by="", checked_by="", digitized_on="",
@@ -495,6 +502,10 @@ def write_chart_file(path, digitized_from="", digitized_by="", checked_by="", di
          "digitized_by": str(digitized_by or "").strip(),
          "digitized_on": str(digitized_on or "").strip() or datetime.date.today().isoformat(),
          "checked_by": str(checked_by or "").strip(),
+         "signed_off_by": str(digitized_by or checked_by or "").strip() if status == "digitized"
+         else "",
+         "signed_off_on": (str(digitized_on or "").strip() or datetime.date.today().isoformat())
+         if status == "digitized" else "",
          "notes": " ".join(parts),
          "charts": charts,
          # extra keys: ignored by nd_hazard.load_charts, kept for the record
@@ -822,15 +833,74 @@ def _wrap(text, n):
 
 
 # ------------------------------------------------------------ one sign-off --
+def plugin_chart_paths():
+    """core/acer_tm11_charts.json of the installed ND Dam Breach Runner and Screening: the
+    folder QGIS loaded each from, else python/plugins of the active profile, else the folder
+    next to this plugin."""
+    out = {}
+    for name in ("nd_breach_runner", "nd_dam_screening"):
+        folder = ""
+        try:
+            mod = sys.modules.get(name)
+            if mod is not None and getattr(mod, "__file__", None):
+                folder = os.path.dirname(os.path.abspath(mod.__file__))
+            if not folder:
+                import qgis.utils as qu
+                if hasattr(qu, "pluginDirectory"):
+                    folder = qu.pluginDirectory(name) or ""
+        except Exception:
+            folder = ""
+        if not folder or not os.path.isdir(folder):
+            try:
+                from qgis.core import QgsApplication
+                base = QgsApplication.qgisSettingsDirPath()
+            except Exception:
+                base = ""
+            if base:
+                folder = os.path.join(base, "python", "plugins", name)
+        if not folder or not os.path.isdir(folder):
+            folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), name)
+        if os.path.isdir(os.path.join(folder, "core")):
+            out[name] = os.path.join(folder, "core", CHART_FILE_NAME)
+    return out
+
+
+def install_in_plugins(chart_path, paths=None):
+    """Copy the chart file over core/acer_tm11_charts.json of the installed Runner and
+    Screening (the copy their chart method reads by default). Returns {"installed": [paths],
+    "missing": [plugin names], "lines": [text]}; never raises."""
+    res = {"installed": [], "missing": [], "lines": []}
+    paths = paths if paths is not None else plugin_chart_paths()
+    for name in ("nd_breach_runner", "nd_dam_screening"):
+        dst = paths.get(name)
+        if not dst:
+            res["missing"].append(name)
+            res["lines"].append("{}: not installed in this QGIS - copy the chart file over its "
+                                "core/{} when it is".format(name, CHART_FILE_NAME))
+            continue
+        try:
+            tmp = dst + ".tmp"
+            shutil.copyfile(chart_path, tmp)
+            os.replace(tmp, dst)
+            res["installed"].append(dst)
+            res["lines"].append("{}: {} replaced (SHA-256 {}); its next chart run uses it".format(
+                name, dst, _sha256_file(dst)[:16]))
+        except OSError as e:
+            res["missing"].append(name)
+            res["lines"].append("{}: could not write {}: {}".format(name, dst, e))
+    return res
+
+
 def sign_off(out_folder, digitized_by="", checked_by="", digitized_from="", digitized_on="",
              notes="", images=None, calibrations=None, require_different_checker=None,
              step=DEFAULT_STEP_FTS, tolerance=DEFAULT_TOLERANCE, nh_path=None,
-             equivalence_grid=None):
+             equivalence_grid=None, install=False):
     """Everything the Processing tool writes into `out_folder`: the chart file,
     one overlay SVG per chart (on the scan when an image and a calibration are
-    given, else curves only) and Chart_SignOff.txt. images / calibrations:
-    {"house": path, "mobile": path} / {"house": text, ...}. Returns a dict of
-    the paths, the status and the text lines of the record."""
+    given, else curves only) and Chart_SignOff.txt; with `install`, the signed-off
+    file is also copied over the Runner's and the Screening's core copy. images /
+    calibrations: {"house": path, "mobile": path} / {"house": text, ...}. Returns a
+    dict of the paths, the status and the text lines of the record."""
     os.makedirs(out_folder, exist_ok=True)
     images, calibrations = images or {}, calibrations or {}
     charts = charts_from_curves(step, tolerance)
@@ -857,12 +927,14 @@ def sign_off(out_folder, digitized_by="", checked_by="", digitized_from="", digi
              "Chart file: {} (SHA-256 {})".format(info["path"], info["sha256"]),
              "Status: {} - {}".format(info["status"], info["reason"]),
              "Digitized from: {}".format(digitized_from or "(not given)"),
-             "Digitized by: {}".format(digitized_by or "(not given)"),
-             "Checked by: {}".format(checked_by or "(not given)"),
+             "Signed off by: {}".format(digitized_by or checked_by or "(not given)"),
+             "Checked by (second engineer): {}".format(checked_by or "(none)"),
              "Date: {}".format(digitized_on or datetime.date.today().isoformat()),
-             "Rule: a person may not check their own work ({}).".format(
-                 "applied" if (REQUIRE_DIFFERENT_CHECKER if require_different_checker is None
-                               else require_different_checker) else "SWITCHED OFF"),
+             "Rule: {}".format(
+                 "a second, different engineer must check (REQUIRE_DIFFERENT_CHECKER applied)"
+                 if (REQUIRE_DIFFERENT_CHECKER if require_different_checker is None
+                     else require_different_checker)
+                 else "one engineer's sign-off is enough; a second checker is optional"),
              "The tool records the names entered; it cannot confirm that a check was made.",
              "", "What the curves are", "-" * 19, CURVE_ORIGIN.format(step=step), "",
              "Equivalence with ND Dam Hazard's own zone rule", "-" * 46]
@@ -885,13 +957,19 @@ def sign_off(out_folder, digitized_by="", checked_by="", digitized_from="", digi
                                      "on {} - {}".format(os.path.basename(images[key]), f["text"])
                                      if f else "curves only (no scanned figure given)"))
     lines += warn
-    lines += ["", "Use: give the chart file as CHART_FILE to the ND Dam Breach Runner / "
-              "Screening hazard tools, or copy it over core/acer_tm11_charts.json in both "
-              "plugins (keep the two copies identical). The official classification is made by "
-              "the ND Department of Water Resources."]
+    installed = None
+    if install and info["status"] == "digitized":
+        installed = install_in_plugins(info["path"])
+        lines += ["", "Installed in the plugins", "-" * 24] + installed["lines"]
+    elif install:
+        lines += ["", "Not installed in the plugins: the file is not signed off."]
+    lines += ["", "Use: the Runner and the Screening read their core/acer_tm11_charts.json (the "
+              "installed copy) unless a CHART_FILE is given to their hazard tools; keep the two "
+              "copies identical. The official classification is made by the ND Department of "
+              "Water Resources."]
     rec = os.path.join(out_folder, "Chart_SignOff.txt")
     with open(rec, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     return {"chart_file": info["path"], "status": info["status"], "reason": info["reason"],
             "sha256": info["sha256"], "svgs": svgs, "record": rec, "equivalence": eq,
-            "fits": fits, "lines": lines}
+            "fits": fits, "lines": lines, "installed": installed}

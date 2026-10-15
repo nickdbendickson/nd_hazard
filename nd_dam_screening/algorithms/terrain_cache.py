@@ -26,6 +26,11 @@ class TerrainCache(QgsProcessingAlgorithm):
     def groupId(self): return "dams"
     def createInstance(self): return TerrainCache()
 
+    # 0.21.0: opened from the Processing Toolbox (no work folder), the dialog starts with the
+    # last Standardized dams written (only the dialog: a run given no layer still stops)
+    def createCustomParametersWidget(self, parent=None):
+        return cm.dialog_with_last(self, parent, self.DAMS, "dams")
+
     def shortHelpString(self):
         return ("Writes dam_<ID>.tif (float32 metres, EPSG:5070) for every dam. Source is "
                 "either the USGS 3DEP service (needs internet, run once) or a local folder "

@@ -21,6 +21,7 @@ import sqlite3
 import struct
 
 from . import workflow as wf
+from . import gpkg_sqlite
 
 LOG = wf.REVIEW_LOG
 ACTIONS = ("accept", "exclude", "set_type", "move_breach", "note")
@@ -212,6 +213,10 @@ class SqliteApply(object):
             t = self._table(con)
             gcol, srs = con.execute("SELECT column_name, srs_id FROM gpkg_geometry_columns WHERE table_name=?",
                                     (t,)).fetchone()
+            # 0.29.0: a breach-point GeoPackage that QGIS wrote has rtree triggers calling
+            # ST_IsEmpty, which plain sqlite3 lacks; without this the UPDATE failed and the point
+            # never moved while the log said it had. Drop the index so the write succeeds.
+            gpkg_sqlite.disable_rtree(con, t)
             cur = con.execute('UPDATE "{}" SET "{}" = ? WHERE "dam_id" = ?'.format(t, gcol),
                               (_gpkg_point_blob(x, y, srs), dam_id))
             con.execute("UPDATE gpkg_contents SET min_x=NULL, min_y=NULL, max_x=NULL, max_y=NULL WHERE table_name=?", (t,))

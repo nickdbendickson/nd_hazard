@@ -1,11 +1,12 @@
 """Standard-library HTTP client. Used by the tests, and by the plugin only if the
-QGIS network client is unavailable."""
+QGIS network client is unavailable. QGIS's proxy setting applies (1.4.2)."""
 
 import socket
 import urllib.error
 import urllib.request
 
 from .core import NetworkError, UpdateError
+from .ndpack.damsuite import netproxy
 
 USER_AGENT = "ND-Data-Updater-QGIS/1.0"
 TIMEOUT = 60
@@ -25,7 +26,7 @@ class UrllibHttp:
         req = urllib.request.Request(url, method=method,
                                      headers={"User-Agent": USER_AGENT, **(headers or {})})
         try:
-            return urllib.request.urlopen(req, timeout=TIMEOUT)
+            return netproxy.urlopen(req, timeout=TIMEOUT)
         except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
             _raise_for(e, url)
 

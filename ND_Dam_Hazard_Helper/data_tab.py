@@ -11,6 +11,7 @@ import os
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QFormLayout, QSpinBox,
     QCheckBox, QComboBox, QWidget, QMessageBox, QLineEdit, QScrollArea, QFileDialog,
+    QRadioButton, QButtonGroup,
 )
 from qgis.core import QgsProject, QgsRasterLayer
 
@@ -91,7 +92,7 @@ class DataTabMixin(object):
             self.data_area_combo.addItem(text, key)
         self.data_area_combo.setToolTip(
             "Flooded area: structures, facilities, dams and towns only where the depth "
-            "raster is wet, plus the flood buffer. Roads, rail and NHD flowlines always keep "
+            "raster is wet, plus the flood buffer. Roads, rail and 3DHP flowlines always keep "
             "the whole study area (sole access and the travel-time trace need the network "
             "beyond the flood).")
         aform.addRow("Save data for:", self.data_area_combo)
@@ -218,41 +219,65 @@ class DataTabMixin(object):
         self.centerline_combo = QComboBox()
         self.centerline_combo.setToolTip(
             "A line along the channel from the dam downstream (parts are joined). Without "
-            "one, USGS NHD flowlines are downloaded and traced downstream from the dam's NID "
+            "one, USGS 3DHP flowlines are downloaded and traced downstream from the dam's NID "
             "point (or the first cell the flood reaches).")
         cform.addRow("Channel centerline:", self.centerline_combo)
         self.flowlines_download_check = QCheckBox(
-            "USGS NHD flowlines and OpenStreetMap towns (internet)")
+            "USGS 3DHP flowlines and OpenStreetMap towns (internet)")
         self.flowlines_download_check.setChecked(True)
         cform.addRow("", self.flowlines_download_check)
         cgrp.setLayout(cform)
         lay.addWidget(cgrp)
 
-        # 7. offline data pack (v2.6.1) - a setting of this computer, not the project
-        ogrp = QGroupBox("7. Offline data pack - run without internet access")
+        # 7. offline data pack (v2.6.1) - a setting of this computer, not the project.
+        # 2.24.0: the data source (offline pack or download) and the pack location are the
+        # suite's: the three plugins share them (Suite data and servers shows the same)
+        ogrp = QGroupBox("7. Data source - offline pack or download")
         oform = QFormLayout()
         opack = QLabel(
-            "A pack holds every data set above for all of North Dakota. Build it once on a "
-            "computer that is online (<b>Build offline pack...</b>, or build_nd_pack.py in "
-            "the plugin folder), copy the zip here and pick it. Data sets in the pack are "
-            "read from it instead of the internet. Kept for this computer, not the project.")
+            "The offline pack holds every data set above for all of North Dakota, one "
+            "GeoPackage per layer (LAYERS.txt in the pack lists each layer and its source). "
+            "<b>Offline pack</b>: the data sets in the pack are read from it instead of the "
+            "internet. <b>Download</b>: the pack is not read; everything comes from the "
+            "servers. Shared by the three ND dam plugins on this computer, not the project.")
         opack.setWordWrap(True)
         oform.addRow(opack)
+        self.source_pack_radio = QRadioButton("Offline pack")
+        self.source_download_radio = QRadioButton("Download from the servers")
+        self._source_group = QButtonGroup(self)
+        self._source_group.addButton(self.source_pack_radio)
+        self._source_group.addButton(self.source_download_radio)
+        self.source_pack_radio.toggled.connect(self._source_changed)
+        rows = QHBoxLayout()
+        rows.addWidget(self.source_pack_radio)
+        rows.addWidget(self.source_download_radio)
+        rows.addStretch()
+        ws = QWidget()
+        rows.setContentsMargins(0, 0, 0, 0)
+        ws.setLayout(rows)
+        oform.addRow("Data source:", ws)
         self.pack_path_edit = QLineEdit()
-        self.pack_path_edit.setPlaceholderText("nd_offline_pack.zip (or its unpacked folder)")
+        self.pack_path_edit.setPlaceholderText("ND_Dam_Suite_Pack folder (or an older "
+                                               "nd_offline_pack.zip)")
         self.pack_path_edit.editingFinished.connect(self._pack_changed)
-        self.pack_browse_btn = QPushButton("Browse...")
+        self.pack_browse_btn = QPushButton("Folder...")
+        self.pack_browse_btn.setToolTip("Pick the pack folder (the one holding manifest.json "
+                                        "and LAYERS.txt).")
         self.pack_browse_btn.clicked.connect(self._browse_pack)
+        self.pack_zip_btn = QPushButton("Zip...")
+        self.pack_zip_btn.setToolTip("Pick an older pack zip (nd_offline_pack.zip).")
+        self.pack_zip_btn.clicked.connect(self._browse_pack_zip)
         self.pack_clear_btn = QPushButton("Clear")
         self.pack_clear_btn.clicked.connect(self._clear_pack)
         row7 = QHBoxLayout()
         row7.addWidget(self.pack_path_edit)
         row7.addWidget(self.pack_browse_btn)
+        row7.addWidget(self.pack_zip_btn)
         row7.addWidget(self.pack_clear_btn)
         w7 = QWidget()
         w7.setLayout(row7)
         row7.setContentsMargins(0, 0, 0, 0)
-        oform.addRow("Pack:", w7)
+        oform.addRow("Pack location:", w7)
         self.offline_only_check = QCheckBox(
             "Offline only - never contact the internet (the pack, project layers and "
             "earlier downloads only)")
@@ -266,9 +291,10 @@ class DataTabMixin(object):
         oform.addRow("Status:", self.pack_status_label)
         self.pack_build_btn = QPushButton("Build offline pack...")
         self.pack_build_btn.setToolTip(
-            "Downloads every data set for all of North Dakota into one zip (needs internet; "
-            "an hour or more; a large file). An interrupted build goes on where it "
-            "stopped when you start it again with the same file name.")
+            "Downloads every data set for all of North Dakota into a pack folder, one "
+            "GeoPackage per layer (needs internet; an hour or more; a large folder). An "
+            "interrupted build goes on where it stopped when you start it again with the "
+            "same folder.")
         self.pack_build_btn.clicked.connect(self._on_build_pack)
         oform.addRow("", self.pack_build_btn)
         ogrp.setLayout(oform)
@@ -315,24 +341,52 @@ class DataTabMixin(object):
 
     # ------------------------------------------------ offline pack (v2.6.1) --
     def _load_pack_settings(self):
-        from .download import offline_config, suite_pack
-        path, only = offline_config(fallback=False)
-        sp = suite_pack()
+        from .download import offline_config, data_source
+        from .damsuite import suitedata as _SD
+        download = data_source() == "download"
+        path = _SD.pack_location()
+        only = False
+        if not download:
+            legacy, only = offline_config(fallback=False)
+            path = path or legacy
+        sp = _SD.find_pack(_SD.data_folder())
         self.pack_path_edit.setPlaceholderText(
-            "suite data folder: {}".format(sp) if sp else "nd_offline_pack.zip (or its unpacked folder)")
-        self.pack_path_edit.blockSignals(True)
-        self.offline_only_check.blockSignals(True)
+            "suite data folder: {}".format(sp) if sp else
+            "ND_Dam_Suite_Pack folder (or an older nd_offline_pack.zip)")
+        for w in (self.pack_path_edit, self.offline_only_check, self.source_pack_radio,
+                  self.source_download_radio):
+            w.blockSignals(True)
+        self.source_pack_radio.setChecked(not download)
+        self.source_download_radio.setChecked(download)
         self.pack_path_edit.setText(path)
         self.offline_only_check.setChecked(only)
-        self.pack_path_edit.blockSignals(False)
-        self.offline_only_check.blockSignals(False)
+        for w in (self.pack_path_edit, self.offline_only_check, self.source_pack_radio,
+                  self.source_download_radio):
+            w.blockSignals(False)
+        self._enable_pack_widgets()
         self._show_pack_status()
+
+    def _enable_pack_widgets(self):
+        on = self.source_pack_radio.isChecked()
+        for w in (self.pack_path_edit, self.pack_browse_btn, self.pack_zip_btn,
+                  self.pack_clear_btn, self.offline_only_check):
+            w.setEnabled(on)
+
+    def _source_changed(self, *args):
+        from .download import set_data_source
+        try:
+            set_data_source("pack" if self.source_pack_radio.isChecked() else "download")
+        except Exception as e:
+            log_message("Data source not saved: {}".format(e))
+        self._enable_pack_widgets()
+        self._pack_changed()
 
     def _pack_changed(self, *args):
         from .download import set_offline_config
         try:
             set_offline_config(self.pack_path_edit.text().strip(),
-                               self.offline_only_check.isChecked())
+                               self.offline_only_check.isChecked()
+                               and self.source_pack_radio.isChecked())
         except Exception as e:
             log_message("Offline settings not saved: {}".format(e))
         self._show_pack_status()
@@ -340,6 +394,10 @@ class DataTabMixin(object):
     def _show_pack_status(self):
         from .offline_pack import describe
         from .download import suite_pack
+        if not self.source_pack_radio.isChecked():
+            self.pack_status_label.setText("Download: every data set comes from the servers; "
+                                           "the offline pack is not read.")
+            return
         path = self.pack_path_edit.text().strip()
         if not path and suite_pack():
             path = suite_pack()
@@ -351,6 +409,13 @@ class DataTabMixin(object):
         self.pack_status_label.setText(text)
 
     def _browse_pack(self, *args):
+        start = self.pack_path_edit.text().strip() or os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(self, "Offline data pack folder", start)
+        if path:
+            self.pack_path_edit.setText(path)
+            self._pack_changed()
+
+    def _browse_pack_zip(self, *args):
         start = self.pack_path_edit.text().strip() or os.path.expanduser("~")
         path, _f = QFileDialog.getOpenFileName(
             self, "Offline data pack", start,
@@ -366,20 +431,20 @@ class DataTabMixin(object):
     def _on_build_pack(self, *args):
         if self._busy:
             return
+        # 2.24.0: the pack is a folder, one GeoPackage per layer (ND_Dam_Suite_Pack); picking
+        # an existing pack folder updates it, any other folder gets ND_Dam_Suite_Pack inside
+        from .damsuite import suitedata as _SD
+        from .damsuite import gpkgpack as _GP
         start = self.pack_path_edit.text().strip()
-        if not start.lower().endswith(".zip"):
-            from .download import suite_pack
-            from .damsuite import suitedata as _SD
-            start = suite_pack()
-            if not start.lower().endswith(".zip"):
-                start = os.path.join(_SD.data_folder() or os.path.expanduser("~"),
-                                     "nd_offline_pack.zip")
-        path, _f = QFileDialog.getSaveFileName(self, "Build offline data pack", start,
-                                               "Zip (*.zip)")
-        if not path:
+        if not (start and os.path.isdir(start)):
+            start = _SD.data_folder() or os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Build offline data pack: the pack folder, or where to make it", start)
+        if not folder:
             return
-        if not path.lower().endswith(".zip"):
-            path += ".zip"
+        path = folder if (_GP.is_gpkg_pack(folder) or
+                          os.path.basename(folder) == _GP.PACK_FOLDER) else \
+            os.path.join(folder, _GP.PACK_FOLDER)
         if QMessageBox.question(
                 self, "Build offline data pack",
                 "Download every data set for all of North Dakota into\n{}\n\nThis needs "

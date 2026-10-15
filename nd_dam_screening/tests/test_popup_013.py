@@ -54,7 +54,8 @@ dlg.work_edit.setText(W)
 dlg._changed()
 
 # ---------------------------------------------------------------- 1. the tabs and the grid
-assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Simple", "All steps", "Inputs", "Settings", "Review", "Results"]
+assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Simple", "All steps", "Inputs", "Settings",
+                                                                  "Review", "Results", "Priority"]
 g = dlg.grid
 assert isinstance(g, SS.SettingsGrid) and g.tabs.titles[0] == "Run options"
 assert g.tabs.titles[1:] == [t for t in SG.TAB_ORDER if t in g.groups], g.tabs.titles
@@ -164,7 +165,7 @@ for slot, path in (("dwr", dwr), ("dam_lines", lines_p), ("waterbodies", wb), ("
     cb.addItem(path, path)
     cb.setCurrentIndex(cb.count() - 1)
 checks = dlg._preflight()
-assert not pf.ready(checks) and "ACER TM 11 charts" in pf.summary(checks)      # not digitized in this build
+assert pf.ready(checks), pf.summary(checks)                                    # the shipped charts are signed off (0.26.1)
 dlg.crit.setCurrentIndex(2)                                                    # the conservative method
 checks = dlg._preflight()
 assert pf.ready(checks), pf.summary(checks)

@@ -77,10 +77,248 @@ def trace_downstream(grid, start_xy, max_length_m):
     return path, length
 
 
-def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None):
+NO_DOWNSTREAM = "no cell on the downstream side of the crest qualified"
+POOL_HALF_M = 1000.0          # half-width of the terrain read to find the pool (depression)
+
+
+def pool_mask(grid, dam_height_m):
+    """Cells of a closed depression on `grid` (the reservoir behind an embankment): filled
+    (priority flood from the grid edges) minus ground deeper than max(0.5 m, 15 % of the dam
+    height). A downstream toe or channel drains off the grid and is not in it. The grid must
+    reach well past the reservoir (POOL_HALF_M) or the basin drains through the grid edge."""
+    z = grid.masked()
+    fill = priority_flood(z) - z
+    return np.isfinite(fill) & (fill > max(0.5, 0.15 * float(dam_height_m)))
+
+
+def downstream_direction(pool_grid, dam_xy, dam_height_m, crest_line=None, crest_xy=None,
+                         near_m=600.0):
+    """Unit vector from the crest towards downstream, and how it was found, or (None, why).
+
+      1. the crest line's normal, the side away from the pool (else the side the trace takes);
+      2. no crest line: away from the pool (the centroid of the depression within near_m);
+      3. no pool: the steepest-descent trace from the dam point;
+      4. else the trace from place_from_crest's crest (`crest_xy`).
+    The trace alone is the weakest: on a dry or hydro-flattened basin it descends into the
+    reservoir (Absaraka DWR-2801), which is why the pool comes first."""
+    def unit(v):
+        n = math.hypot(v[0], v[1])
+        return (v[0] / n, v[1] / n) if n > 1e-9 else None
+
+    away = None
+    if pool_grid is not None:
+        pool = pool_mask(pool_grid, dam_height_m)
+        X, Y = np.meshgrid(pool_grid.x_centers(), pool_grid.y_centers())
+        near = pool & (np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= near_m)
+        if near.sum() >= 3:
+            away = unit((dam_xy[0] - float(X[near].mean()), dam_xy[1] - float(Y[near].mean())))
+
+    def trace_dir(start):
+        if pool_grid is None or start is None:
+            return None
+        try:
+            path, _l = trace_downstream(pool_grid, start, 300.0)
+        except Exception:                           # noqa: BLE001
+            return None
+        return unit(flow_direction(path)) if len(path) >= 2 else None
+
+    if crest_line is not None and len(crest_line) >= 2:
+        a, b = np.asarray(crest_line[0], dtype=float), np.asarray(crest_line[-1], dtype=float)
+        t = unit((b[0] - a[0], b[1] - a[1]))
+        if t is not None:
+            n = (-t[1], t[0])
+            ref, how = away, "crest-line normal away from the pool"
+            if ref is None:
+                ref, how = trace_dir(dam_xy), "crest-line normal on the downstream trace's side"
+            if ref is not None:
+                if n[0] * ref[0] + n[1] * ref[1] < 0:
+                    n = (-n[0], -n[1])
+                return n, how
+    if away is not None:
+        return away, "away from the pool behind the dam"
+    v = trace_dir(dam_xy)
+    if v is not None:
+        return v, "downstream trace from the dam point"
+    v = trace_dir(crest_xy)
+    if v is not None:
+        return v, "downstream trace from the crest (highest ground near the dam point)"
+    return None, "no crest line, no pool and no downstream trace"
+
+
+def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None, downstream=None,
+                      pool=None):
+    """The breach inflow goes in just downstream of the embankment. Look for
+    the lowest DEM cell within the usual radius that is clearly below the reservoir (at least
+    half the dam height below the top of dam); ties (a flat or hydro-flattened floor) go to the
+    nearest. A wide embankment can put the toe outside that ring, so a second search goes out
+    to 400 m and takes the nearest qualifying cell, not the lowest cell in the circle (a far
+    valley is not the toe).
+
+    `downstream` (unit vector, see downstream_direction) keeps only cells on the downstream side
+    of the crest, and `pool` (a Grid of 0/1, see pool_mask) drops cells in the reservoir: the
+    lowest cell near a dry dam can be the reservoir floor (Absaraka DWR-2801). When no cell
+    passes those, the unconstrained pick is returned and the note starts with NO_DOWNSTREAM.
+
+    Returns ((x, y), note) or (None, reason)."""
+    if radius_m is None:
+        radius_m = max(90.0, 8.0 * dam_height_m)
+    xs = grid.x_centers()
+    ys = grid.y_centers()
+    X, Y = np.meshgrid(xs, ys)
+    d = np.hypot(X - dam_xy[0], Y - dam_xy[1])
+    z = grid.masked()
+    need = top_m - 0.5 * dam_height_m
+    ok = np.ones(z.shape, dtype=bool)
+    if downstream is not None:
+        ok &= ((X - dam_xy[0]) * downstream[0] + (Y - dam_xy[1]) * downstream[1]) > 0.0
+    if pool is not None:
+        pr = np.floor((pool.y0 - Y) / pool.dx).astype(int)
+        pc = np.floor((X - pool.x0) / pool.dx).astype(int)
+        inside = (pr >= 0) & (pr < pool.ny) & (pc >= 0) & (pc < pool.nx)
+        in_pool = np.zeros(z.shape, dtype=bool)
+        in_pool[inside] = pool.data[pr[inside], pc[inside]] > 0.5
+        ok &= ~in_pool
+    constrained = downstream is not None or pool is not None
+    pt, note = _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok)
+    if pt is None and constrained:
+        pt, note2 = _pick_inflow(X, Y, d, z, need, top_m, radius_m, np.ones(z.shape, dtype=bool))
+        if pt is not None:
+            return pt, "{}; used {} (check it)".format(NO_DOWNSTREAM, note2)
+    return pt, note
+
+
+def _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok):
+    radii = [radius_m]
+    wider = max(radius_m, 400.0)
+    if wider > radius_m + 1.0:
+        radii.append(wider)
+    last_drop, last_r = 0.0, radius_m
+    for rad in radii:
+        near = (d <= rad) & np.isfinite(z) & ok
+        if not near.any():
+            last_r = rad
+            continue
+        last_drop = (top_m - float(np.nanmin(z[near]))) / 0.3048
+        last_r = rad
+        sel = near & (z <= need)
+        if not sel.any():
+            continue
+        idx = np.flatnonzero(sel)
+        if rad > radius_m + 1.0:
+            # the wider search: the NEAREST low-enough cell (the lowest of a 400 m circle may
+            # be a far valley, not the toe); ties to the lower
+            k = idx[np.lexsort((z.ravel()[idx], d.ravel()[idx]))[0]]
+        else:
+            # the usual radius: the LOWEST cell, ties to the nearest. The nearest low-enough
+            # cell can be the upstream face of the embankment or the floor of a dry reservoir
+            # (found by the synthetic-valley test: (-25, 5), upstream of the dam at x = 0)
+            k = idx[np.lexsort((d.ravel()[idx], np.round(z.ravel()[idx], 3)))[0]]
+        r, c = np.unravel_index(k, z.shape)
+        drop = (top_m - z[r, c]) / 0.3048
+        if rad > radius_m + 1.0:
+            note = ("toe is outside the usual {:.0f} m search; nearest ground {:.0f} m "
+                    "from the dam point, {:.1f} ft below the top of dam"
+                    .format(radius_m, d[r, c], drop))
+        else:
+            note = ("lowest ground within {:.0f} m of the dam point, {:.1f} ft below "
+                    "the top of dam".format(rad, drop))
+        return (float(X[r, c]), float(Y[r, c])), note
+    return None, ("the lowest ground within {:.0f} m of the dam point is only {:.1f} ft "
+                  "below the top of dam; give the inflow point below the dam"
+                  .format(last_r, last_drop))
+
+
+def streambed_inflow(grid, crest_xy, dam_height_m, top_m, radius_m=150.0):
+    """Lowest cell on the downstream trace, not the nearest low ground.
+
+    Follow steepest descent from the crest. Prefer the first cell at least half
+    the dam height below the crest. If none, take the lowest cell on that path
+    within radius_m. A cell off the trace is not the streambed.
+    Returns ((x, y), note) or (None, reason)."""
+    try:
+        path, _length = trace_downstream(grid, crest_xy, radius_m)
+    except Exception as e:
+        return None, "downstream trace failed: {}".format(e)
+    if len(path) < 2:
+        return None, "downstream trace did not leave the crest"
+    z = grid.masked()
+    need = top_m - 0.5 * dam_height_m
+    best = None
+    lowest = None
+    for x, y in path[1:]:
+        r, c = grid.rc(x, y)
+        if not grid.inside(r, c) or not np.isfinite(z[r, c]):
+            continue
+        drop = top_m - float(z[r, c])
+        dist = math.hypot(x - crest_xy[0], y - crest_xy[1])
+        if lowest is None or drop > lowest[0]:
+            lowest = (drop, dist, x, y)
+        if best is None and drop >= (top_m - need):
+            best = (drop, dist, x, y)
+    pick = best or lowest
+    if pick is None:
+        return None, "no streambed cell on the downstream trace"
+    drop_ft = pick[0] / 0.3048
+    how = "first streambed cell at least half the dam height below the crest" if best else (
+        "lowest streambed cell on the downstream trace")
+    return (pick[2], pick[3]), ("{}; {:.0f} m downstream, {:.1f} ft below the crest"
+                                 .format(how, pick[1], drop_ft))
+
+
+def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
+    """A label point is not the embankment. Use the highest ground within radius_m
+    as the crest, then the nearest toe at least half the dam height below that crest.
+    Returns (inflow_xy, crest_xy, note) or (None, crest_xy or None, reason)."""
+    xs = grid.x_centers()
+    ys = grid.y_centers()
+    X, Y = np.meshgrid(xs, ys)
+    z = grid.masked()
+    d = np.hypot(X - dam_xy[0], Y - dam_xy[1])
+    near = (d <= radius_m) & np.isfinite(z)
+    if not near.any():
+        return None, None, "no DEM within {:.0f} m of the dam point".format(radius_m)
+    rr, cc = np.unravel_index(np.nanargmax(np.where(near, z, -np.inf)), z.shape)
+    crest = (float(X[rr, cc]), float(Y[rr, cc]))
+    moved = math.hypot(crest[0] - dam_xy[0], crest[1] - dam_xy[1])
+    crest_z = float(z[rr, cc])
+    inflow, why = streambed_inflow(grid, crest, dam_height_m, crest_z, radius_m)
+    if inflow is None:
+        inflow, why = find_inflow_point(grid, crest, dam_height_m, crest_z, radius_m)
+    if inflow is None:
+        # Half the height is the normal toe. A label point can miss it by a foot on a
+        # coarse DEM, so the fallback accepts 8 ft or 40 percent of the height.
+        need = min(crest_z - 8.0 * 0.3048, crest_z - 0.4 * dam_height_m)
+        d2 = np.hypot(X - crest[0], Y - crest[1])
+        sel = (d2 <= max(radius_m, 800.0)) & np.isfinite(z) & (z <= need)
+        if not sel.any():
+            return None, crest, why
+        dd = np.where(sel, d2, np.inf)
+        r, c = np.unravel_index(np.argmin(dd), dd.shape)
+        drop = (crest_z - float(z[r, c])) / 0.3048
+        inflow = (float(X[r, c]), float(Y[r, c]))
+        why = ("toe is {:.0f} m from the moved crest, {:.1f} ft below it "
+               "(half-height search missed)".format(d2[r, c], drop))
+    return inflow, crest, ("crest moved {:.0f} m from the given point to the highest ground; {}"
+                           .format(moved, why))
+
+
+# ----------------------------------------------------------------------------
+# Legacy inflow fallbacks (3.13.0). Superseded in the workflow by
+# downstream_direction/find_inflow_point/place_from_crest above, but kept here
+# because the 3.13.0 regression tests exercise them directly.
+# ----------------------------------------------------------------------------
+WIDE_SEARCH_M = 400.0       # 3.13.0: second search radius for the toe (a wide embankment)
+
+
+def _find_inflow_old(grid, dam_xy, dam_height_m, top_m, radius_m=None, wide_m=None):
     """The breach inflow goes in just downstream of the embankment. Look for
     the lowest DEM cell within a radius of the dam point that is clearly below
     the reservoir (at least half the dam height below the top of dam).
+
+    3.13.0 (from the DamSafety audit): when nothing in that radius is low enough, a wide
+    embankment can put the toe outside it, so a second search goes out to `wide_m`
+    (default WIDE_SEARCH_M, limited by the grid) and takes the NEAREST cell that is low
+    enough - not the lowest cell of the wider circle, which may be a far valley.
 
     Returns ((x, y), note) or (None, reason)."""
     if radius_m is None:
@@ -93,16 +331,81 @@ def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None):
     sel = (d <= radius_m) & np.isfinite(z)
     if not sel.any():
         return None, "no DEM cells within {:.0f} m of the dam point".format(radius_m)
+    need = top_m - 0.5 * dam_height_m
     zs = np.where(sel, z, np.inf)
     r, c = np.unravel_index(np.argmin(zs), zs.shape)
     zmin = z[r, c]
-    if zmin > top_m - 0.5 * dam_height_m:
-        return None, ("the lowest ground within {:.0f} m of the dam point is only {:.1f} ft "
-                      "below the top of dam; give the inflow point below the dam"
-                      .format(radius_m, (top_m - zmin) / 0.3048))
+    if zmin <= need:
+        return (float(X[r, c]), float(Y[r, c])), (
+            "lowest ground within {:.0f} m of the dam point, {:.1f} ft below the top of dam"
+            .format(radius_m, (top_m - zmin) / 0.3048))
+    wide = WIDE_SEARCH_M if wide_m is None else float(wide_m)
+    if wide > radius_m + 1.0:
+        low = (d <= wide) & np.isfinite(z) & (z <= need)
+        if low.any():
+            dd = np.where(low, d, np.inf)
+            r2, c2 = np.unravel_index(np.argmin(dd), dd.shape)
+            return (float(X[r2, c2]), float(Y[r2, c2])), (
+                "toe outside the usual {:.0f} m search: nearest ground at least half the dam "
+                "height down, {:.0f} m from the dam point and {:.1f} ft below the top of dam"
+                .format(radius_m, d[r2, c2], (top_m - z[r2, c2]) / 0.3048))
+    return None, ("the lowest ground within {:.0f} m of the dam point is only {:.1f} ft "
+                  "below the top of dam; give the inflow point below the dam"
+                  .format(radius_m, (top_m - zmin) / 0.3048))
+
+
+def crest_near(grid, dam_xy, top_m, dam_height_m, radius_m=WIDE_SEARCH_M):
+    """3.13.0: the dam point may be a label beside the embankment. The highest ground within
+    radius_m is taken as the crest ONLY when it is within max(3 ft, a quarter of the dam
+    height) of the known top of dam, so a hill or a road is not mistaken for the dam.
+    Returns ((x, y), note) or (None, reason)."""
+    xs = grid.x_centers()
+    ys = grid.y_centers()
+    X, Y = np.meshgrid(xs, ys)
+    z = grid.masked()
+    d = np.hypot(X - dam_xy[0], Y - dam_xy[1])
+    near = (d <= radius_m) & np.isfinite(z)
+    if not near.any():
+        return None, "no DEM within {:.0f} m of the dam point".format(radius_m)
+    r, c = np.unravel_index(np.argmax(np.where(near, z, -np.inf)), z.shape)
+    tol = max(3.0 * 0.3048, 0.25 * dam_height_m)
+    if abs(z[r, c] - top_m) > tol:
+        return None, ("the highest ground within {:.0f} m ({:.1f} ft) is not the top of dam "
+                      "({:.1f} ft)".format(radius_m, z[r, c] / 0.3048, top_m / 0.3048))
     return (float(X[r, c]), float(Y[r, c])), (
-        "lowest ground within {:.0f} m of the dam point, {:.1f} ft below the top of dam"
-        .format(radius_m, (top_m - zmin) / 0.3048))
+        "dam point moved {:.0f} m to the highest ground nearby ({:.1f} ft, the top of dam is "
+        "{:.1f} ft)".format(d[r, c], z[r, c] / 0.3048, top_m / 0.3048))
+
+
+def place_inflow(read, dam_xy, dam_height_m, top_m, cell, top_known=True):
+    """3.13.0: the breach inflow point with the fallbacks. read(bounds, cell) -> Grid.
+    1. find_inflow_point in the usual radius (the same window and cell as before 3.13.0, so a
+       dam that placed before places the same);
+    2. the same search out to WIDE_SEARCH_M, nearest low-enough cell;
+    3. only when the top of dam was given: move the dam point to the crest (crest_near) and
+       search again from there.
+    Returns (inflow_xy, note, moved_dam_xy or None); raises ValueError with the reason."""
+    rad = max(90.0, 8.0 * dam_height_m)
+    local = read((dam_xy[0] - rad - 30, dam_xy[1] - rad - 30,
+                  dam_xy[0] + rad + 30, dam_xy[1] + rad + 30), cell)
+    xy, why = _find_inflow_old(local, dam_xy, dam_height_m, top_m, rad, wide_m=0.0)
+    if xy is not None:
+        return xy, why, None
+    wide = max(rad, WIDE_SEARCH_M)
+    pad = 2.0 * wide + 30.0          # room for a search from a moved crest
+    big = read((dam_xy[0] - pad, dam_xy[1] - pad, dam_xy[0] + pad, dam_xy[1] + pad), cell)
+    xy, why2 = _find_inflow_old(big, dam_xy, dam_height_m, top_m, rad, wide)
+    if xy is not None:
+        return xy, why2, None
+    if not top_known:
+        raise ValueError(why)
+    crest, cwhy = crest_near(big, dam_xy, top_m, dam_height_m, wide)
+    if crest is None:
+        raise ValueError("{}; {}".format(why, cwhy))
+    xy, why3 = _find_inflow_old(big, crest, dam_height_m, top_m, rad, wide)
+    if xy is None:
+        raise ValueError("{}; after the {}: {}".format(why, cwhy, why3))
+    return xy, "{}; {}".format(cwhy, why3), crest
 
 
 def flow_direction(path):

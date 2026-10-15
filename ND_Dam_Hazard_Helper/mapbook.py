@@ -486,3 +486,190 @@ def _hhmm(hours):
     except (TypeError, ValueError):
         return ""
     return "{}:{:02d}".format(m // 60, m % 60)
+
+
+# ----------------------------------------- 2.30.0: the one-page EAP map layout --
+# The sheet the dam owner and the county emergency manager are actually handed (eap.py holds
+# the file names, the title block and the "what can be drawn" look-up, which need no QGIS).
+# Everything is built from the files in the dam folder, so it is one click from an open window,
+# a Processing algorithm or a batch run; the layout stays in the Layout Manager for editing.
+LAYOUT_MAP_X, LAYOUT_MAP_Y = R.MARGIN, 26.0
+LAYOUT_MAP_W, LAYOUT_MAP_H = 190.0, 160.0
+LAYOUT_COL_X = LAYOUT_MAP_X + LAYOUT_MAP_W + 6.0
+LAYOUT_COL_W = R.PAGE_W - R.MARGIN - LAYOUT_COL_X
+_LAYER_TITLES = {"bands": "Inundation by arrival time (h)", "notifications": "Places to warn",
+                 "structures": "Habitable structures", "access": "Access cut off",
+                 "lifelines": "Lifeline / critical facilities", "roads": "Roads overtopped",
+                 "rail": "Railroads inundated", "contours": "Arrival-time contours"}
+
+
+def _flood_extent(layer):
+    """The flooded area of a raster layer (positive cells), else its own extent, else None."""
+    if layer is None:
+        return None
+    samp = None
+    try:
+        samp = RasterSampler(layer)
+        rect = samp.valid_extent(positive_only=True) if samp.ok else None
+        if rect is not None:
+            return rect
+    except Exception as e:                                       # noqa - a raster problem
+        log_message("EAP map: flood extent not read ({})".format(e))
+    finally:
+        if samp is not None:
+            try:
+                samp.close()
+            except Exception:                                    # noqa
+                pass
+    try:
+        return layer.extent()
+    except Exception:                                            # noqa
+        return None
+
+
+def _geopdf_available():
+    try:
+        from qgis.core import QgsAbstractGeoPdfExporter
+        return bool(QgsAbstractGeoPdfExporter.geoPDFAvailable())
+    except Exception:                                            # noqa - older / smaller GDAL
+        return False
+
+
+def _export_pdf(layout, path, geopdf=False):
+    """Export the layout; `geopdf` asks for the georeferenced flavour. Returns the path or
+    raises RuntimeError with the export code."""
+    exporter = QgsLayoutExporter(layout)
+    settings = QgsLayoutExporter.PdfExportSettings()
+    if geopdf:
+        try:
+            settings.writeGeoPdf = True
+            settings.appendGeoreference = True
+        except Exception:                                        # noqa - no GeoPDF support
+            raise RuntimeError("this QGIS / GDAL build cannot write GeoPDF")
+    result = exporter.exportToPdf(path, settings)
+    if not R._export_ok(result):
+        raise RuntimeError("PDF export failed (code {})".format(result))
+    return path
+
+
+def build_layout(eap_folder, dam_name, sources, crs, lat, ctx, hazard_class="", scenario="",
+                 vintage=(), add_to_project=True, group=None, imagery=True, geopdf=True,
+                 title=None):
+    """The one-page EAP map: (pdf path or None, geopdf path or None, summary lines).
+
+    `sources`: eap.layout_sources(dam folder) - the inundation raster and the structure, road,
+    railroad and facility layers of the last run. Never raises for a missing layer: whatever
+    is there is drawn and the lines say what was not."""
+    from .eap import (LAYOUT_LAYERS, LAYOUT_PDF, LAYOUT_GEOPDF, LAYOUT_TITLE, layout_ready,
+                      layout_title_lines, style_arrival_bands)
+    from .styles import style_depth
+    lines = []
+    ok, why = layout_ready(sources)
+    if not ok:
+        return None, None, ["EAP map not made: " + why]
+    paths = dict((sources or {}).get("layers") or {})
+    bands = paths.pop("bands", "")
+    depth = (sources or {}).get("depth") or ""
+    del _KEEP[:]
+    flood = None
+    if bands:
+        flood = _project_layer(bands, "EAP arrival bands", True, add_to_project, group,
+                               style_arrival_bands)
+    if flood is None and depth:
+        flood = _project_layer(depth, "Max depth", True, add_to_project, group, style_depth)
+        if bands:
+            lines.append("Arrival-time bands not readable - the map shows the maximum depth")
+    if flood is None:
+        return None, None, ["EAP map not made: the inundation raster could not be opened"]
+    drawn = []
+    for role, _rel, _raster in LAYOUT_LAYERS:
+        path = paths.get(role)
+        if not path:
+            continue
+        lyr = _project_layer(path, _LAYER_TITLES.get(role, role), False, add_to_project, group)
+        if lyr is None:
+            continue
+        if role == "notifications":
+            _label_layer(lyr, "Order", size=7.0)
+        elif role == "contours":
+            _label_layer(lyr, "format_number(\"Arrival_hr\", 1) || ' h'", size=7.0,
+                         expression=True)
+        drawn.append((role, lyr))
+    layers = [lyr for _role, lyr in drawn] + [flood]
+    _KEEP.extend(layers)
+    rect = _flood_extent(flood)
+    if rect is None:
+        return None, None, ["EAP map not made: the inundation raster has no flooded cell"]
+    map_layers, styles, img_used, img_cap, img_note = R.layout_imagery(
+        imagery, layers, add_to_project, rect, crs)
+    if img_used:
+        _KEEP.append(map_layers[-1])
+
+    project = QgsProject.instance()
+    layout = QgsPrintLayout(project)
+    layout.initializeDefaults()
+    name = "{} - {}".format(LAYOUT_TITLE, dam_name or "dam")
+    layout.setName(name)
+    layout.pageCollection().page(0).setPageSize("Letter", R._landscape())
+    head, sub, vintage_text = layout_title_lines(
+        dam_name, hazard_class or (sources or {}).get("class") or "", scenario,
+        plugin=PLUGIN_NAME, version=PLUGIN_VERSION,
+        vintage=vintage or (sources or {}).get("vintage") or ())
+    R._label(layout, title or head, R.MARGIN, R.MARGIN, R.PAGE_W - 2 * R.MARGIN, 9, 0,
+             size=14, bold=True)
+    R._label(layout, sub, R.MARGIN, 19, R.PAGE_W - 2 * R.MARGIN, 6, 0, size=9, bold=True)
+    m = R._map(layout, crs, rect, map_layers, LAYOUT_MAP_X, LAYOUT_MAP_Y, LAYOUT_MAP_W,
+               LAYOUT_MAP_H, 0, styles)
+    _legend(layout, m, layers, LAYOUT_COL_X, LAYOUT_MAP_Y, LAYOUT_COL_W, 96, 0)
+    R._label(layout, vintage_text, LAYOUT_COL_X, LAYOUT_MAP_Y + 100, LAYOUT_COL_W,
+             LAYOUT_MAP_H - 100, 0, size=6)
+    _scale_bar(layout, m, LAYOUT_MAP_X + 2, R.PAGE_H - R.MARGIN - 14, 80, 0)
+    _north(layout, m, LAYOUT_MAP_X + LAYOUT_MAP_W - 12, LAYOUT_MAP_Y + 2, 0)
+    R.imagery_label(layout, img_used, img_cap, img_note, LAYOUT_MAP_X + 90,
+                    LAYOUT_MAP_Y + LAYOUT_MAP_H + 1.0, LAYOUT_MAP_W - 90, 0)
+    R._label(layout, "{} v{} - {} - North up".format(PLUGIN_NAME, PLUGIN_VERSION,
+                                                     time.strftime("%Y-%m-%d")),
+             LAYOUT_MAP_X + 90, R.PAGE_H - R.MARGIN - 6, R.PAGE_W - LAYOUT_MAP_X - 100, 5, 0,
+             size=6)
+
+    pdf = geo = None
+    wanted = os.path.join(eap_folder, LAYOUT_PDF)
+    try:
+        pdf = _export_pdf(layout, prepare_output_path(wanted))
+    except Exception as e:                                       # noqa - the layout is kept
+        lines.append("EAP map PDF not written: {}".format(e))
+    if geopdf:
+        if not _geopdf_available():
+            lines.append("GeoPDF not written: this QGIS / GDAL build has no GeoPDF support "
+                         "(the plain PDF is there)")
+        else:
+            try:
+                geo = _export_pdf(layout, prepare_output_path(
+                    os.path.join(eap_folder, LAYOUT_GEOPDF)), geopdf=True)
+            except Exception as e:                               # noqa
+                lines.append("GeoPDF not written: {}".format(e))
+    if add_to_project:
+        mgr = project.layoutManager()
+        old = mgr.layoutByName(name)
+        if old is not None:
+            mgr.removeLayout(old)
+        mgr.addLayout(layout)
+    if pdf:
+        lines.insert(0, "EAP map (one page, title block, inundation by arrival time, "
+                        "structures, roads, legend, data vintages): EAP/{}{}".format(
+                            os.path.basename(pdf),
+                            " and EAP/" + os.path.basename(geo) if geo else ""))
+    if drawn:
+        lines.append("On the map: " + ", ".join(_LAYER_TITLES.get(r, r).lower()
+                                                for r, _l in drawn))
+    missing = [r for r in (sources or {}).get("missing") or () if r != "bands"]
+    if missing:
+        lines.append("Not on the map (no such output yet): " + ", ".join(
+            _LAYER_TITLES.get(r, r).lower() for r in missing))
+    if imagery:
+        lines.append("Aerial imagery under the map: {}".format(img_cap) if img_used else
+                     "Map made without aerial imagery: {}".format(img_note))
+    lines.append("The layout '{}' is in the project's Layout Manager - edit it there and "
+                 "export again.".format(name))
+    log_message("EAP map layout: {}".format(pdf or "not exported"))
+    return pdf, geo, lines

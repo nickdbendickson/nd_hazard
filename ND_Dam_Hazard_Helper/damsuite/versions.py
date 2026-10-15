@@ -29,10 +29,17 @@ import sys
 PLUGINS = {"ndhazard": "ND_Dam_Hazard_Helper",
            "ndbreach": "nd_breach_runner",
            "ndscreen": "nd_dam_screening"}
+# 1.16.0: the ND Data Updater is part of the release set but has no hand-off with the other
+# three (it only writes the offline pack they read), so it is not in PLUGINS: nothing requires
+# a version of it. ALL is PLUGINS plus the updater, for "which versions are installed".
+UPDATER = "ndupdater"
+ALL = dict(PLUGINS, ndupdater="nd_data_updater")
 LABELS = {"ndhazard": "ND Dam Hazard Classification Helper",
           "ndbreach": "ND Dam Breach Runner",
-          "ndscreen": "ND Dam Breach Screening"}
-RELEASE = {"ndhazard": "2.22.0", "ndbreach": "3.12.0", "ndscreen": "0.20.0"}
+          "ndscreen": "ND Dam Breach Screening",
+          "ndupdater": "ND Data Updater"}
+RELEASE = {"ndhazard": "2.32.0", "ndbreach": "3.22.0", "ndscreen": "0.30.0",
+           "ndupdater": "1.6.0"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.17.0",
@@ -100,7 +107,7 @@ def _metadata_version(module):
 def installed(key):
     """Installed version text of plugin `key` inside QGIS, else None (never raises)."""
     try:
-        folder = PLUGINS[key]
+        folder = ALL[key]
     except (KeyError, TypeError):
         return None
     try:

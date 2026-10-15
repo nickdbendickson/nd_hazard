@@ -193,7 +193,7 @@ class ValidationRecordAlgorithm(_ToolBase):
         except (OSError, ValueError, KeyError) as e:
             raise QgsProcessingException("Could not write the validation record: {}".format(e))
         for w in r.get("warnings") or []:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         msg = "Verdict: {}. Record: {}".format(r.get("verdict") or "n/a", r["path"])
         feedback.pushInfo(msg)
         return {"REPORT": r["path"], "RESULT": msg}

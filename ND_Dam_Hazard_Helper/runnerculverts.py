@@ -16,7 +16,7 @@ ND Dam Hazard already downloads and from NDDOT's own inventories:
               pipes (Center_Line_Pipes: every pipe under a state highway, with
               its diameter or span x rise, length and the elevation of each end);
               other NDDOT-like layers are read by field names that give the unit;
-  streams     USGS NHD flowlines (digitised in the flow direction - the same
+  streams     USGS 3DHP flowlines (digitised in the flow direction - the same
               assumption traveltime.trace makes) or the engineer's centerline;
   embankments road lines (ND GIS Hub NG9-1-1 centerlines ...) and rail lines.
 
@@ -1080,7 +1080,7 @@ def run(out_path, nbi=(), osm=(), nddot=(), streams=(), roads=(), rails=(), para
     r_items = line_items(roads)
     t_items = line_items(rails, skip=abandoned_rail)
     if not s_items:
-        raise ValueError("no stream lines: give NHD flowlines or a centerline layer")
+        raise ValueError("no stream lines: give 3DHP flowlines or a centerline layer")
     if not r_items and not t_items and not (params or {}).get("allow_no_embankment"):
         raise ValueError("no road or rail lines: give them, or allow placement on the stream "
                          "alone")
@@ -1112,14 +1112,14 @@ def run(out_path, nbi=(), osm=(), nddot=(), streams=(), roads=(), rails=(), para
 
 def from_source(out_path, source, extent=None, params=None, log=None, nddot=()):
     """The job on an offline data pack / downloads folder (suiteexport.open_source):
-    NBI_bridges, OSM_crossings, NHD_flowlines, ND_roads_NG911 (else the newest HPMS year),
+    NBI_bridges, OSM_crossings, 3DHP_flowlines, ND_roads_NG911 (else the newest HPMS year),
     NARN_rail_lines. nddot: [(feature, geometry)] of an NDDOT layer, when given."""
     from .suiteexport import projected, HPMS_SETS
     from .offline_pack import ND_BBOX
     extent = tuple(extent or ND_BBOX)
     got, sources = {}, {}
     for key, names in (("nbi", ("NBI_bridges",)), ("osm", ("OSM_crossings",)),
-                       ("streams", ("NHD_flowlines",)),
+                       ("streams", ("3DHP_flowlines",)),
                        ("roads", ("ND_roads_NG911",) + HPMS_SETS),
                        ("rails", ("NARN_rail_lines",))):
         name = next((n for n in names if source.has(n)), None)

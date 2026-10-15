@@ -686,7 +686,7 @@ def _totals(ev):
 
 def assess(structs, grid, with_fields, base_fields=None, params=None, curves=None,
            fatality_table=None, units="us", roads=None, road_aadt=None, curves_source=None,
-           fatality_source=None):
+           fatality_source=None, rate_table=None, crossings=True, sim_end_hr=None):
     """Consequences of the with-breach flood, of the flood without the breach (when
     `base_fields` is given) and the incremental difference.
 
@@ -698,6 +698,13 @@ def assess(structs, grid, with_fields, base_fields=None, params=None, curves=Non
                    and the incremental equals the with-breach result: right for a sunny-day
                    failure where nothing floods without it)
     roads          optional impacts.Receptors with road / rail lines; road_aadt {id: AADT}
+    rate_table     3.20.0: the signed-off fatality rate table (core/lifeloss.py); None = the
+                   plugin's own file, which ships unsigned, so loss of life is reported as
+                   "not estimated" until an engineer signs one
+    crossings      3.20.0: also work out the road / rail crossing table (core/crossings.py)
+                   when road or rail lines are given
+    sim_end_hr     3.20.0: the run's simulated time, so a crossing's "how long wet" has an
+                   upper bound to report instead of nothing
 
     Returns (rows, summary): rows is a list of dicts (ROW_COLUMNS), one per structure the
     flood reaches in either case (all structures when params.include_dry); summary is a
@@ -837,7 +844,43 @@ def assess(structs, grid, with_fields, base_fields=None, params=None, curves=Non
         r = assess_roads(roads, grid, with_fields, base_fields, p, units, road_aadt)
         if r:
             summary["roads"] = r
+    # 3.20.0 (feature 12): population at risk day and night, the flood-severity split and the
+    # warning-time split from the suite's shared rules (damsuite.loss), and loss of life only
+    # when an engineer has signed a rate table (lifeloss.py). This is reported BESIDE the
+    # estimate above, never instead of it: the numbers above come from this module's own
+    # thresholds and its own fatality table, and swapping one set for the other without saying
+    # so would change a number in a report somebody has already submitted.
+    summary["par"] = _par_summary(structs, ev, rate_table)
+    # 3.20.0 (feature 13): the road and rail crossing table the county can post
+    if crossings and roads is not None and len(roads):
+        summary["crossings"] = _crossing_summary(roads, grid, with_fields, units,
+                                                 sim_end_hr)
     return rows, summary
+
+
+def _par_summary(structs, ev, rate_table=None):
+    """The lifeloss / damsuite.loss roll-up for the summary ({"problem": ...} on any failure:
+    the damage and loss-of-life estimate above must not be lost over this addition)."""
+    try:
+        from . import lifeloss
+        table = rate_table if rate_table is not None else (lifeloss.load()[0] or {})
+        one = bool(structs) and all(s.occupants_day == s.occupants_night for s in structs)
+        got = lifeloss.assess(lifeloss.rows_from_evaluate(structs, ev), table, one_count=one)
+        return lifeloss.summary(got)
+    except Exception as e:                                       # noqa
+        return {"problem": "{}: {}".format(type(e).__name__, e)}
+
+
+def _crossing_summary(roads, grid, with_fields, units, sim_end_hr=None):
+    """{"rows", ...} of the road / rail crossings ({"problem": ...} on any failure)."""
+    try:
+        from . import crossings as crmod
+        rows = crmod.crossing_rows(roads, grid, with_fields, units, sim_end_hr=sim_end_hr)
+        out = crmod.summary(rows)
+        out["rows"] = rows
+        return out
+    except Exception as e:                                       # noqa
+        return {"problem": "{}: {}".format(type(e).__name__, e)}
 
 
 # --------------------------------------------------------------------------------------
@@ -943,6 +986,24 @@ def markdown_summary(summary, title="Life-safety and damage estimate (incrementa
                   "{} without, {} incremental. {}".format(
                       roads["vehicle_window_hr"], v["exposed"], v["baseline_exposed"],
                       v["incremental"], roads["note"])]
+    # 3.20.0: the suite's own PAR / severity / warning section and the crossing table
+    par = summary.get("par")
+    if par:
+        try:
+            from . import lifeloss
+            L += [""] + lifeloss.markdown_from_summary(par)
+        except Exception as e:                                   # noqa
+            L += ["", "## Population at risk", "", "- not written ({})".format(e)]
+    cross = summary.get("crossings")
+    if cross:
+        try:
+            from . import crossings as crmod
+            L += [""] + (["## Road and railroad crossings in the flood", "",
+                          "- not written ({})".format(cross["problem"]), ""]
+                         if cross.get("problem") else
+                         crmod.markdown_lines(cross.get("rows"), cross))
+        except Exception as e:                                   # noqa
+            L += ["", "## Road and railroad crossings", "", "- not written ({})".format(e)]
     L += ["", "## Data gaps (structures the flood reaches)", ""]
     for k, v in summary["data_gaps"].items():
         if v:
@@ -972,6 +1033,31 @@ def write_outputs(folder, rows, summary, crs=None, geojson=True):
     if geojson:
         out["geojson"] = write_affected_geojson(os.path.join(folder, OUTPUT_NAMES["geojson"]),
                                                 rows, crs)
+    # 3.20.0: the crossing table and layer, and the PAR table
+    cross = summary.get("crossings") or {}
+    if cross.get("rows"):
+        try:
+            from . import crossings as crmod
+            out.update({"crossings_" + k: v for k, v in
+                        crmod.write_outputs(folder, cross["rows"], crs, geojson).items()})
+        except Exception as e:                                   # noqa
+            out["crossings_csv"] = ""
+            summary.setdefault("notes", []).append(
+                "the crossing table was not written ({})".format(e))
+    par = summary.get("par") or {}
+    if par and not par.get("problem"):
+        try:
+            from . import lifeloss
+            p = os.path.join(folder, lifeloss.OUTPUT_NAMES["csv"])
+            with open(p, "w", newline="", encoding="utf-8") as f:
+                f.write(",".join(lifeloss.CSV_COLUMNS) + "\n")
+                for r in par.get("cells") or []:
+                    f.write(",".join(str(r.get(c, "")) for c in lifeloss.CSV_COLUMNS) + "\n")
+            out["par_csv"] = p
+        except Exception as e:                                   # noqa
+            out["par_csv"] = ""
+            summary.setdefault("notes", []).append(
+                "the population-at-risk table was not written ({})".format(e))
     out["roads_csv"] = ""
     feats = (summary.get("roads") or {}).get("features")
     if feats:

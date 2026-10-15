@@ -161,7 +161,7 @@ DIALOG_KEYS = (
     "mobile_shape_check", "mobile_max_width_spin", "mobile_min_ratio_spin",
     "mobile_min_length_spin", "mobile_max_length_spin", "mobile_lot_check",
     "trailer_parks_check", "fast_sampling_check", "input_overviews_check",
-    "zone_overviews_check", "report_imagery_check", "conseq_sens_check", "conseq_warning_edit",
+    "zone_overviews_check", "report_imagery_check", "fast_run_check", "conseq_sens_check", "conseq_warning_edit",
     "conseq_ppd_edit", "conseq_pop_check", "conseq_severity_check", "evac_routes_check",
     "temporal_check", "temporal_start_edit", "temporal_step_spin", "web_export_check",
     "parcel_hints_check", "parcel_vacant_kw_edit", "parcel_nonres_kw_edit",

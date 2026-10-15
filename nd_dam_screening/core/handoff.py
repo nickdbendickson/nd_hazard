@@ -123,12 +123,11 @@ def agreement(runner_class, screening_class):
 
 
 # ---------------------------------------------------------------------------------- inputs
-def area_at_top_m2(curve_csv, crest_m=None, dz=0.3):
-    """Surface area near the top of dam from a tool-3 stage-storage curve (elev_m, storage_m3):
-    mean area over the top `dz` metres below the crest (the last point when no crest is given).
-    None when the file is missing or unusable."""
+def read_curve(curve_csv):
+    """A tool-3 stage-storage curve CSV as [(elev_m, storage_m3), ...], sorted; [] when the file
+    is missing or holds fewer than two usable rows."""
     if not curve_csv or not os.path.exists(curve_csv):
-        return None
+        return []
     e, v = [], []
     with open(curve_csv) as fh:
         for row in csv.DictReader(fh):
@@ -136,9 +135,16 @@ def area_at_top_m2(curve_csv, crest_m=None, dz=0.3):
             if a is not None and b is not None:
                 e.append(a)
                 v.append(b)
-    if len(e) < 2:
+    return sorted(zip(e, v)) if len(e) >= 2 else []
+
+
+def area_at_top_m2(curve_csv, crest_m=None, dz=0.3):
+    """Surface area near the top of dam from a tool-3 stage-storage curve (elev_m, storage_m3):
+    mean area over the top `dz` metres below the crest (the last point when no crest is given).
+    None when the file is missing or unusable."""
+    pts = read_curve(curve_csv)
+    if not pts:
         return None
-    pts = sorted(zip(e, v))
     e, v = [p[0] for p in pts], [p[1] for p in pts]
     top = min(crest_m, e[-1]) if crest_m is not None else e[-1]
     lo = max(top - dz, e[0])
@@ -152,6 +158,33 @@ def area_at_top_m2(curve_csv, crest_m=None, dz=0.3):
         return v[-1] if z > e[-1] else v[0]
     a = (interp(top) - interp(lo)) / (top - lo)
     return a if a > 0 else None
+
+
+# 0.28.3: a curve that spans less than this fraction of the dam height does not describe the
+# whole reservoir, so its area at the top is not the area at the top of dam
+SHALLOW_CURVE = 0.5
+
+
+def area_for_runner(curve_csv, crest_m=None, height_m=None, dz=0.3):
+    """(surface area at the top of dam in m2 or None, note) for the Runner's AREA_AC.
+
+    0.28.3: None when the curve spans much less than the dam height. The Runner turns the area
+    into its storage-area exponent (area * height / storage), so an area measured over a
+    4 ft-deep basin and a height of 27 ft gave an exponent at the Runner's cap of 6 and a peak
+    breach flow about a third too high. With no area the Runner assumes storage varies with
+    depth squared (exponent 2) and says so.
+    """
+    pts = read_curve(curve_csv)
+    if not pts:
+        return None, ""
+    top = min(crest_m, pts[-1][0]) if crest_m is not None else pts[-1][0]
+    span = top - pts[0][0]
+    if height_m and span < SHALLOW_CURVE * float(height_m):
+        return None, ("no surface area sent: the stage-storage curve spans {:.1f} ft of the "
+                      "{:.1f} ft dam height, too little to give the area at the top of dam (the "
+                      "Runner assumes storage varies with depth squared)".format(
+                          span / FT, float(height_m) / FT))
+    return area_at_top_m2(curve_csv, crest_m, dz), ""
 
 
 def write_runner_hydrograph(src_csv, dst_csv):

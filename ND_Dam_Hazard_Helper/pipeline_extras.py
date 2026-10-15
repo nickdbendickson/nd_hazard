@@ -138,7 +138,7 @@ def termination_step(run, gov, governing, layers, inputs, clip, dam_name, d_qa, 
                     dam_pt = None
             flow = None
             if inputs.get("flowlines"):
-                flow = QgsVectorLayer(inputs["flowlines"], "NHD flowlines", "ogr")
+                flow = QgsVectorLayer(inputs["flowlines"], "3DHP flowlines", "ogr")
                 if not flow.isValid():
                     flow = None
             spacing = float(cfg.get("travel_station_mi") or TRAVEL_STATION_MI)
@@ -149,7 +149,7 @@ def termination_step(run, gov, governing, layers, inputs, clip, dam_name, d_qa, 
             if not line:
                 msg = "; ".join(notes) or "no centerline"
                 if cfg.get("centerline_layer") is None and not inputs.get("flowlines"):
-                    msg = "no centerline layer given and no NHD flowlines downloaded"
+                    msg = "no centerline layer given and no 3DHP flowlines downloaded"
                 run.log(">>> Termination point not made: " + msg)
                 return ["Termination point not made: " + msg]
             res = TM.analyze(line, depth, clip.crs, run.ctx, clip.lat, base_sampler=base,
@@ -467,3 +467,128 @@ def location_file_step(run, acrs):
                                name=subj.get("name") or "", source=_NID_LOCATION_SOURCE + " (v2.8 run)")
     except Exception as e:
         run.log(">>> NOTE: dam_location.json not written: {}".format(e))
+
+
+# ------------------------------------- 2.30.0: lifeline detail (alternative routes) --
+LIFELINE_CSV = "Lifeline_Detail.csv"
+
+
+def _facility_points(records, ev, kinds=None):
+    """[(record, (x, y))] of the lifeline facilities worth routing: the inundated ones first,
+    then the others of the same kinds (a second facility of the same kind has to be in the
+    list to be found). Points are in the analysis CRS."""
+    from . import facilities as FAC
+    out = []
+    for rec in records or ():
+        if rec.get("kind") != FAC.KIND_LIFELINE:
+            continue
+        if kinds and rec.get("category") not in kinds:
+            continue
+        geom = rec.get("geom")
+        if geom is None:
+            continue
+        try:
+            pt = geom.pointOnSurface().asPoint()
+        except Exception:                                        # noqa: BLE001 - odd geometry
+            try:
+                pt = geom.centroid().asPoint()
+            except Exception:                                    # noqa: BLE001
+                continue
+        e = (ev or {}).get(rec["id"]) or {}
+        out.append(({"name": rec.get("name") or "(unnamed)",
+                     "category": rec.get("category") or "",
+                     "flooded": bool(e.get("flooded") or (e.get("depth") or 0) > 0),
+                     "cut_off": bool(rec.get("cut_off"))}, (float(pt.x()), float(pt.y()))))
+    return out
+
+
+def lifeline_detail_step(run, gov, governing, layers, inputs, d_qa, written):
+    """For every lifeline facility lost or isolated: the alternative route round the flood and
+    whether a second facility of the same kind is within 15 minutes (lifelineroutes.py).
+
+    Runs only when a lifeline facility is actually inundated or cut off, because the road graph
+    it needs is the expensive part of the evacuation step: a dam with no lifeline in its flood
+    pays nothing. Reuses the graph the evacuation step kept when there is one."""
+    cfg = run.cfg
+    _retire(run, d_qa, ("Lifeline_Detail",))
+    if not cfg.get("lifeline_detail", True):
+        return []
+    from . import facilities as FAC
+    from . import lifelineroutes as LR
+    recs = governing.get("facility_records") or []
+    ev = governing.get("fac_eval") or {}
+    if not governing.get("lifelines_evaluated"):
+        return []
+    hit = [r for r in FAC.flooded(recs, ev, None, kind=FAC.KIND_LIFELINE)]
+    cut = [r for r in recs if r.get("kind") == FAC.KIND_LIFELINE and r.get("cut_off")]
+    if not hit and not cut:
+        return ["No lifeline facility is inundated or cut off, so no alternative route was "
+                "computed."]
+
+    def go():
+        from qgis.core import QgsVectorLayer
+        from . import evacuation as EV
+        roads = None
+        src = inputs.get("roads_source")
+        if src and src[0] and src[1] and src[1] != "memory":
+            roads = QgsVectorLayer(src[0], "roads", src[1])
+        if roads is None or not roads.isValid():
+            path = inputs.get("roads_path")
+            roads = QgsVectorLayer(path, "roads", "ogr") if path else None
+        if roads is None or not roads.isValid():
+            return ["Lifeline detail not computed: no road layer file (the routes need the "
+                    "road network - download the roads or give a road layer saved as a file)"]
+        facs = _facility_points(recs, ev)
+        if not facs:
+            return ["Lifeline detail not computed: the lifeline facilities have no location"]
+        graph = (governing.get("evacuation") or {}).get("_graph")
+        depth = arr = None
+        reused = graph is not None
+        try:
+            if graph is None:
+                depth = _open_depth(layers, gov)
+                lyr = layers[gov.name].get("arr")
+                arr = RasterSampler(lyr) if lyr is not None else None
+                if depth is None or not depth.ok:
+                    return ["Lifeline detail not computed: the depth raster cannot be read"]
+                if arr is None or not arr.ok:
+                    return ["Lifeline detail not computed: no arrival-time raster (the road "
+                            "closures the routes avoid come from it)"]
+                run.tick(91, "Lifeline routes...")
+                graph = EV.build_road_graph(roads, depth, arr, run.ctx, lat=run.clip_lat,
+                                            **_graph_options(cfg))
+            if not getattr(graph, "ok", False):
+                return ["Lifeline detail not computed: {}".format(
+                    getattr(graph, "message", "no usable road network"))]
+            g, nodes = LR.graph_from_road_graph(graph, [pt for _r, pt in facs])
+        finally:
+            for s in (depth, arr):
+                if s is not None:
+                    s.close()
+        facilities = []
+        for (rec, _pt), node in zip(facs, nodes):
+            item = dict(rec)
+            item["node"] = node
+            facilities.append(item)
+        off = [f["name"] for f in facilities if f["node"] is None]
+        rows = LR.detail(g, [f for f in facilities if f["node"] is not None])
+        governing["lifeline_detail"] = rows
+        note = "" if not off else ("No road within reach of {} facilit(ies): {}".format(
+            len(off), "; ".join(off[:4])))
+        lines = LR.lines(rows, note)
+        if reused:
+            lines.append("The road network of the evacuation-timing step was re-used.")
+        if rows:
+            path = LR.write_csv(prepare_output_path(os.path.join(d_qa, LIFELINE_CSV)), rows)
+            written.append(_relpath(run, path))
+            lines.append("Table: QA/{}".format(os.path.basename(path)))
+        return lines
+    return _guard(run, "Lifeline detail", go)
+
+
+def _graph_options(cfg):
+    """The road-graph settings of the evacuation step (one place for both steps)."""
+    from . import evacuation as EV
+    opts = EV.options_from_cfg(cfg)
+    return {"speed_mph": opts["speed_mph"], "passable_depth_ft": opts["passable_depth_ft"],
+            "dry_safe_ft": opts["dry_safe_ft"]}

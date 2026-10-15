@@ -5,9 +5,146 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.22.0
+version=2.32.0
 author=N.D. Bendickson
 changelog=
+    2.32.0 (2026-10-15)
+      * With ND Dam Breach Runner 3.22.0, ND Dam Breach Screening 0.30.0 and ND Data Updater
+        1.6.0 (damsuite 1.18.0). The shared suite-settings file is now written safely: the new
+        file is moved into place atomically (never a half-written file), the previous one is
+        kept as a .bak, a one-writer lock serialises two plugins saving at once, and a save
+        merges into what is on disk so another plugin's settings are not lost. 'Save as' still
+        replaces the file you choose. Opening a window no longer rewrites the file. No
+        classification number moves.
+    2.31.0 (2026-10-14)
+      * With ND Dam Breach Runner 3.21.0, ND Dam Breach Screening 0.29.0 and ND Data Updater
+        1.5.0 (damsuite 1.17.0). Offline pack builder fix: when you build or update the pack,
+        a layer you replaced with your own file, and the 3DHP flowlines / waterbodies cut from
+        the National Map file, are kept; before, the next build silently put the downloaded copy
+        back over them. A layer this build could not fetch no longer drops a good copy already in
+        the pack out of it. Classification results do not move.
+    2.30.3 (2026-10-13)
+      * With ND Dam Breach Runner 3.20.3, ND Dam Breach Screening 0.28.3 and ND Data Updater
+        1.4.3 (damsuite 1.16.3). Nothing in this plugin changes; the shared package moved.
+    2.30.2 (2026-10-13)
+      * With ND Dam Breach Runner 3.20.2, ND Dam Breach Screening 0.28.2 and ND Data Updater
+        1.4.2 (damsuite 1.16.2). Results do not move.
+      * The offline pack builder's downloads use the proxy set in QGIS (Settings > Options >
+        Network) when one is set (damsuite.netproxy). Before, they followed only the
+        computer's proxy. Certificates are checked as before.
+    2.30.1 (2026-10-13)
+      * With ND Dam Breach Runner 3.20.1, ND Dam Breach Screening 0.28.1 and ND Data Updater
+        1.4.1 (damsuite 1.16.1). Results do not move.
+      * Plugins > ND Dam Suite holds each entry once. QGIS parents a plugin submenu to the main
+        window, so the check for an entry another suite plugin had already added never found the
+        menu, and it listed "Dam suite home...", "Suite settings..." and "Suite data and
+        servers..." three times each (seen in QGIS 3.34). Same fix in all three plugins.
+    2.30.0 (2026-10-13)
+      * Plain-language result card. The Review tab and page 1 of the PDF report now open with
+        what the class means in one screen: the class, the ONE criterion that carries it, what
+        would change it (the margin), the flags that qualify it ("flood cut off: duration cap",
+        "provisional", "loss of life not estimated: no signed-off fatality-rate table") and the
+        numbers underneath - written for a dam owner and a county emergency manager
+        (resultcard.py).
+      * "What would change it" explorer: the five structures, road or rail stretches nearest a
+        class boundary, each with the depth, velocity, AADT or train-count change that would flip
+        it and the class it would become, on the Review tab and in the summary (whatif.py). The
+        rows that would LOWER a class are marked as such and are never applied by the plugin.
+      * EAP map layout: 'EAP map layout (PDF)' on the Hazard Classification tab fills a print
+        layout from the dam folder - title block, dam, inundation shaded by arrival time,
+        structures, roads, legend and the data vintages - and exports PDF and, where GDAL can,
+        GeoPDF (eap.py, mapbook.py).
+      * Dam-owner letter and county notification drafts: 'Letter / notification drafts' opens the
+        two drafts filled from the run (class, the governing criterion, counts, vintages),
+        editable in the window, saved as .docx or .md. Every draft is marked DRAFT - FOR REVIEW,
+        states no legal requirement and leaves the signature and the regulatory wording to the
+        engineer (letters.py, letterwindow.py).
+      * Historical comparison: every classification run appends its summary (class, counts, data
+        vintages, plugin version, scenario) to Classification_History.json in the dam folder, and
+        'Classification history' shows the class over time with what changed (history.py).
+      * Lifeline detail: for each lifeline or critical facility that is inundated or cut off, the
+        alternative route length by road and whether a second facility of the same kind is within
+        15 minutes - "isolated" when there is no dry route at all
+        (lifelineroutes.py, pipeline_extras.py).
+      * Field-check sheet: one printable page per structure a visit has to settle (address, NSI
+        type, depth, velocity, photo slot, habitable yes / no / could not tell) and import of the
+        marked-up sheet, which becomes engineer review decisions in the existing review store -
+        no second override mechanism. A "no" is reported as a lowering decision for the engineer
+        to accept; nothing is applied silently (fieldcheck.py).
+      * Processing algorithms for the main steps: ndhazard:buildpack, ndhazard:screendam,
+        ndhazard:runbreach and ndhazard:classify, plus ndhazard:suitechain, so build pack >
+        screen > breach > classify runs in the Model Designer or headless with qgis_process for a
+        statewide batch. A step whose plugin is not installed is named, not guessed
+        (chain_algorithms.py).
+      * Usability: the tabs open on 'Setup & Run' and the two importers come after Review; both
+        run buttons say why they are grey and name the missing input, in the tooltip and the
+        status line (preflight.py); a suite hand-off runs 'Find rasters' at once and offers
+        'Run everything now'; "no rasters recognised" now reads "run the breach model first
+        (step 3 of the suite)".
+      * No change to any hazard class: everything above reports, explains or reviews. 46 tests.
+    2.29.1 (2026-10-12)
+      * OpenStreetMap layer files. The pack builder reads OSM_lifelines, OSM_crossings, OSM_campgrounds,
+        OSM_trailer_parks and OSM_places from files (the suite data folder's osm_layers/, the Layer
+        files folder, --files; the ND Data Updater makes them from a Geofabrik extract) and asks the
+        Overpass API (which often times out) only for the ones without a file.
+      * Data & Output folder search knows two more layers: mobile-home / trailer parks and
+        cities / towns / villages (the travel-time table); a layer picked there replaces the download.
+      * Runner 3.19.0, Screening 0.27.0 and damsuite 1.15.0 are unchanged (the release-set table stays).
+    2.29.0 (2026-10-12)
+      * The offline pack is built whole. Suite data and servers > 'Build / update the offline pack'
+        (and build_nd_pack.py) now makes every layer the plugins need: the web layers, the DWR and
+        HIFLD layers from the files in the data folder's dwr/ and hifld/ (or the 'DWR / HIFLD files'
+        folder; the DWR dams come from the DWR public service when there is no file), and the
+        NLCD 2021 land cover (MRLC web coverage service, needs GDAL: run inside QGIS). A layer with
+        no file is listed under 'NOT IN THE PACK' in LAYERS.txt with what to put where.
+      * USGS 3D Hydrography Program (3DHP) flowlines and waterbodies replace NHD: pack layers
+        3DHP_flowlines and 3DHP_waterbodies (the NHD_ layers of an older pack are replaced; either
+        name is answered by either pack), the default servers for the flowlines and waterbodies
+        roles, and the downloads. Each 3DHP feature also gets the NHD properties the tools read
+        (gnis_name, gnis_id, ftype, fcode) next to its own (id3dhp, mainstemid, streamorder ...).
+      * Aquatic barriers: SARP_dams and SARP_surveyed_crossings (Southeast Aquatic Resources
+        Partnership, the data behind tool.aquaticbarriers.org) in the pack and in the server list.
+        The unsurveyed (modelled) crossings are not in the SARP public services.
+    2.28.1 (2026-10-12)
+      * Chart sign-off by one engineer: the ACER TM 11 chart sign-off tool marks the chart file
+        'digitized' with the engineer named in 'Signed off by' (default Nicholas Bendickson); a
+        second checker is optional ('Require a second checker' demands one). 'Install in the
+        plugins' (on by default) copies the signed-off file over core/acer_tm11_charts.json of the
+        installed Breach Runner and Screening. The suite ships that file signed off by Nicholas
+        Bendickson (damsuite 1.14.1, tm11_curves.default_chart_file), so the chart method of the
+        other two plugins runs out of the box. No change to the curves or the classes.
+    2.28.0 - With the ND Dam Breach Runner and ND Dam Breach Screening released with it (the shared damsuite release table names them).
+      * Flood cut-off marker: when the Runner's run_report.json next to the flood rasters says
+        the model stopped while water was still moving (duration cap, domain-run limit or the
+        largest domain side), the summary's classification line ends with "incomplete: flood
+        cut off (<reason>)" and the data sources say the inundated extent and the class may be
+        low. The class itself is not changed. Without a Runner report nothing changes.
+      * Dam suite home opens a sibling plugin that is installed but not loaded: it is loaded
+        and started first and the status line says so. Only a plugin that is not installed
+        gives the "not installed" message.
+      * The plugin version shown in the summary header, the chart sign-off record and the HTTP
+        user agent is read from metadata.txt (it was stuck at 2.24.0).
+      * Export for screening: the waterbodies gap line said the pack holds flowlines only; the
+        pack has had NHD waterbodies since 2.17.0. It now says "not in this export".
+      * tests/ folder (python3 -m ND_Dam_Hazard_Helper.tests.run_tests, no QGIS needed).
+    2.25.0 - With ND Dam Breach Runner 3.15.0 and ND Dam Breach Screening 0.23.0 (damsuite 1.11.0). No change to the hazard classification. Shared suite code only.
+    2.24.0 - With ND Dam Breach Runner 3.14.0 and ND Dam Breach Screening 0.22.0 (damsuite 1.10.0).
+      * Offline pack as a folder with one GeoPackage per layer (ND_Dam_Suite_Pack): every file
+        opens in QGIS by itself; LAYERS.txt lists each layer and its source. Build offline pack
+        writes this folder; an older nd_offline_pack.zip still works.
+      * Data & Output tab 7: Data source - Offline pack (choose its location) or Download from
+        the servers. Shared with the other two plugins (Suite data and servers shows the same).
+      * With the offline pack, the pack's HIFLD lifeline layers (fire / EMS stations, emergency
+        operations centers, law enforcement, wastewater plants) are read with the other lifelines.
+    2.23.1 - With ND Dam Breach Runner 3.13.1 and ND Dam Breach Screening 0.21.1 (damsuite 1.9.1). No change in this plugin: the shared damsuite's release table names the new versions (install the three together).
+    2.23.0 - With ND Dam Breach Runner 3.13.0 and ND Dam Breach Screening 0.21.0 (damsuite 1.9.0).
+      * Fast run (More settings tab, FAST_RUN in the Processing tools): skips the EAP map book and
+        the aerial imagery under the maps for this run only. Every result is the same.
+      * When no structures fall in the study area, the message says whether a layer has no CRS
+        or the layers have a CRS and simply do not overlap (it always blamed a missing CRS).
+      * The data folder scan recognises the ND DWR dam inventory by its fields (structure_id,
+        dam_name, max_dam_height) as dams; DWR unknown-structure and dugout layers are not dams.
+      * The offline pack is opened strictly read-only, and a zip entry with ".." is never used.
     2.22.0 - With ND Dam Breach Runner 3.12.0 and ND Dam Breach Screening 0.20.0.
       * Shared suite code only (damsuite 1.8.0, keep the computer awake during flood runs). No
         change to the hazard classification.

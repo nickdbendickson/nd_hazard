@@ -560,6 +560,7 @@ class ConditionedTerrain:
         self.default_n = default_n
         self.z_to_m = getattr(base, "z_to_m", 1.0)
         self.z_note = getattr(base, "z_note", "")
+        self.src_cell_m = getattr(base, "src_cell_m", None)      # 3.20.3: the DEM's own pixel
         self.last_counts = {}
         self.last_manning_counts = {}
 

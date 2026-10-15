@@ -16,6 +16,11 @@ import traceback
 
 import numpy as np
 
+# 3.13.0: the fixtures run the workflow with stand-in executables (the Python interpreter, shell
+# scripts) and a patched lisflood.run, so the pre-run 1-second LISFLOOD-FP check is off here;
+# test_v3130 tests that check itself.
+os.environ.setdefault("ND_DAM_PRE_RUN_SMOKE", "0")
+
 from nd_breach_runner.core import breach as br
 from nd_breach_runner.core import terrain
 from nd_breach_runner.core.grid import Grid

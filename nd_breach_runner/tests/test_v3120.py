@@ -170,7 +170,7 @@ def v3120_cancel_still_kills_lisflood_while_the_computer_is_kept_awake():
 @test
 def v3120_damsuite_lists_keepawake_and_is_intact():
     from nd_breach_runner import damsuite
-    assert damsuite.SUITE_VERSION == "1.8.0" and "keepawake" in damsuite.__all__
+    assert tuple(int(x) for x in damsuite.SUITE_VERSION.split(".")) >= (1, 8, 0) and "keepawake" in damsuite.__all__
     assert "keepawake.py" in json.load(open(os.path.join(os.path.dirname(damsuite.__file__),
                                                          "FILES.json")))
     assert damsuite.selfcheck() == []

@@ -442,3 +442,45 @@ def set_top(curve, target_m3):
         return [(e, v0 + (v - v0) * k) for e, v in curve], float(k)
     k = target_m3 / top if top > 0 else 1.0
     return [(e, v * k) for e, v in curve], float(k)
+
+
+AF_M3 = 1233.48183754752      # one acre-foot in cubic metres
+FT_M = 0.3048
+
+
+NO_BASIN = "no basin in the DEM within the search distance"
+SHALLOW_BASIN_WHY = "the basin found in the DEM is only {:.1f} ft deep against a dam height of " \
+                    "{:.1f} ft, so it is not the reservoir of this dam"
+
+
+def inventory_curve(dem, dam_rc, height_m, volume_m3, which="maximum", why=NO_BASIN):
+    """0.26.0: the last-resort stage-storage curve of a dam with no basin in the DEM (no mapped
+    water body, no flat water and no closed depression within the search distance) but an
+    inventory storage and a height (0.28.3: `why` says instead why the DEM basin was not used):
+    a quadratic curve from the bed (the median DEM elevation of
+    the 5 x 5 cells around the dam point, NaN ignored) to the crest (bed + height) that holds the
+    inventory volume at the top: 11 points (bed + i*height/10, V*(i/10)^2). `which` names the
+    inventory value used in the note ("maximum" / "normal"). Returns a StorageResult with
+    confidence low, or None when the DEM has no elevation around the point, the height is
+    0.5 m or less, or the volume is not positive (the caller then fails the dam as before)."""
+    try:
+        h, v = float(height_m), float(volume_m3)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(h) and np.isfinite(v)) or h <= 0.5 or v <= 0:
+        return None
+    d = np.asarray(dem, float)
+    r, c = int(dam_rc[0]), int(dam_rc[1])
+    if r < 0 or c < 0 or r >= d.shape[0] or c >= d.shape[1]:
+        return None
+    win = d[max(r - 2, 0):r + 3, max(c - 2, 0):c + 3]
+    vals = win[np.isfinite(win)]
+    if vals.size == 0:
+        return None
+    bed = float(np.median(vals))
+    crest = bed + h
+    curve = [(bed + i * h / 10.0, v * (i / 10.0) ** 2) for i in range(11)]
+    note = ("ASSUMPTION: {}; stage-storage curve assumed "
+            "from the inventory {} storage {:,.0f} ac-ft and height {:.1f} ft (quadratic); verify the "
+            "location and the DWR values".format(why or NO_BASIN, which, v / AF_M3, h / FT_M))
+    return StorageResult(bed, crest, 0.0, 0.0, v, v, h, 0.0, "low", curve, [note])

@@ -136,14 +136,27 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
     np.savez(path, **job)
 
 
+# QGIS sets these for its own Python; the ANUGA interpreter must not inherit them. 3.18.0:
+# PYTHONNOUSERSITE too - a QGIS started with the user site off would pass it on, and an ANUGA
+# installed with pip --user is then not found.
+DROPPED_ENV = ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH", "PYTHONNOUSERSITE")
+
+
+def worker_env(threads=0, base=None):
+    """The environment handed to the ANUGA interpreter (_launch and check_anuga): this
+    process's, without QGIS's own Python settings (DROPPED_ENV); OMP_NUM_THREADS when a thread
+    count is given."""
+    env = dict(os.environ if base is None else base)
+    for k in DROPPED_ENV:
+        env.pop(k, None)
+    if threads:
+        env["OMP_NUM_THREADS"] = str(int(threads))
+    return env
+
+
 def _launch(st, job, result, workdir, progress, cancel):
     """Run the worker in the ANUGA interpreter; returns (process, log path)."""
-    env = dict(os.environ)
-    # QGIS sets these for its own Python; the ANUGA interpreter must not inherit them.
-    for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH"):
-        env.pop(k, None)
-    if st.threads:
-        env["OMP_NUM_THREADS"] = str(int(st.threads))
+    env = worker_env(st.threads)
     log_path = os.path.join(workdir, "anuga.log")
     t0 = time.time()
     with open(log_path, "w") as logf:
@@ -273,9 +286,7 @@ def check_anuga(python, workdir):
     """Import ANUGA in the given interpreter and report its version."""
     if not python or not os.path.isfile(python):
         return {"ok": False, "message": "ANUGA Python interpreter not found: {}".format(python)}
-    env = dict(os.environ)
-    for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH"):
-        env.pop(k, None)
+    env = worker_env()
     code = ("import anuga, numpy, scipy, matplotlib; "
             "import sys; print(getattr(anuga,'__version__','?'), sys.version.split()[0])")
     try:

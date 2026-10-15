@@ -31,6 +31,7 @@ from ..core import inventory as invmod
 from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE,
                       SRC_POINT, SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from ..damsuite import gdalsafe as GS
+from ..damsuite import solvegate as SG
 from . import _common as cm
 from ..core import errors as er
 from .breach_direction import PT_FIELDS
@@ -51,6 +52,15 @@ POND_FIELDS = [("pond_type", FT_STRING), ("pond_conf", FT_STRING), ("no_flood", 
 EXCLUDED_FIELDS = [("wb_id", FT_STRING), ("wb_type", FT_STRING), ("pond_type", FT_STRING),
                    ("reason", FT_STRING), ("area_ac", FT_DOUBLE), ("pool_m", FT_DOUBLE),
                    ("notes", FT_STRING)]
+
+
+def _cell_of(path):
+    """The cell size of a raster (inf when it cannot be read)."""
+    try:
+        ds = gdal.Open(path)
+        return abs(ds.GetGeoTransform()[1]) if ds is not None else float("inf")
+    except Exception:                                            # noqa
+        return float("inf")
 
 
 def pond_id(x, y):
@@ -154,6 +164,11 @@ class FindPonds(QgsProcessingAlgorithm):
         P(QgsProcessingParameterField(
             "WB_TYPE", "Water bodies: type / description field (optional; e.g. NWI ATTRIBUTE, NHD FType)",
             parentLayerParameterName="WB", type=FIELD_ANY, optional=True))
+        # 0.21.0: a storage value the water-body layer itself carries (compared, never used)
+        P(QgsProcessingParameterField(
+            "WB_STOR", "Water bodies: inventory storage field (optional, acre-feet; compared with "
+            "the LiDAR storage, the LiDAR curve is kept)", parentLayerParameterName="WB",
+            type=FIELD_ANY, optional=True))
         # 0.19.0: DWR's dugout inventory joined to its dugout polygons by structure number
         P(QgsProcessingParameterFeatureSource(
             "INV", "DWR dugout records (optional points: DWR_Dugouts; joined to the water bodies by "
@@ -233,7 +248,10 @@ class FindPonds(QgsProcessingAlgorithm):
                              "largest water body".format(n, m))
         clip = os.path.join(self._terrain, "dam_{}.tif".format(pid))
         tiles = []
-        if os.path.exists(clip) and clip_covers(clip, ext):
+        # 0.21.0: the dam clip only when it is as fine as the analysis cell. It is written at the
+        # clip cell (often coarser), so a second run read the pond from the coarse clip and gave
+        # a different storage (the test pond: 2,800 m3 first run, 1,600 m3 on the rerun).
+        if os.path.exists(clip) and clip_covers(clip, ext) and _cell_of(clip) <= cell * 1.001:
             source = clip
         elif self._vrt:
             source = self._vrt
@@ -311,6 +329,8 @@ class FindPonds(QgsProcessingAlgorithm):
         names = wbs.fields().names()
         f_id = f_id if f_id in names else None
         f_type = f_type if f_type in names else None
+        f_stor = S("WB_STOR")
+        f_stor = f_stor if f_stor in names else None
         dug_words = words(S("DUG_WORDS")) if f_type else []
         min_ac, max_ac = D("MIN_AC"), D("MAX_AC")
         cell = cm.distance_m(self, params, context, "CELL_FT", "CELL", 6.6)
@@ -475,6 +495,20 @@ class FindPonds(QgsProcessingAlgorithm):
             elif res.pond_type == pd.T_DUGOUT:
                 notes.insert(0, "dugout: only the {:.2f} ac-ft above the natural ground is released".format(
                     res.above_grade_m3 / AF_M3))
+            inv_differs, inv_ratio = False, None
+            if f_stor and rec is None:        # 0.21.0: the layer's own storage value
+                try:
+                    inv_af = float(f[f_stor])
+                except (TypeError, ValueError):
+                    inv_af = None
+                snote = SG.storage_check(res.total_m3, inv_af * AF_M3) if inv_af else ""
+                if inv_af and inv_af > 0 and res.total_m3 > 0:
+                    inv_ratio = inv_af * AF_M3 / res.total_m3
+                if snote:
+                    if snote.startswith("differs"):
+                        snote = "CHECK: " + snote[len("differs: "):]
+                        inv_differs = True
+                    notes.insert(0, snote)
             gg = QgsGeometry.fromPointXY(QgsPointXY(xy[0], xy[1]))
             gg.transform(a2g)
             o = QgsFeature(fields)
@@ -484,6 +518,8 @@ class FindPonds(QgsProcessingAlgorithm):
             extras = ["pond", "measured (LiDAR)" if height else "none", "measured (LiDAR)", None, None,
                       None, None, ""]
             conf_out = res.confidence
+            if inv_differs:
+                conf_out = "low"
             used_m3, used_method, curve_k = res.total_m3, "estimated", 1.0
             if rec is not None:              # 0.19.0: the DWR record's values beside the LiDAR's
                 name = rec["name"] or "DWR dugout {}".format(wb_id)
@@ -522,7 +558,7 @@ class FindPonds(QgsProcessingAlgorithm):
                    status, res.crest_len_m, ""] + extras + [
                    res.pool_m, res.crest_m, res.area_m2, res.below_pool_m3, res.above_pool_m3,
                    res.total_m3, res.max_depth_m, res.shore_slope_deg, used_m3, used_method,
-                   conf_out, None, "; ".join(notes), curve_k,
+                   conf_out, inv_ratio, "; ".join(notes), curve_k,
                    res.curve[-1][1] * curve_k if res.curve else None,
                    None, None,
                    res.pond_type, res.confidence, "YES" if res.no_flood else "", res.no_flood_reason,

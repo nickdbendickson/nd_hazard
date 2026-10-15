@@ -367,6 +367,30 @@ class ClassificationTabMixin(object):
             ".html.")
         self.series_btn.clicked.connect(self._run_series)
         row.addWidget(self.series_btn)
+        # 2.30.0: the one-page EAP map, the owner / county letter drafts and the class history
+        self.eap_map_btn = QPushButton("EAP map (1 page)...")
+        self.eap_map_btn.setToolTip(
+            "Fills a print layout from this dam folder in one click - title block, the "
+            "inundation shaded by arrival time, structures, roads, legend and the data "
+            "vintages - and exports EAP/EAP_Map.pdf and a GeoPDF. The layout stays in the "
+            "project's Layout Manager for editing.")
+        self.eap_map_btn.clicked.connect(self._build_eap_map)
+        row.addWidget(self.eap_map_btn)
+        self.letters_btn = QPushButton("Owner / county letters...")
+        self.letters_btn.setToolTip(
+            "Drafts the dam-owner letter and the county notification from the last run "
+            "(class, the reason, what is downstream, what changed since the last "
+            "classification), to edit and export as .docx or .md. Drafts only: no legal "
+            "language is written for you.")
+        self.letters_btn.clicked.connect(self._open_letters)
+        row.addWidget(self.letters_btn)
+        self.history_btn = QPushButton("Class history...")
+        self.history_btn.setToolTip(
+            "Every classification run recorded for this dam: the class over time with the "
+            "data vintage and the plugin version that produced it "
+            "(<dam folder>/Classification_History.json).")
+        self.history_btn.clicked.connect(self._show_history)
+        row.addWidget(self.history_btn)
         self.open_outputs_btn = QPushButton("Open outputs folder")
         self.open_outputs_btn.clicked.connect(self._open_outputs_folder)
         row.addWidget(self.open_outputs_btn)
@@ -737,7 +761,7 @@ class ClassificationTabMixin(object):
             fill(self.parcel_combo, [("(none)", _NONE), ("(auto-detect 'parcel' layer)", _AUTO)],
                  polys)
         if hasattr(self, "centerline_combo"):
-            fill(self.centerline_combo, [("(none - trace USGS NHD flowlines)", _NONE),
+            fill(self.centerline_combo, [("(none - trace USGS 3DHP flowlines)", _NONE),
                                          ("(auto-detect centerline layer)", _AUTO)], lines)
         fill(self.road_combo, [("(auto-detect road layer, else download ND roads + traffic)",
                                 _AUTO), ("(download ND GIS Hub roads + HPMS traffic)", _DOWNLOAD),
@@ -772,9 +796,22 @@ class ClassificationTabMixin(object):
         return project.mapLayer(data)
 
     def _classification_button_state(self):
+        """2.30.0: the button says WHY it is grey, naming the missing input (preflight.py);
+        the same text is on 'Run everything' and in the status line."""
         if not hasattr(self, "run_class_btn"):
             return
         ok = self._inputs_valid_for_main() and not self._busy
+        reasons = []
+        try:
+            from . import preflight as PRE
+            reasons = self._run_reasons() if hasattr(self, "_run_reasons") else []
+            ok = ok and not reasons
+            self.run_class_btn.setToolTip(PRE.tooltip(reasons) if reasons else
+                                          "Every input is ready - runs the inventory, the ACER "
+                                          "zones, the ND criteria, the report and the EAP "
+                                          "outputs")
+        except Exception:                                        # noqa - never stop the window
+            pass
         self.run_class_btn.setEnabled(ok)
         self.run_class_btn.setStyleSheet(BTN_ACTIVE_STYLE if ok else BTN_INACTIVE_STYLE)
 
@@ -782,6 +819,13 @@ class ClassificationTabMixin(object):
     def _on_run_classification(self):
         if self._busy:
             return
+        if hasattr(self, "_log_run_reasons"):
+            reasons = self._log_run_reasons()
+            if reasons:
+                from . import preflight as PRE
+                QMessageBox.warning(self, "Hazard classification - inputs need fixing",
+                                    PRE.tooltip(reasons))
+                return
         valid, errors = self.validate_all_inputs()
         if not valid:
             QMessageBox.warning(self, "Input Errors",
@@ -1115,6 +1159,121 @@ class ClassificationTabMixin(object):
         self._update_status("Creep watch: " + text, True)
         QMessageBox.information(self, "Creep watch", "{}\n\n{}".format(text, paths["html"]))
         self._open_path(paths["html"])
+
+    # ------------------------------- 2.30.0: the EAP map, the letters, the history --
+    def _build_eap_map(self, *args):
+        """The one-page EAP map layout, filled from this dam folder (mapbook.build_layout).
+        Needs no finished run: whatever the last run left in the outputs folder is drawn."""
+        if self._busy:
+            return
+        try:
+            from qgis.PyQt.QtCore import QUrl
+            from qgis.PyQt.QtGui import QDesktopServices
+            from qgis.core import QgsRasterLayer
+            from .constants import SUBDIR_EAP, GRP_EAP
+            from .helpers import plugin_group, dam_display_name
+            from . import eap as EAP
+            from . import mapbook as MB
+            from .autodetect import find_rasters
+            folder = self.config_dam_folder
+            if not folder or not os.path.isdir(folder):
+                QMessageBox.information(self, "EAP map", "Choose the dam folder first "
+                                                         "(Setup & Run, step 1).")
+                return
+            sources = EAP.layout_sources(folder, self.config_output_folder,
+                                         depth=self.depth_edit.text().strip(),
+                                         find=find_rasters)
+            ok, why = EAP.layout_ready(sources)
+            if not ok:
+                QMessageBox.information(self, "EAP map", why)
+                return
+            d_eap = os.path.join(self.config_output_folder or folder, SUBDIR_EAP)
+            os.makedirs(d_eap, exist_ok=True)
+            res = getattr(self, "_last_run", None) or {}
+            card = res.get("card") or {}
+            dam = res.get("dam_name") or dam_display_name(folder)
+            lat = None
+            clip = res.get("clip")
+            crs = res.get("crs")
+            if crs is None:
+                lyr = QgsRasterLayer(sources.get("layers", {}).get("bands")
+                                     or sources.get("depth"), "flood")
+                if not lyr.isValid():
+                    QMessageBox.information(self, "EAP map",
+                                            "The inundation raster could not be opened.")
+                    return
+                crs = lyr.crs()
+            if clip is not None:
+                lat = getattr(clip, "lat", None)
+            self._log(">>> EAP map layout...")
+            pdf, geo, lines = MB.build_layout(
+                d_eap, dam, sources, crs, lat, QgsProject.instance().transformContext(),
+                hazard_class=card.get("cls") or sources.get("class") or "",
+                scenario=res.get("governing") or "",
+                add_to_project=True, group=plugin_group(dam, GRP_EAP))
+            for line in lines:
+                self._log("    " + line)
+            self._update_status("EAP map: {}".format(
+                os.path.basename(pdf) if pdf else "not written - see the log"), bool(pdf))
+            if pdf:
+                QMessageBox.information(self, "EAP map", "\n".join(lines))
+                QDesktopServices.openUrl(QUrl.fromLocalFile(pdf))
+            else:
+                QMessageBox.warning(self, "EAP map", "\n".join(lines))
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("EAP map layout failed: {}".format(e))
+            self._log(">>> EAP map not made: {}".format(e))
+            QMessageBox.warning(self, "EAP map", "The map could not be made: {}".format(e))
+
+    def _open_letters(self, *args):
+        """The dam-owner letter and the county notification as editable drafts."""
+        try:
+            from . import letterwindow as LW
+            from . import history as HIS
+            res = getattr(self, "_last_run", None)
+            if not res:
+                QMessageBox.information(self, "Letters",
+                                        "Run the Hazard Classification first - the drafts are "
+                                        "built from its result.")
+                return
+            nid = ""
+            if hasattr(self, "subject_nid_edit"):
+                nid = self.subject_nid_edit.text().strip()
+            LW.open_letters(self, res, self.config_output_folder or self.config_dam_folder,
+                            dam_name=res.get("dam_name") or "", nid_id=nid,
+                            history=HIS.read_entries(self.config_dam_folder))
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("Letter drafts failed: {}".format(e))
+            QMessageBox.warning(self, "Letters", "The drafts could not be opened: {}".format(e))
+
+    def _show_history(self, *args):
+        """Every classification run recorded for this dam, newest last."""
+        try:
+            from . import history as HIS
+            folder = self.config_dam_folder
+            entries = HIS.read_entries(folder)
+            if not entries:
+                QMessageBox.information(
+                    self, "Class history",
+                    "No classification run is recorded for this dam yet. Every run from "
+                    "2.30.0 on is added to {} in the dam folder.".format(HIS.HISTORY_FILE))
+                return
+            lines = HIS.history_lines(entries)
+            for line in lines:
+                self._log("    " + line)
+            csv_path = ""
+            try:
+                csv_path = HIS.write_history_csv(
+                    os.path.join(self.config_output_folder or folder, "QA",
+                                 "Classification_History.csv"), entries)
+            except Exception as e:                               # noqa - the table is extra
+                log_message("Class history CSV not written: {}".format(e))
+            QMessageBox.information(self, "Class history", "\n".join(lines) + (
+                "\n\nTable: {}".format(csv_path) if csv_path else ""))
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("Class history failed: {}".format(e))
+            QMessageBox.warning(self, "Class history",
+                                "The history could not be read: {}".format(e))
 
     def _make_submittal(self, *args):
         """v2.7: bundle the last run's files for the reviewer (submittal.py)."""

@@ -74,8 +74,8 @@ def builtin_services_are_well_formed():
         if rtype != "display":
             assert SV.data_capable(c, role), (role, c["id"])
     assert cat.chosen("dem")["id"] == "usgs_3dep_image"
-    assert cat.chosen("flowlines")["url"].endswith("/nhd/MapServer/6")      # as Hazard used it
-    assert cat.chosen("waterbodies")["url"].endswith("/nhd/MapServer/12")
+    assert cat.chosen("flowlines")["url"].endswith("/3DHP_all/MapServer/50")      # 1.15.0: 3DHP (was NHD)
+    assert cat.chosen("waterbodies")["url"].endswith("/3DHP_all/MapServer/60")
 
 
 @check

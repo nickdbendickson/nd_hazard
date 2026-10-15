@@ -2147,7 +2147,8 @@ class _Report(object):
             if dam.get(k) not in (None, ""):
                 rows.append([label_of(k), fmt_val(dam[k])])
         if self.rep.get("dem_crest_ft") is not None:
-            rows.append(["Highest DEM point within 30 m of the dam point (ft)",
+            rows.append(["Crest read from the DEM near the dam point (ft){}".format(
+                " - " + self.rep["dem_crest_from"] if self.rep.get("dem_crest_from") else ""),
                          fmt_val(self.rep["dem_crest_ft"])])
         if self.rep.get("dem_elevation_units"):
             rows.append(["DEM elevation units", self.rep["dem_elevation_units"]])
@@ -2574,9 +2575,10 @@ class _Report(object):
                      or st.get("lethality") or "")]
             if ch:
                 rows.append(("Depth-velocity charts", "{} (status {}, digitized by {}, "
-                             "checked by {})".format(ch.get("source") or "", ch.get("status"),
-                                                     ch.get("digitized_by") or EM,
-                                                     ch.get("checked_by") or EM)))
+                             "signed off by {})".format(ch.get("source") or "", ch.get("status"),
+                                                        ch.get("digitized_by") or EM,
+                                                        ch.get("signed_off_by")
+                                                        or ch.get("checked_by") or EM)))
             rows += [("Borderline, higher class assigned (5.3)",
                       "Yes" if data.get("borderline_raised") else "No"),
                      ("'Any depth' taken as", "{} ft".format(fmt_val(st.get("wet_ft"))))]

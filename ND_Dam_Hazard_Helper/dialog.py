@@ -9,7 +9,7 @@ import traceback
 from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
-    QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox,
+    QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox, QScrollArea, QCheckBox,
 )
 
 from qgis.core import QgsProject, QgsRasterLayer
@@ -22,6 +22,7 @@ from .constants import (
     BTN_ACTIVE_STYLE, BTN_INACTIVE_STYLE, README_TEXT, PROGRESS_MIN_INTERVAL_S,
 )
 from .extent import make_extent_clip
+from . import preflight as PRE
 from .classify_tab import ClassificationTabMixin
 from .extras_tab import ExtrasTabMixin
 from .extras290_tab import Extras290TabMixin
@@ -35,6 +36,28 @@ from .facility_review_tab import FacilityReviewTabMixin
 from .suite_settings_tab import SuiteSettingsTabMixin
 from . import facility_review_tab as FT
 from .settings import save_state, load_state, widget_value, set_widget_value
+
+def _scroll_tab(w):
+    """Wrap a tab widget in a QScrollArea so tall pages are reachable on small screens."""
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setWidget(w)
+    return sa
+
+
+def _escape_tab_mnemonics(widget):
+    """1.18: a single '&' in a tab title is Qt's keyboard-shortcut marker and is not shown
+    ('Setup & Run' read 'Setup Run'); '&&' shows one '&'. Applied once the tabs are built."""
+    try:
+        from qgis.PyQt.QtWidgets import QTabWidget
+        for tw in widget.findChildren(QTabWidget):
+            for i in range(tw.count()):
+                t = tw.tabText(i)
+                if "&" in t and "&&" not in t:
+                    tw.setTabText(i, t.replace("&", "&&"))
+    except Exception:                                            # noqa
+        pass
+
 
 def _same_folder(a, b):
     """True when two folder paths name the same folder (False when one is empty)."""
@@ -71,6 +94,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._raster_dam = None
         self._nid_dam = None
         self.setup_ui()
+        _escape_tab_mnemonics(self)
         self.dam_folder_edit.textChanged.connect(self._on_dam_folder_changed)
         for e in (self.depth_edit, self.vel_edit, self.arr_edit, self.dv_edit):
             e.textChanged.connect(self._update_button_states)
@@ -96,17 +120,45 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     def setup_ui(self):
         self.setWindowTitle("{} v{}".format(PLUGIN_NAME, PLUGIN_VERSION))
         self.setMinimumSize(900, 700)
+        try:
+            from qgis.PyQt.QtWidgets import QApplication
+            self.setMaximumHeight(max(700, QApplication.primaryScreen().geometry().height() - 80))
+        except Exception:
+            pass
         main_layout = QVBoxLayout(self)
         self.tab_widget = QTabWidget()
 
-        # --- v2.9 tab order: DSS-WISE Lite, HEC-RAS plan, Setup & Run, Data & Output, then
-        # Hazard Classification, Review, Review: roads & facilities and the Readme ---
-        self.tab_widget.addTab(self._build_dsswise_tab(), "DSS-WISE Lite")
-        self.tab_widget.addTab(self._build_ras_tab(), "HEC-RAS plan")
+        # --- 2.30.0 tab order: the window opens on "Setup & Run", the step a novice has to
+        # do first; the two importers (DSS-WISE Lite, HEC-RAS plan) are tools for a model that
+        # has already been run, so they come after Review. Before 2.30.0 the window opened on
+        # the DSS-WISE Lite importer and "Setup & Run" was the third tab. ---
 
         # --- Setup tab ---
         setup_tab = QWidget()
         setup_layout = QVBoxLayout(setup_tab)
+
+        # 2.30.0: the hand-off banner (hidden until another suite window points this window
+        # at a dam): the rasters are found automatically and the whole run is one click here,
+        # so Screening -> Runner -> Hazard is three clicks and not a hunt for a button.
+        self.handoff_group = QGroupBox("Handed over from another window of the suite")
+        handoff_layout = QHBoxLayout()
+        self.handoff_label = QLabel("")
+        self.handoff_label.setWordWrap(True)
+        handoff_layout.addWidget(self.handoff_label, stretch=3)
+        self.handoff_run_btn = QPushButton("Run everything now")
+        self.handoff_run_btn.setToolTip("Runs the whole classification for the dam just handed "
+                                        "over - the same as 'Run everything' on Data & Output.")
+        self.handoff_run_btn.clicked.connect(self._on_handoff_run)
+        handoff_layout.addWidget(self.handoff_run_btn)
+        self.handoff_auto_check = QCheckBox("Run automatically next time")
+        self.handoff_auto_check.setToolTip(
+            "On a hand-off from the ND Dam Breach Runner or the suite home, find the rasters "
+            "and start 'Run everything' without being asked. The run still stops with its "
+            "reasons when an input is missing.")
+        handoff_layout.addWidget(self.handoff_auto_check)
+        self.handoff_group.setLayout(handoff_layout)
+        self.handoff_group.setVisible(False)
+        setup_layout.addWidget(self.handoff_group)
 
         dam_group = QGroupBox("1. Dam Project Folder")
         dam_layout = QHBoxLayout()
@@ -172,22 +224,27 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         btn_layout.addStretch()
         setup_layout.addLayout(btn_layout)
         setup_layout.addStretch()
-        self.tab_widget.addTab(setup_tab, "Setup & Run")
+        self.tab_widget.addTab(_scroll_tab(setup_tab), "Setup & Run")
+        self._setup_tab_index = self.tab_widget.count() - 1
 
         # --- Data & Output tab (data_tab.py); the "Run everything" button is here (v2.9) ---
-        self.tab_widget.addTab(self._build_data_tab(), "Data & Output")
+        self.tab_widget.addTab(_scroll_tab(self._build_data_tab()), "Data & Output")
 
         # --- Hazard classification tab (classify_tab.py) ---
-        self.tab_widget.addTab(self._build_classification_tab(), "Hazard Classification")
+        self.tab_widget.addTab(_scroll_tab(self._build_classification_tab()), "Hazard Classification")
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         # --- Review tabs: structures, then roads / rail / bridges / lifelines ---
-        self.tab_widget.addTab(self._build_review_tab(), "Review")
-        self.tab_widget.addTab(self._build_facility_review_tab(), FT.TAB_TITLE)
+        self.tab_widget.addTab(_scroll_tab(self._build_review_tab()), "Review")
+        self.tab_widget.addTab(_scroll_tab(self._build_facility_review_tab()), FT.TAB_TITLE)
+
+        # --- the importers: a model that has already been run (2.30.0: after Review) ---
+        self.tab_widget.addTab(_scroll_tab(self._build_dsswise_tab()), "DSS-WISE Lite")
+        self.tab_widget.addTab(_scroll_tab(self._build_ras_tab()), "HEC-RAS plan")
 
         # --- v2.13: the suite settings file as a grid (suite_settings_tab.py) ---
         try:
-            self.tab_widget.addTab(self._build_suite_settings_tab(), "Suite settings")
+            self.tab_widget.addTab(_scroll_tab(self._build_suite_settings_tab()), "Suite settings")
         except Exception as e:                                   # noqa - the grid must never stop the window
             log_message("Suite settings tab not built: {}".format(e))
 
@@ -214,7 +271,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         selftest_row.addWidget(self.sources_btn)
         selftest_row.addStretch()
         readme_layout.addLayout(selftest_row)
-        self.tab_widget.addTab(readme_tab, "Readme")
+        self.tab_widget.addTab(_scroll_tab(readme_tab), "Readme")
 
         main_layout.addWidget(self.tab_widget)
 
@@ -242,7 +299,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _on_tab_changed(self, index):
-        if self.tab_widget.tabText(index) in ("Hazard Classification", "Data & Output"):
+        if self.tab_widget.tabText(index).replace("&&", "&") in ("Hazard Classification", "Data & Output"):
             self._refresh_layer_combos()
 
     def _inline_row(self, edit, btn):
@@ -282,27 +339,147 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 and all(paths[k] and os.path.isfile(paths[k]) for k in self._required_rasters())
                 and (not paths["vel"] or os.path.isfile(paths["vel"])))
 
+    # ------------------------------------------- 2.30.0: why a Run button is grey --
+    def _have_inputs(self):
+        """What preflight.py needs to know about this window (plain booleans)."""
+        paths = self._raster_paths()
+
+        def ok(key):
+            p = paths.get(key) or ""
+            return bool(p and os.path.isfile(p))
+        return {"dam_folder": bool(self.config_dam_folder
+                                   and os.path.isdir(self.config_dam_folder)),
+                "depth": ok("depth"), "vel": ok("vel"), "arr": ok("arr"),
+                "one_d": self._one_d_selected(), "busy": bool(self._busy)}
+
+    def _suite_blocking(self, max_age_s=10.0):
+        """damsuite.suitecheck's blocking items, at most every max_age_s seconds (the check
+        reads folders). Never raises: an unreadable suite folder gives no reason here, since
+        the window's own inputs already name what is missing."""
+        now = time.time()
+        got = getattr(self, "_blocking_cache", None)
+        if got is not None and now - got[0] < max_age_s:
+            return got[1]
+        items = []
+        try:
+            from .damsuite import suitecheck as SC
+            items = SC.blocking(SC.check(plugins=False))
+        except Exception as e:                                   # noqa - never stop the window
+            log_message("Suite readiness not checked: {}".format(e))
+            items = []
+        self._blocking_cache = (now, items)
+        return items
+
+    def _run_reasons(self):
+        """[(key, label, what to do)] - empty when a run can start."""
+        try:
+            have = self._have_inputs()
+            blocking = [] if have["busy"] else self._suite_blocking()
+            return PRE.reasons(have, blocking)
+        except Exception as e:                                   # noqa - never stop the window
+            log_message("Run reasons not built: {}".format(e))
+            return []
+
     def _update_button_states(self, *args):
+        """Both run buttons, their tooltips and the status line say the same thing: what is
+        missing and what to do about it (before 2.30.0 one button had a 'Missing: ...'
+        tooltip, the other none, and the status line said nothing)."""
         busy = self._busy
-        ready = self._inputs_valid_for_main() and not busy
-        if hasattr(self, "run_all_btn"):
-            self.run_all_btn.setEnabled(ready)
-            self.run_all_btn.setStyleSheet(BTN_ACTIVE_STYLE if ready else BTN_INACTIVE_STYLE)
-            if ready:
-                self.run_all_btn.setToolTip("All inputs selected - ready to run")
-            elif busy:
-                self.run_all_btn.setToolTip("A run is in progress")
-            else:
-                missing = []
-                if not self.config_dam_folder or not os.path.isdir(self.config_dam_folder):
-                    missing.append("Dam folder")
-                labels = {"depth": "Depth raster", "vel": "Velocity raster",
-                          "arr": "Arrival raster"}
-                for key, path in self._raster_paths().items():
-                    if key in self._required_rasters() and (not path or not os.path.isfile(path)):
-                        missing.append(labels[key])
-                self.run_all_btn.setToolTip("Missing: {}".format(", ".join(missing)))
+        reasons = self._run_reasons()
+        ready = not reasons and self._inputs_valid_for_main() and not busy
+        tip = PRE.tooltip(reasons) if not ready else (
+            "Every input is ready - runs the data download (when ticked), the inventory, the "
+            "ACER zones, the ND criteria, the report and the EAP outputs")
+        for name in ("run_all_btn", "run_class_btn"):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            btn.setEnabled(ready)
+            btn.setStyleSheet(BTN_ACTIVE_STYLE if ready else BTN_INACTIVE_STYLE)
+            btn.setToolTip(tip)
+        if not busy and not getattr(self, "_last_run", None):
+            # the status line is the window's one message: it names the missing input until
+            # a run has produced a result of its own to show
+            self._update_status(PRE.status_text(reasons), bool(ready))
+        if hasattr(self, "result_label") and not getattr(self, "_last_run", None):
+            self.result_label.setText(
+                "No classification run yet - missing: {}".format(PRE.names(reasons))
+                if reasons else "No classification run yet - every input is ready, press Run")
         self._classification_button_state()
+
+    def _log_run_reasons(self):
+        """The reasons in the log and a message box (a Run pressed from a hand-off)."""
+        reasons = self._run_reasons()
+        for line in PRE.log_lines(reasons):
+            self._log(">>> " + line)
+        return reasons
+
+    # ------------------------------------------------- 2.30.0: the suite hand-off --
+    def handoff(self, folder="", source="", run=None):
+        """Another suite window has pointed this window at a dam (the Runner's hand-off, the
+        suite home's "Classify"). Finds the rasters, shows the hand-off banner with "Run
+        everything now", and starts the run itself when the engineer ticked that box
+        (`run` True / False overrides the tick). Returns True when a run was started.
+
+        Never raises: it is called from another plugin's code."""
+        started = False
+        try:
+            folder = (folder or self.config_dam_folder or "").strip()
+            if folder and not _same_folder(folder, self.config_dam_folder):
+                self.dam_folder_edit.setText(folder)     # -> _on_dam_folder_changed
+            n = self._auto_fill_rasters(force=True)       # "Find rasters", without being asked
+            self._show_setup_tab()
+            reasons = self._run_reasons()
+            where = source or "another window of the suite"
+            text = "Dam folder set from {}; {} raster box(es) filled.".format(where, n)
+            if reasons:
+                text += " " + PRE.status_text(reasons)
+            else:
+                text += " Everything is ready - press 'Run everything now'."
+            self.handoff_label.setText(text)
+            self.handoff_group.setVisible(True)
+            self.handoff_run_btn.setEnabled(not reasons and not self._busy)
+            self._log(">>> Hand-off from {}: {}".format(where, text))
+            want = self.handoff_auto_check.isChecked() if run is None else bool(run)
+            if want and not reasons and not self._busy:
+                started = True
+                self._on_handoff_run()
+        except Exception as e:                                   # noqa - never stop a hand-off
+            log_message("Hand-off not completed: {}".format(e))
+        return started
+
+    def refresh(self, *args):
+        """The hook the shared suite home calls after it fills this window's dam folder
+        (suite_home.point_window_at tries "_changed" then "refresh"): the hand-off above."""
+        return self.handoff(source="the suite home")
+
+    def _show_setup_tab(self):
+        try:
+            idx = getattr(self, "_setup_tab_index", None)
+            if idx is None:
+                for i in range(self.tab_widget.count()):
+                    if self.tab_widget.tabText(i).replace("&&", "&") == "Setup & Run":
+                        idx = i
+                        break
+            if idx is not None:
+                self.tab_widget.setCurrentIndex(idx)
+        except Exception:                                        # noqa
+            pass
+
+    def _on_handoff_run(self, *args):
+        """"Run everything now" on the hand-off banner."""
+        try:
+            if self._busy:
+                return
+            if self._log_run_reasons():
+                QMessageBox.warning(self, "Run everything - inputs need fixing",
+                                    PRE.tooltip(self._run_reasons()))
+                self._update_button_states()
+                return
+            self.handoff_group.setVisible(False)
+            self._on_run_all()
+        except Exception as e:                                   # noqa - never raise in a slot
+            log_message("Hand-off run failed to start: {}".format(e))
 
     # ------------------------------------------------------------ BROWSERS --
     def browse_dam_folder(self):
@@ -418,7 +595,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         base = []          # v2.5.1: no no-breach baseline / time steps in the dialog
         if not force and any(e.text().strip() for _k, e in edits):
             return 0
-        from .autodetect import find_rasters, describe
+        from .autodetect import find_rasters, found_text
         found = find_rasters(folder)
         n = 0
         if force or not _same_folder(folder, self._raster_dam):
@@ -431,7 +608,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 edit.setText(found[key])
                 self._auto_rasters[key] = found[key]       # 2.17.0: cleared on a dam change
                 n += 1
-        self._log(">>> Rasters found in the dam folder: {}".format(describe(found, folder)))
+        self._log(">>> " + found_text(found, folder))
         for note in found["notes"]:
             self._log("    " + note + " - change it on the Setup tab if needed")
         self._update_button_states()
@@ -692,10 +869,14 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                      "facrev_zoom_btn", "facrev_save_btn", "facrev_rerun_btn",
                      # v2.6.1: the pack must not change under a running task
                      "pack_path_edit", "pack_browse_btn", "pack_clear_btn",
-                     "offline_only_check", "pack_build_btn"):
+                     "offline_only_check", "pack_build_btn",
+                     # 2.24.0
+                     "pack_zip_btn", "source_pack_radio", "source_download_radio"):
             w = getattr(self, name, None)
             if w is not None:
                 w.setEnabled(not busy)
+        if not busy and hasattr(self, "_enable_pack_widgets"):
+            self._enable_pack_widgets()          # 2.24.0: Download mode keeps them off
         if not busy and hasattr(self, "dsw_import_btn"):
             self.dsw_import_btn.setEnabled(bool(getattr(self, "_dsw_items", None)))
         self._update_button_states()
@@ -848,7 +1029,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         "evac_passable_spin", "evac_include_combo", "evac_safe_spin", "cache_check",
         "cache_age_spin", "cache_refresh_check", "quick_check", "watch_workers_spin",
         # v2.9
-        "datafolder_edit", "datafolder_use_check", "datafolder_picks_edit"
+        "datafolder_edit", "datafolder_use_check", "datafolder_picks_edit",
+        # 2.30.0
+        "handoff_auto_check",
     ) + Extras290TabMixin.SETTING_WIDGETS_290 + SuiteTabMixin.SETTING_WIDGETS_2100
 
     def _current_state(self):

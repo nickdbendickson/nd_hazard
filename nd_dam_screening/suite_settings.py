@@ -445,12 +445,13 @@ class SettingsGrid(QWidget):
             self.on_file(path)
         return True
 
-    def save(self, path=None, name=None):
+    def save(self, path=None, name=None, replace=False):
         path = path or self.settings.path
         if not path:
             return self.save_as()
         try:
-            self.settings.save(path, catalog=self.catalog, name=name, versions=self.versions or None)
+            self.settings.save(path, catalog=self.catalog, name=name, versions=self.versions or None,
+                               replace=replace)
         except DS.SettingsError as e:
             QMessageBox.warning(self, "Settings", str(e))
             return ""
@@ -467,4 +468,4 @@ class SettingsGrid(QWidget):
             return ""
         if not os.path.splitext(path)[1]:
             path += ".xlsx"
-        return self.save(path)
+        return self.save(path, replace=True)          # the engineer chose to replace that file

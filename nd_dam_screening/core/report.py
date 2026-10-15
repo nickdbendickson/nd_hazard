@@ -196,6 +196,9 @@ input[type=search]{font:inherit;padding:6px 10px;border:1px solid var(--ring);bo
 background:var(--surface);color:var(--ink);width:100%;max-width:360px}
 .scroll{overflow-x:auto}
 footer{color:var(--muted);font-size:12px;margin-top:32px}
+.st-ok{color:#1a6b2a}.st-edge{color:#8a5a00;font-weight:600}.st-fail{color:#a01010;font-weight:600}
+button{font:inherit;padding:4px 12px;border:1px solid var(--ring);border-radius:6px;
+background:var(--surface);color:var(--ink);cursor:pointer;margin-bottom:8px}
 """
 
 JS = """
@@ -222,10 +225,25 @@ var c=(!isNaN(nx)&&!isNaN(ny))?nx-ny:x.localeCompare(y);return asc?c:-c});rows.f
 """
 
 
-def badge(cls):
+def _conservative_note(rec):
+    """Return True when the conservative (no-chart) lethality was used."""
+    basis = str(rec.get("hz_basis") or "")
+    return "Conservative, no chart" in basis
+
+
+def class_display(rec):
+    """Display label for hz_class; adds a conservative note when TM 11 chart was not signed off."""
+    cls = rec.get("hz_class") or "NoData"
+    if cls == "High" and _conservative_note(rec):
+        return "High (conservative: TM 11 chart not signed off)"
+    return cls
+
+
+def badge(cls, label=None):
     col, icon = CLASS_STYLE.get(cls or "NoData", CLASS_STYLE["NoData"])
+    display = label if label is not None else str(cls or "NoData")
     return (f'<span class="badge"><i style="color:{col}" aria-hidden="true">{icon}</i>'
-            f'{html.escape(str(cls or "NoData"))}</span>')
+            f'{html.escape(display)}</span>')
 
 
 def _fmt(v, nd=1):
@@ -273,13 +291,27 @@ def dam_page(rec, map_png=None, hydro=None, impacts=(), out_path=None):
     kv = "".join(f"<div><span>{html.escape(k)}</span><b>{_fmt(v)}</b></div>" for k, v in facts)
     rev = review_reasons(rec)
     body = (f'<h1>{html.escape(str(rec.get("name") or rec.get("dam_id")))}</h1>'
-            f'<p class="sub">{badge(rec.get("hz_class"))} &nbsp; {html.escape(str(rec.get("hz_reason") or ""))}</p>')
+            f'<p class="sub">{badge(rec.get("hz_class"), class_display(rec))} &nbsp; {html.escape(str(rec.get("hz_reason") or ""))}</p>')
+    # item 3: prominent cut-off warning at the top of the report
+    if str(rec.get("edge_flag") or "").upper() == "YES":
+        body += ('<div class="card" style="border-color:#c88000;background:#fff8e6">'
+                 '<b>⚠ Flood cut off at the terrain edge — results are incomplete.</b> '
+                 'The flood was still deep when it reached the edge of the DEM clip. '
+                 'Peak flow, flooded area and class may be understated. '
+                 'Extend the DEM clip (tool 2) and rerun.</div>')
     if rev:
         body += '<div class="card"><b>Needs review:</b> ' + html.escape("; ".join(rev)) + '</div>'
     note_blob = " ".join(str(rec.get(k) or "") for k in (
         "stor_notes", "status", "source", "brch_notes", "sim_notes", "hz_notes"))
     if PROPOSED_PHRASE in note_blob or str(rec.get("source") or "") == "proposed":
         body += ('<div class="card"><b>Proposed dam.</b> ' + html.escape(PROPOSED_PHRASE) + '</div>')
+    # item 5: explain the conservative class where the class is shown
+    if rec.get("hz_class") == "High" and _conservative_note(rec):
+        body += ('<div class="card warn"><b>High (conservative rule).</b> '
+                 'The ACER TM 11 depth-velocity charts are not signed off for this QGIS, '
+                 'so every inundated habitable structure is counted as lethal. '
+                 'To use the chart method, open ND Dam Hazard Helper &rarr; Hazard Classification '
+                 '&rarr; Dam Suite &rarr; Chart sign-off.</div>')
     est = estimated_inputs(rec)
     if est:                                  # 0.19.0
         body += ('<div class="card warn"><b>Estimated inputs.</b> DWR has no ' + " or ".join(est) +
@@ -326,7 +358,9 @@ SUMMARY_COLS = ["dam_id", "name", "hz_class", "haz_existing", "hz_vs_existing", 
                 # 0.9: read by ND Dam Hazard's portfolio dashboard (Next action)
                 "tri_result", "hz_border", "hz_gaps", "proposed",
                 # 0.19.0: which DWR inventory, and whether height / storage were estimated
-                "kind", "h_src", "stor_src"]
+                "kind", "h_src", "stor_src",
+                # 0.23.0: run status for the dashboard (item 12)
+                "status_sim", "edge_flag"]
 
 
 def _suite_note(out_dir):
@@ -370,24 +404,50 @@ def summary(records, out_dir, title="ND dam breach screening – statewide summa
         tiles += ('<div class="card"><b>Proposed dam.</b> {} — {} of {}.</div>'.format(
             html.escape(PROPOSED_PHRASE), n_prop, n))
 
+    def _run_status(r):
+        """item 12: done / cut off / failed / —."""
+        sim = str(r.get("status_sim") or "")
+        if sim and sim not in ("ok", "cached", "triage", "noflood", "excluded"):
+            return "failed", "st-fail"
+        if str(r.get("edge_flag") or "").upper() == "YES":
+            return "cut off", "st-edge"
+        if sim in ("ok", "cached", "triage", "noflood", "excluded"):
+            return "done", "st-ok"
+        return "—", ""
+
     def row(r):
         nm = html.escape(str(r.get("name") or r["dam_id"]))
         page = os.path.join(out_dir, "dams", f'{r["dam_id"]}.html')
         link = f'<a href="dams/{html.escape(str(r["dam_id"]))}.html">{nm}</a>' if os.path.exists(page) else nm
         s = " ".join(str(r.get(k) or "") for k in ("dam_id", "name", "hz_class", "haz_existing", "review")).lower()
         rk = {"High": 2, "Medium": 1, "Low": 0}.get(r.get("hz_class"), -1)
+        st_lbl, st_css = _run_status(r)
+        qp = _fmt(r.get("qp_cfs"), "{:,.0f}") if r.get("qp_cfs") else "—"
         return (f'<tr data-s="{html.escape(s)}"><td>{html.escape(str(r["dam_id"]))}</td><td>{link}</td>'
-                f'<td data-v="{rk}">{badge(r.get("hz_class"))}</td><td>{_fmt(r.get("haz_existing"))}</td>'
-                f'<td>{_fmt(r.get("hz_vs_existing"))}</td><td class="num">{_fmt(r.get("n_bldg_wet"))}</td>'
+                f'<td class="{st_css}">{st_lbl}</td>'
+                f'<td data-v="{rk}">{badge(r.get("hz_class"), class_display(r))}</td><td>{_fmt(r.get("haz_existing"))}</td>'
+                f'<td>{_fmt(r.get("hz_vs_existing"))}</td><td class="num">{qp}</td>'
+                f'<td class="num">{_fmt(r.get("n_bldg_wet"))}</td>'
                 f'<td class="num">{_fmt(r.get("n_bldg_lethal"))}</td><td class="num">{_fmt(r.get("store_af"), 0)}</td>'
                 f'<td>{html.escape(r["review"])}</td></tr>')
-    head = ('<thead><tr><th data-k>ID</th><th data-k>Dam</th><th data-k>Screened</th><th data-k>DWR</th>'
-            '<th data-k>Comparison</th><th class="num" data-k>Bldg wet</th><th class="num" data-k>Lethal</th>'
+    head = ('<thead><tr><th data-k>ID</th><th data-k>Dam</th><th data-k>Status</th>'
+            '<th data-k>Screened</th><th data-k>DWR</th>'
+            '<th data-k>Comparison</th><th class="num" data-k>Peak (cfs)</th>'
+            '<th class="num" data-k>Bldg wet</th><th class="num" data-k>Lethal</th>'
             '<th class="num" data-k>ac-ft</th><th data-k>Review</th></tr></thead>')
+    # item 12: IDs of failed/cut-off dams for "rerun" copy button
+    rerun_ids = [r["dam_id"] for r in records if _run_status(r)[0] in ("failed", "cut off")]
+    rerun_btn = ""
+    if rerun_ids:
+        ids_js = ", ".join(f'"{html.escape(str(i))}"' for i in rerun_ids)
+        rerun_btn = (f'<button onclick="navigator.clipboard.writeText([{ids_js}].join(\',\'))'
+                     f'.then(()=>this.textContent=\'Copied!\').catch(()=>0)">'
+                     f'Copy {len(rerun_ids)} dam ID{"s" if len(rerun_ids)!=1 else ""} to rerun</button> ')
     body = (f'<h1>{html.escape(title)}</h1><p class="sub">Screening results for {n:,} dams. '
             f'Click a column to sort; the CSV has the same table (<a href="summary.csv">summary.csv</a>).</p>'
             + _suite_note(out_dir) + f'{tiles}'
-            f'<h2>Review queue ({len(rev):,})</h2><div class="card scroll"><table>{head}<tbody>'
+            f'<h2>Review queue ({len(rev):,})</h2>{rerun_btn}'
+            f'<div class="card scroll"><table>{head}<tbody>'
             + "".join(row(r) for r in sorted(rev, key=lambda r: -{"High": 2, "Medium": 1, "Low": 0}.get(r.get("hz_class"), -1)))
             + f'</tbody></table></div><h2>All dams</h2><input id="filter" type="search" placeholder="Filter by ID, name, class…" aria-label="Filter dams">'
             f'<div class="card scroll"><table>{head}<tbody>' + "".join(row(r) for r in records) + '</tbody></table></div>')

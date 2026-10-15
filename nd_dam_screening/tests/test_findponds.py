@@ -170,6 +170,9 @@ print("OK (tool 16: types, storage, curves, clips, breach points, excluded list)
 fb2 = QgsProcessingFeedback()
 r16b = FindPonds().run_mock(dict(base), ctx, fb2)
 assert {str(f["dam_id"]) for f in ctx.layers[r16b["OUT"]].getFeatures()} == set(by)
+# 0.21.0: ... and the same storage (a rerun read the pond from the coarser dam clip: 2,800 -> 1,600 m3)
+again = {str(f["dam_id"]): f["est_total_m3"] for f in ctx.layers[r16b["OUT"]].getFeatures()}
+assert all(abs(again[k] - by[k]["est_total_m3"]) < 1e-6 for k in by), (again, {k: by[k]["est_total_m3"] for k in by})
 # KEEP_DEP writes the depression to the dam layer too, flagged no flood
 r16c = FindPonds().run_mock(dict(base, KEEP_DEP=True), ctx, QgsProcessingFeedback())
 kept = {str(f["wb_id"]): f for f in ctx.layers[r16c["OUT"]].getFeatures()}
@@ -178,6 +181,22 @@ assert set(kept) == {"A", "B", "C", "E"} and kept["E"]["no_flood"] == "YES"
 r16d = FindPonds().run_mock(dict(base, DUG_WORDS="pem", KEEP_DEP=False), ctx, QgsProcessingFeedback())
 assert {str(f["wb_id"]) for f in ctx.layers[r16d["OUT"]].getFeatures()} == {"A", "B", "C", "E"}
 print("OK (resumable; keep depressions; excavated words)")
+
+# 0.21.0: an inventory storage field (ac-ft): more than 50% from the DEM curve is a CHECK with low
+# confidence; the DEM curve is still used. A record that agrees gets a note only.
+a_af = a["est_total_m3"] / pd.AF_M3
+rows_inv = [(g, dict(at, inv_af={"A": a_af * 3.0, "C": c["est_total_m3"] / pd.AF_M3 * 1.1}.get(at["wb_id"])))
+            for g, at in rows]
+WBI = ctx.add(make_layer([("wb_id", S), ("ftype", S), ("inv_af", "double")], rows_inv, "polygon", "water_inv"))
+r16i = FindPonds().run_mock(dict(base, WB=WBI, WB_STOR="inv_af"), ctx, QgsProcessingFeedback())
+bi = {str(f["wb_id"]): f for f in ctx.layers[r16i["OUT"]].getFeatures()}
+assert bi["A"]["stor_notes"].startswith("CHECK: inventory storage") and bi["A"]["stor_conf"] == "low", bi["A"]["stor_notes"]
+assert abs(bi["A"]["inv_vs_est"] - 3.0) < 0.01 and a["inv_vs_est"] is None
+assert bi["A"]["stor_used_m3"] == a["stor_used_m3"]                      # the DEM curve is kept
+assert bi["C"]["stor_notes"].startswith("inventory storage") and "agrees" in bi["C"]["stor_notes"]
+assert bi["C"]["stor_conf"] == c["stor_conf"] and abs(bi["C"]["inv_vs_est"] - 1.1) < 0.01
+assert not str(bi["B"]["stor_notes"]).startswith(("CHECK", "inventory"))   # no value: no note
+print("OK (0.21.0: inventory storage check)")
 
 # ---------------------------------------------------------------- 5. tool 5 on the ponds
 r5 = BreachHydrograph().run_mock(dict(DAMS=r16["OUT"], CURVES=curves, BPTS=r16["OUTP"], MODE=0, METHOD=0,

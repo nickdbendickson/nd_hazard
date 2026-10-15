@@ -8,6 +8,10 @@ Pack = a folder or a .zip holding
     manifest.json            what is in it, when each data set was fetched
     nd_offline_pack.sqlite   one table per data set
 
+1.10.0 (suite): pack format 2 is a folder with one GeoPackage per data set
+(gpkgpack: ND_Dam_Suite_Pack/<theme>/<name>.gpkg, manifest.json, LAYERS.txt).
+open_pack() reads both formats; the format-2 reader answers the same queries.
+
 Each data set is stored under the plugin's own download name
 (NSI_structures, USA_Structures, NID_dams, lifeline_nd_hospitals ...), one
 row per feature: its bounding box and the GeoJSON feature exactly as the
@@ -762,7 +766,7 @@ class PackReader(object):
     def index_kind(self, name):
         """"rtree" when queries of data set `name` use its R*Tree, "btree" (the
         longitude index of every pack) otherwise."""
-        return "rtree" if name in self._rtrees else "btree"
+        return "rtree" if self._real(name) in self._rtrees else "btree"
 
     def _connect(self):
         # read only: the pack may sit on a write-protected drive. v2.6.2: a
@@ -773,7 +777,10 @@ class PackReader(object):
             raise PackError("offline data pack not found: {}".format(self.db_path))
         uri = sqlite_ro_uri(pathlib.Path(os.path.abspath(self.db_path)))
         try:
-            return sqlite3.connect(uri, uri=True)
+            con = sqlite3.connect(uri, uri=True)
+            # 1.9.0: refuse writes on this connection too (belt and braces next to mode=ro)
+            con.execute("PRAGMA query_only = ON")
+            return con
         except sqlite3.Error as e:
             raise PackError("the offline data pack could not be opened: {}".format(e))
 
@@ -781,11 +788,16 @@ class PackReader(object):
     def created(self):
         return (self.meta.get("created") or self.meta.get("started") or "")[:10]
 
+    def _real(self, name):
+        """1.19.0: a data set answers to its old or new name (NHD_flowlines = 3DHP_flowlines)."""
+        from . import hydro3dhp as H
+        return H.real_name(name, self.datasets)
+
     def has(self, name):
-        return name in self.datasets
+        return self._real(name) in self.datasets
 
     def info(self, name):
-        return self.datasets.get(name)
+        return self.datasets.get(self._real(name))
 
     def covers(self, extent, name=None):
         """True when the pack holds every feature of the extent - for data
@@ -794,13 +806,14 @@ class PackReader(object):
             return False
         if name is None:
             return True
-        info = self.datasets.get(name)
+        info = self.datasets.get(self._real(name))
         if info is None or info.get("status") != STATUS_COMPLETE:
             return False
         return not any(boxes_touch(g, extent) for g in info.get("gaps") or ())
 
     def query(self, name, extent):
         """GeoJSON features of data set `name` that intersect the extent."""
+        name = self._real(name)
         info = self.datasets.get(name)
         if info is None:
             raise PackError("{} is not in the offline data pack".format(name))
@@ -842,12 +855,16 @@ class PackReader(object):
 # --------------------------------------------------------------- locating --
 def read_manifest(path):
     """manifest.json of a pack folder, .zip or .sqlite (None when there is
-    none) - without extracting anything."""
+    none) - without extracting anything. 1.10.0: also a file inside a
+    format-2 pack folder (its LAYERS.txt, a layer's GeoPackage)."""
     try:
         if path.lower().endswith(".zip"):
             with zipfile.ZipFile(path) as z:
-                name = next((n for n in z.namelist()
-                             if n.rsplit("/", 1)[-1] == MANIFEST_NAME), None)
+                # the top-most manifest.json (a format-2 zip holds only one)
+                cands = sorted((n for n in z.namelist() if _safe_member(n) and
+                                n.rsplit("/", 1)[-1] == MANIFEST_NAME),
+                               key=lambda n: n.count("/"))
+                name = cands[0] if cands else None
                 return json.loads(z.read(name).decode("utf-8")) if name else None
         folder = os.path.dirname(path) if os.path.isfile(path) else path
         p = os.path.join(folder, MANIFEST_NAME)
@@ -886,12 +903,27 @@ def open_pack(path, log=None):
             stamp = os.path.getmtime(path)
         except OSError:
             raise PackError("offline data pack not found: {}".format(path))
+        from . import gpkgpack as GP
+        folder = GP.pack_folder_of(path) if not path.lower().endswith(".zip") else ""
+        if folder:                    # 1.10.0: format 2 - the manifest's date is the stamp
+            try:
+                stamp = os.path.getmtime(os.path.join(folder, MANIFEST_NAME))
+            except OSError:
+                pass
         hit = _READERS.get(path)
         # v2.6.2: an unpacked copy deleted meanwhile is unpacked again
         if hit and hit[0] == stamp and os.path.isfile(hit[1].db_path):
             return hit[1]
+        if folder:
+            reader = GP.GpkgPackReader(folder)
+            _READERS[path] = (stamp, reader)
+            return reader
         if path.lower().endswith(".zip"):
             db = _unzip(path, log)
+            if os.path.isdir(db):                              # a zipped format-2 folder
+                reader = GP.GpkgPackReader(db)
+                _READERS[path] = (stamp, reader)
+                return reader
         elif os.path.isdir(path):
             db = os.path.join(path, DB_NAME)
         else:
@@ -901,10 +933,54 @@ def open_pack(path, log=None):
         return reader
 
 
+def _safe_member(name):
+    """False for a zip member path that could point outside the folder."""
+    n = name.replace("\\", "/")
+    return not (n.startswith("/") or ":" in n.split("/", 1)[0] or ".." in n.split("/"))
+
+
+def _unzip_folder(zip_path, manifest, log):
+    """1.10.0: a zipped format-2 pack folder, unpacked once (all its files) - the folder."""
+    for target in _extract_target(zip_path, manifest):
+        have = read_manifest(target)
+        if have and have.get("created") == manifest.get("created"):
+            return target
+        try:
+            os.makedirs(target, exist_ok=True)
+            probe = os.path.join(target, ".write_test")
+            with open(probe, "w") as fh:
+                fh.write("x")
+            os.remove(probe)
+        except OSError:
+            continue
+        log("Offline data pack: unpacking {} to {} (once)...".format(
+            os.path.basename(zip_path), target))
+        with zipfile.ZipFile(zip_path) as z:
+            names = [n for n in z.namelist() if _safe_member(n) and not n.endswith("/")]
+            top = min((n for n in names if n.rsplit("/", 1)[-1] == MANIFEST_NAME),
+                      key=lambda n: n.count("/"))
+            prefix = top[:-len(MANIFEST_NAME)]
+            for n in names:
+                if not n.startswith(prefix) or n == top:
+                    continue
+                dst = os.path.join(target, *n[len(prefix):].split("/"))
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with z.open(n) as fin, open(dst + ".part", "wb") as fout:
+                    shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
+                os.replace(dst + ".part", dst)
+            with open(os.path.join(target, MANIFEST_NAME), "wb") as fh:   # last: "done"
+                fh.write(z.read(top))
+        return target
+    raise PackError("no writable folder to unpack {} into".format(zip_path))
+
+
 def _unzip(zip_path, log):
     manifest = read_manifest(zip_path)
     if manifest is None or manifest.get("format") != PACK_FORMAT:
         raise PackError("{} is not an offline data pack (no manifest.json)".format(zip_path))
+    from . import gpkgpack as GP
+    if GP.is_gpkg_manifest(manifest):
+        return _unzip_folder(zip_path, manifest, log)
     for target in _extract_target(zip_path, manifest):
         db = os.path.join(target, DB_NAME)
         have = read_manifest(target)
@@ -922,7 +998,8 @@ def _unzip(zip_path, log):
             os.path.basename(zip_path), target))
         tmp = db + ".part"
         with zipfile.ZipFile(zip_path) as z:
-            names = z.namelist()
+            # 1.9.0: a member path with ".." or a drive / root is never used
+            names = [n for n in z.namelist() if _safe_member(n)]
             src = next((n for n in names if n.rsplit("/", 1)[-1] == DB_NAME), None)
             if src is None:
                 raise PackError("{} holds no {}".format(zip_path, DB_NAME))
@@ -951,13 +1028,15 @@ def describe(path):
         except Exception as e:
             return "Not usable: {}".format(e)
     ds = m.get("datasets") or {}
+    from . import gpkgpack as GP
+    gp = " (one GeoPackage per layer)" if GP.is_gpkg_manifest(m) else ""
     ok = [k for k, v in ds.items() if v.get("status") == STATUS_COMPLETE]
     part = sorted(k for k, v in ds.items() if v.get("status") == STATUS_PARTIAL or
                   (v.get("status") == STATUS_COMPLETE and v.get("gaps")))
     bad = [k for k, v in ds.items()
            if v.get("status") not in (STATUS_COMPLETE, STATUS_PARTIAL, "not available")]
-    return "{} data sets, built {} for {}{}{}".format(
-        len(ok) + len([k for k in part if k not in ok]), (m.get("created") or "")[:10],
+    return "{} data sets{}, built {} for {}{}{}".format(
+        len(ok) + len([k for k in part if k not in ok]), gp, (m.get("created") or "")[:10],
         m.get("area") or "the pack area",
         " - incomplete (used with a warning): {}".format(", ".join(part)) if part else "",
         " - missing: {}".format(", ".join(sorted(bad))) if bad else "")

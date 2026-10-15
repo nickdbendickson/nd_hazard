@@ -37,6 +37,11 @@ SOURCE = ("ND Dam Safety Standards REG_05.2026 Figures 5.1 and 5.2 (Reclamation 
           "Figures 2 and 3), digitized by the engineer (flood_danger_classifier.py, stated "
           "accuracy +/-0.06 ft)")
 STATED_ACCURACY_FT = 0.06
+# The engineer's sign-off of the chart file (release 1.18.1, 2026-10-12): one engineer is enough;
+# a second checker may be recorded but is not required. The shipped acer_tm11_charts.json of the
+# Breach Runner and the Screening is default_chart_file(), so the chart method runs out of the box.
+SIGNED_OFF_BY = "Nicholas Bendickson"
+SIGNED_OFF_ON = "2026-10-12"
 ALIASES = {"houses": "house", "found": "house", "foundation": "house", "house_on_foundation": "house",
            "mobile_home": "mobile", "mobile_homes": "mobile", "mh": "mobile"}
 LOW, JUDGMENT, HIGH = "low", "judgment", "high"
@@ -177,12 +182,15 @@ def check():
     return out
 
 
-def chart_file(digitized_by="", checked_by="", digitized_on="", notes_extra=""):
+def chart_file(digitized_by="", checked_by="", digitized_on="", notes_extra="", signed_off_by="",
+               signed_off_on=""):
     """The acer_tm11_charts.json content (nd_hazard.py format) from this table. Status
-    "digitized" only when both names are given and differ; otherwise "not digitized" with the
-    polygons kept, so nd_hazard.py's chart method waits for the sign-off."""
+    "digitized" when an engineer is named (signed_off_by, else digitized_by, else checked_by:
+    one engineer is enough since 1.18.1; a second checker is optional); otherwise "not digitized"
+    with the polygons kept, so nd_hazard.py's chart method waits for the sign-off."""
     by, chk = str(digitized_by or "").strip(), str(checked_by or "").strip()
-    signed = bool(by and chk and by.lower() != chk.lower())
+    signer = str(signed_off_by or "").strip() or by or chk
+    signed = bool(signer)
     charts = {}
     for k, title in (("house", "Houses built on foundations"), ("mobile", "Mobile homes")):
         high, judgment = polygons(k)
@@ -194,12 +202,28 @@ def chart_file(digitized_by="", checked_by="", digitized_on="", notes_extra=""):
              "depth): ND Fig. 5.1 = TM 11 Fig. 2 velocity 0-25 ft/s, depth 0-10 ft; ND Fig. 5.2 = "
              "TM 11 Fig. 3 velocity 0-16 ft/s, depth 0-3 ft. ".format(table_sha256()))
     if not signed:
-        notes += ("Status stays 'not digitized' until the person who digitized the curves and a "
-                  "different person who checked them are recorded (digitized_by / checked_by, or "
-                  "ND Dam Hazard > Chart sign-off). ")
+        notes += ("Status stays 'not digitized' until the engineer who signs the curves off is "
+                  "recorded (signed_off_by, or ND Dam Hazard > Chart sign-off; one engineer is "
+                  "enough, a second checker is optional). ")
+    else:
+        notes += "Signed off by {}{}{}. ".format(
+            signer, " on " + str(signed_off_on or digitized_on) if (signed_off_on or digitized_on)
+            else "", "; checked by " + chk if chk and chk.lower() != signer.lower() else "")
     return {"status": "digitized" if signed else "not digitized",
             "source": "Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard "
                       "Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. "
                       "5.1), Fig. 3 mobile homes (ND Fig. 5.2)",
             "digitized_from": SOURCE, "digitized_by": by, "digitized_on": digitized_on,
-            "checked_by": chk, "notes": (notes + notes_extra).strip(), "charts": charts}
+            "checked_by": chk, "signed_off_by": signer, "signed_off_on": str(
+                signed_off_on or digitized_on or ""),
+            "notes": (notes + notes_extra).strip(), "charts": charts}
+
+
+def default_chart_file():
+    """The chart file shipped with the Breach Runner and the Screening (core/acer_tm11_charts.json):
+    this table's zone polygons, signed off by SIGNED_OFF_BY on SIGNED_OFF_ON. Identical in both
+    plugins; the Hazard Helper's chart sign-off tool writes the same file for another engineer."""
+    return chart_file(digitized_by=SIGNED_OFF_BY, checked_by="", digitized_on=SIGNED_OFF_ON,
+                      notes_extra=("Shipped with the suite: the engineer who digitized the table "
+                                   "signed it off for the suite's default (release 1.18.1)."),
+                      signed_off_by=SIGNED_OFF_BY, signed_off_on=SIGNED_OFF_ON)

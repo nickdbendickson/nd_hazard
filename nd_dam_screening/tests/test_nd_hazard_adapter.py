@@ -161,17 +161,19 @@ t = hz.limit_text(gaps)
 assert len(t) <= hz.FIELD_MAX and t.endswith("more)") and t.startswith("road 0:")
 print("OK (roads, railroads, lifelines, downstream dams, data gaps)")
 
-# ---- 6. charts not digitized: nd_hazard's wording, the conservative method, not the 1D rule
-try:
-    hz.load_ready_charts()
-    raise SystemExit("the shipped chart file must not be 'digitized' yet")
-except nh.ChartsNotDigitized as e:
-    msg = str(e)
-assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in msg and "not digitized" in msg
+# ---- 6. the shipped chart file is signed off by one engineer (0.26.1); a file without a signing
+# engineer gets nd_hazard's wording: the conservative method, not the 1D rule
+shipped = hz.load_ready_charts()
+assert shipped.ready and shipped.status == "digitized" and shipped.signer == "Nicholas Bendickson"
+assert shipped.signed_on == "2026-10-12" and shipped.path.endswith("acer_tm11_charts.json")
+unsigned = test_charts(); unsigned.digitized_by = unsigned.checked_by = unsigned.signed_off_by = ""
+assert not unsigned.ready
+msg = hz.charts_not_digitized_message(unsigned)
+assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in msg and "not signed off" in msg
 assert hz.METHOD_LABELS[nh.LETHALITY_1D] not in msg and "only allowed for a 1D model" in msg
-assert "acer_tm11_charts.json" in msg
-unchecked = test_charts(); unchecked.checked_by = ""
-assert not unchecked.ready and "checked by ''" in hz.charts_not_digitized_message(unchecked)
+assert "signed off by ''" in msg
+one = test_charts(); one.checked_by = ""
+assert one.ready and one.signer == "test"                     # one engineer is enough
 try:
     hz.classify_nd([S("a", 4.0, 1.0)], charts=None)
     raise SystemExit("chart method without charts accepted")
@@ -265,13 +267,17 @@ n_err = len(fb.errors)
 rows, _ = tool8(SIM=SIM, CRIT=1)
 assert rows["DWR-1"]["hz_class"] == "High" and rows["DWR-1"]["hz_chart"] == "not used"
 assert any("only for a 1D model" in e for e in fb.errors[n_err:]) and "1D rule on a 2D result" in rows["DWR-1"]["hz_notes"]
-# the default (charts) with the shipped, not digitized file -> clear error, conservative method named
+# the default (charts) with the shipped file: signed off by one engineer, so it runs (0.26.1)
+rows, _ = tool8()
+assert rows["DWR-1"]["hz_criterion"] == nh.LETHALITY_CHARTS and rows["DWR-1"]["hz_chart"].startswith("digitized ")
+# a chart file without a signing engineer -> clear error, conservative method named, not the 1D rule
+unsigned_file = nh.save_charts(os.path.join(work, "TEST_charts_unsigned.json"), unsigned)
 try:
-    tool8()
-    raise SystemExit("tool 8 ran the chart method without digitized charts")
+    tool8(CHART_FILE=unsigned_file)
+    raise SystemExit("tool 8 ran the chart method with an unsigned chart file")
 except QgsProcessingException as e:
     assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in str(e) and hz.METHOD_LABELS[nh.LETHALITY_1D] not in str(e)
-    print("tool 8 default without charts:", str(e)[:120], "...")
+    print("tool 8 unsigned charts:", str(e)[:120], "...")
 # wet depth must be > 0
 try:
     tool8(CRIT=2, MIND=0.0)

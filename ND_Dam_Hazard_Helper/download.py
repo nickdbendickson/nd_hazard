@@ -562,20 +562,44 @@ def _truthy(v):
 
 
 def suite_pack():
-    """2.17.0: the offline pack in the suite data folder (Plugins > ND Dam Suite > Suite data and
-    servers), or ""."""
+    """The suite's offline pack: 2.24.0 the pack location chosen in Suite data and servers (or on
+    the Data & Output tab), else the pack in the suite data folder (2.17.0); "" with Data source
+    = Download."""
     try:
         from .damsuite import suitedata as _SD
-        return _SD.find_pack(_SD.data_folder()) or ""
+        return _SD.active_pack() or ""
     except Exception:
         return ""
 
 
+def data_source():
+    """2.24.0: the suite's data source, "pack" or "download" (shared by the three plugins)."""
+    try:
+        from .damsuite import suitedata as _SD
+        return _SD.data_source()
+    except Exception:
+        return "pack"
+
+
+def set_data_source(value):
+    from .damsuite import suitedata as _SD
+    return _SD.set_data_source(value)
+
+
 def offline_config(fallback=True):
-    """(pack path or "", offline_only). With no pack chosen here, the suite data folder's pack
-    (2.17.0) unless fallback is False."""
+    """(pack path or "", offline_only). 2.24.0: Data source = Download (the suite's setting) gives
+    no pack and never offline only; otherwise the suite's pack location, else this plugin's own
+    pack setting of older releases, else (fallback) the pack in the suite data folder.
+    The environment variables win (scripts, tests)."""
     path = os.environ.get(ENV_PACK)
     only = os.environ.get(ENV_ONLY)
+    from_env = path is not None
+    if not from_env:
+        try:
+            from .damsuite import suitedata as _SD
+            path = _SD.pack_location() or None
+        except Exception:
+            path = None
     if (path is None or only is None) and QgsSettings is not None:
         try:
             st = QgsSettings()
@@ -586,15 +610,24 @@ def offline_config(fallback=True):
         except Exception:
             pass
     path = str(path or "").strip()
+    only = _truthy(only) if only is not None else False
+    if not from_env and data_source() == "download":
+        return "", False
     if not path and fallback:
         path = suite_pack()
-    return path, _truthy(only) if only is not None else False
+    return path, only
 
 
 def set_offline_config(path, offline_only):
-    """Save the offline settings (main thread)."""
+    """Save the offline settings (main thread). 2.24.0: the pack location is the suite's (the
+    three plugins share it); this plugin's own older setting is cleared."""
     st = QgsSettings()
-    st.setValue(SETTING_PACK, path or "")
+    try:
+        from .damsuite import suitedata as _SD
+        _SD.set_pack_location(path or "")
+        st.setValue(SETTING_PACK, "")
+    except Exception:
+        st.setValue(SETTING_PACK, path or "")
     st.setValue(SETTING_ONLY, bool(offline_only))
 
 
@@ -1535,6 +1568,11 @@ def _arcgis_features_tiled(cache, url, extent_4326, name, where, progress_cb):
     return _merge_tile_features(lists, extent_4326)
 
 
+def _hydro3dhp():
+    from .damsuite import hydro3dhp
+    return hydro3dhp
+
+
 def _fetch_arcgis_live(url, extent_4326, path, name, where, progress_cb):
     cache = active_tile_cache()
     if cache is not None:
@@ -1542,6 +1580,10 @@ def _fetch_arcgis_live(url, extent_4326, path, name, where, progress_cb):
         features = _arcgis_features_tiled(cache, url, extent_4326, name, where, progress_cb)
     else:
         features = _arcgis_collect(url, extent_4326, name, where, progress_cb)[0]
+    # 1.19.0: 3DHP flowlines / waterbodies also get the NHD properties (gnis_name, ftype ...)
+    norm = _hydro3dhp().normaliser_for_url(url)
+    if norm is not None:
+        features = norm(features)
     _write_fc(path, features)
     log_message("{}: {} features downloaded".format(name, len(features)))
     if not features:

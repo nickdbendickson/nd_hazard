@@ -18,10 +18,12 @@ GeoPackage (OGC 12-128r15, version 1.2): application_id "GPKG", user_version
 10200, the three required system tables, one feature table per layer (fid
 INTEGER PRIMARY KEY AUTOINCREMENT, geometry column "geom" with the
 GeoPackage binary header and ISO WKB, little endian, 2D) and optional
-attribute tables (data_type "attributes"). No spatial index is written:
-QGIS / GDAL read the file without one (QGIS: Layer Properties > Source >
-Create spatial index, when a layer is large). Nothing here has been checked
-with a real GDAL / QGIS; the tests read the files back with read_features().
+attribute tables (data_type "attributes"). No spatial index is written
+unless a layer asks for one (1.10.0, spatial_index=True: the GeoPackage R*Tree
+extension, rtree_<table>_geom, with the standard triggers - the offline pack's
+layers): QGIS / GDAL read the file without one (QGIS: Layer Properties >
+Source > Create spatial index, when a layer is large). The tests read the
+files back with read_features(); 1.10.0 pack layers were opened with GDAL 3.8.
 """
 
 import math
@@ -471,7 +473,7 @@ def convex_hull(pts):
 GPKG_APPLICATION_ID = 0x47504B47          # "GPKG"
 GPKG_USER_VERSION = 10200
 _WKB = {"Point": 1, "LineString": 2, "Polygon": 3, "MultiPoint": 4, "MultiLineString": 5,
-        "MultiPolygon": 6}
+        "MultiPolygon": 6, "GeometryCollection": 7}
 _WKB_NAMES = {v: k for k, v in _WKB.items()}
 GEOM_TYPES = ("POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING",
               "MULTIPOLYGON", "GEOMETRY")
@@ -484,11 +486,16 @@ class GpkgError(Exception):
 
 def _wkb(geom):
     t = geom["type"]
-    c = geom["coordinates"]
     code = _WKB.get(t)
     if code is None:
         raise GpkgError("geometry type {} cannot be written".format(t))
     out = [struct.pack("<BI", 1, code)]
+    if t == "GeometryCollection":                 # 1.10.0
+        parts = geom.get("geometries") or []
+        out.append(struct.pack("<I", len(parts)))
+        out += [_wkb(g) for g in parts]
+        return b"".join(out)
+    c = geom["coordinates"]
 
     def pts(seq):
         out.append(struct.pack("<I", len(seq)))
@@ -525,7 +532,9 @@ def geometry_blob(geom, srs_id):
     return struct.pack("<2sBBi4d", b"GP", 0, 0x03, int(srs_id), b[0], b[2], b[1], b[3]) + wkb
 
 
-def _read_wkb(b, o=0):
+def _read_wkb(b, o=0, lists=False):
+    """(geometry, offset). lists=True (1.10.0): every position a [x, y] list, as GeoJSON from
+    json.loads has it (the offline pack's readers)."""
     end = "<" if b[o] == 1 else ">"
     (code,) = struct.unpack_from(end + "I", b, o + 1)
     o += 5
@@ -537,10 +546,14 @@ def _read_wkb(b, o=0):
     def pts(o):
         (n,) = struct.unpack_from(end + "I", b, o)
         o += 4
-        seq = [struct.unpack_from(end + "dd", b, o + step * i) for i in range(n)]
+        if lists:
+            seq = [list(struct.unpack_from(end + "dd", b, o + step * i)) for i in range(n)]
+        else:
+            seq = [struct.unpack_from(end + "dd", b, o + step * i) for i in range(n)]
         return seq, o + step * n
     if base == 1:
-        return {"type": "Point", "coordinates": struct.unpack_from(end + "dd", b, o)}, o + step
+        xy = struct.unpack_from(end + "dd", b, o)
+        return {"type": "Point", "coordinates": list(xy) if lists else xy}, o + step
     if base == 2:
         seq, o = pts(o)
         return {"type": "LineString", "coordinates": seq}, o
@@ -557,14 +570,22 @@ def _read_wkb(b, o=0):
         o += 4
         parts = []
         for _p in range(n):
-            g, o = _read_wkb(b, o)
+            g, o = _read_wkb(b, o, lists)
             parts.append(g["coordinates"])
         return {"type": _WKB_NAMES[base], "coordinates": parts}, o
+    if base == 7:
+        (n,) = struct.unpack_from(end + "I", b, o)
+        o += 4
+        geoms = []
+        for _p in range(n):
+            g, o = _read_wkb(b, o, lists)
+            geoms.append(g)
+        return {"type": "GeometryCollection", "geometries": geoms}, o
     raise GpkgError("WKB type {} not supported by this reader".format(code))
 
 
-def parse_blob(blob):
-    """(geometry dict, srs_id) of a GeoPackage geometry blob."""
+def parse_blob(blob, lists=False):
+    """(geometry dict, srs_id) of a GeoPackage geometry blob (lists: see _read_wkb)."""
     if blob is None:
         return None, None
     blob = bytes(blob)
@@ -577,7 +598,7 @@ def parse_blob(blob):
     size = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}.get(env)
     if size is None:
         raise GpkgError("bad GeoPackage envelope code {}".format(env))
-    geom, _o = _read_wkb(blob, 8 + size)
+    geom, _o = _read_wkb(blob, 8 + size, lists)
     return geom, srs
 
 
@@ -634,13 +655,15 @@ CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name TEXT N
         self.layers = []
         self.closed = False
 
-    def layer(self, name, geometry_type, fields, srs_id=EPSG_5070, description=""):
+    def layer(self, name, geometry_type, fields, srs_id=EPSG_5070, description="",
+              spatial_index=False, raw=False):
         geometry_type = geometry_type.upper()
         if geometry_type not in GEOM_TYPES:
             raise GpkgError("unknown geometry type {}".format(geometry_type))
         if int(srs_id) not in WKT:
             raise GpkgError("CRS EPSG:{} is not known to this writer".format(srs_id))
-        lw = _LayerWriter(self, name, fields, geometry_type, int(srs_id), description)
+        lw = _LayerWriter(self, name, fields, geometry_type, int(srs_id), description,
+                          spatial_index, raw)
         self.layers.append(lw)
         return lw
 
@@ -674,8 +697,13 @@ CREATE TABLE gpkg_geometry_columns (table_name TEXT NOT NULL, column_name TEXT N
 
 
 class _LayerWriter(object):
-    def __init__(self, w, name, fields, gtype, srs_id, description):
+    def __init__(self, w, name, fields, gtype, srs_id, description, spatial_index=False,
+                 raw=False):
         self.w, self.name, self.gtype, self.srs_id = w, name, gtype, srs_id
+        # 1.10.0: raw - the values are stored as given (already of the column's type; an empty
+        # text stays empty): the offline pack's lossless layers
+        self.raw = raw
+        self.boxes = [] if (gtype and spatial_index) else None     # [(fid, bbox)] (1.10.0)
         low = {"fid", "geom"} if gtype else {"fid"}
         cols = []
         for fname, ftype in fields:
@@ -707,6 +735,8 @@ class _LayerWriter(object):
     def _value(self, v, ftype):
         if v is None:
             return None
+        if self.raw:
+            return None if isinstance(v, float) and not math.isfinite(v) else v
         if isinstance(v, float) and not math.isfinite(v):
             return None
         if ftype == "real":
@@ -718,6 +748,8 @@ class _LayerWriter(object):
         if ftype == "int":
             if isinstance(v, bool):
                 return int(v)
+            if isinstance(v, int):                  # 1.10.0: exact (no float round trip)
+                return v
             try:
                 return int(round(float(v)))
             except (TypeError, ValueError):
@@ -734,15 +766,60 @@ class _LayerWriter(object):
             if b:
                 self.box = b if self.box is None else (min(self.box[0], b[0]), min(self.box[1], b[1]),
                                                        max(self.box[2], b[2]), max(self.box[3], b[3]))
+        else:
+            b = None
         attrs = attrs or {}
         vals += [self._value(attrs.get(f), t) for f, t in self.fields]
-        self.w.con.execute(self.sql, vals)
+        cur = self.w.con.execute(self.sql, vals)
         self.count += 1
+        if self.boxes is not None and b:
+            self.boxes.append((cur.lastrowid,) + tuple(b))
 
     def finish(self):
         if self.gtype and self.box:
             self.w.con.execute("UPDATE gpkg_contents SET min_x=?, min_y=?, max_x=?, max_y=? "
                                "WHERE table_name=?", self.box + (self.name,))
+        if self.boxes is not None:
+            _write_rtree(self.w.con, self.name, "geom", self.boxes)
+            self.boxes = None
+
+
+def _write_rtree(con, table, col, boxes):
+    """1.10.0: the GeoPackage R*Tree spatial index of a finished layer (boxes: [(fid, minx,
+    miny, maxx, maxy)]) and its standard triggers (GeoPackage 1.2, F.3). The triggers call
+    ST_* functions that only GDAL / QGIS register, so they are created after the rows."""
+    rt = "rtree_{}_{}".format(table, col)
+    con.execute("CREATE TABLE IF NOT EXISTS gpkg_extensions (table_name TEXT, column_name TEXT, "
+                "extension_name TEXT NOT NULL, definition TEXT NOT NULL, scope TEXT NOT NULL, "
+                "CONSTRAINT ge_tce UNIQUE (table_name, column_name, extension_name))")
+    con.execute("INSERT OR REPLACE INTO gpkg_extensions VALUES (?,?,?,?,?)",
+                (table, col, "gpkg_rtree_index",
+                 "http://www.geopackage.org/spec120/#extension_rtree", "write-only"))
+    con.execute("CREATE VIRTUAL TABLE {} USING rtree(id, minx, maxx, miny, maxy)".format(_qi(rt)))
+    con.executemany("INSERT INTO {} VALUES (?,?,?,?,?)".format(_qi(rt)),
+                    ((f, b0, b2, b1, b3) for f, b0, b1, b2, b3 in boxes))
+    t, c, r = _qi(table), _qi(col), rt
+    q = lambda n: _qi("{}_{}".format(r, n))                       # noqa: E731
+    ins = ("INSERT OR REPLACE INTO {r} VALUES (NEW.fid, ST_MinX(NEW.{c}), ST_MaxX(NEW.{c}), "
+           "ST_MinY(NEW.{c}), ST_MaxY(NEW.{c}));").format(r=_qi(r), c=c)
+    for sql in (
+            "CREATE TRIGGER {n} AFTER INSERT ON {t} WHEN (new.{c} NOT NULL AND NOT "
+            "ST_IsEmpty(NEW.{c})) BEGIN {ins} END".format(n=q("insert"), t=t, c=c, ins=ins),
+            "CREATE TRIGGER {n} AFTER UPDATE OF {c} ON {t} WHEN OLD.fid = NEW.fid AND "
+            "(NEW.{c} NOTNULL AND NOT ST_IsEmpty(NEW.{c})) BEGIN {ins} END".format(
+                n=q("update1"), t=t, c=c, ins=ins),
+            "CREATE TRIGGER {n} AFTER UPDATE OF {c} ON {t} WHEN OLD.fid = NEW.fid AND "
+            "(NEW.{c} ISNULL OR ST_IsEmpty(NEW.{c})) BEGIN DELETE FROM {r} WHERE id = OLD.fid; "
+            "END".format(n=q("update2"), t=t, c=c, r=_qi(r)),
+            "CREATE TRIGGER {n} AFTER UPDATE ON {t} WHEN OLD.fid != NEW.fid AND (NEW.{c} NOTNULL "
+            "AND NOT ST_IsEmpty(NEW.{c})) BEGIN DELETE FROM {r} WHERE id = OLD.fid; {ins} "
+            "END".format(n=q("update3"), t=t, c=c, r=_qi(r), ins=ins),
+            "CREATE TRIGGER {n} AFTER UPDATE ON {t} WHEN OLD.fid != NEW.fid AND (NEW.{c} ISNULL "
+            "OR ST_IsEmpty(NEW.{c})) BEGIN DELETE FROM {r} WHERE id IN (OLD.fid, NEW.fid); "
+            "END".format(n=q("update4"), t=t, c=c, r=_qi(r)),
+            "CREATE TRIGGER {n} AFTER DELETE ON {t} WHEN old.{c} NOT NULL BEGIN DELETE FROM {r} "
+            "WHERE id = OLD.fid; END".format(n=q("delete"), t=t, c=c, r=_qi(r))):
+        con.execute(sql)
 
 
 def _fit(geom, gtype):

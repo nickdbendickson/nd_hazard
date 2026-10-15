@@ -14,10 +14,15 @@ engineer) put there is never overwritten; the refusal is recorded in the file's 
 and reported back here for the log. The "screened" status result is
     {"triage": tri_result of tool 6 ("clear" / "needs 2D") or "not run",
      "hz_class": tool 8's class or None, "border": hz_border, "gaps": hz_gaps,
-     "triage_reason": tri_reason, "by": "tool 7b" / "tool 8"}
-so damsuite.dam_record.next_action says "model" unless the triage cleared the dam. A status
-whose substance (triage, hz_class, border, gaps) equals the newest "screened" entry of this
-tool is not added again - whichever tool (7b or 8) wrote it. Numbers are rounded to 3
+     "triage_reason": tri_reason, "by": "tool 7b" / "tool 8",
+     "cell_m": the grid the flood really ran at, in metres (0.28.0),
+     "method": the breach method as an ND Dam Breach Runner key, "scenario": "sunny" / "flood",
+     "loading_case": "top of dam" / "sunny day", the case the class came from}
+so damsuite.dam_record.next_action says "model" unless the triage cleared the dam, and a
+detailed run of the same dam can start from the same grid, breach and loading case instead of
+the Runner's own defaults (see RUNNER_METHOD below). A status whose substance (triage, hz_class,
+border, gaps, and those three) equals the newest "screened" entry of this tool is not added
+again - whichever tool (7b or 8) wrote it. Numbers are rounded to 3
 decimals, as tool 7b sends them to the Runner (round3). A dam.json that
 cannot be read (broken, foreign, newer format) is never replaced: the dam is reported and
 skipped.
@@ -159,12 +164,119 @@ def handoff_values(attrs, rundam_params, point_xy, crs="EPSG:5070", class_field=
     return v
 
 
+AC_M2 = 4046.8564224
+# storage at the top of dam, in tool 7b's order of preference (core/handoff.STORAGE_SOURCES)
+STORAGE_KEYS = ("td_vw_m3", "cal_total_m3", "est_total_m3", "inv_max_m3")
+
+
 def tool8_values(attrs, class_field=None):
+    """The dam record values of a screened dam. 0.26.0: besides the identity and the height, what
+    ND Dam Breach Runner needs to start from the record alone (storage at the top of dam, surface
+    area, crest length) and the dam point (attrs "_x", "_y", "_crs" when tool 8 adds them), so a
+    dam screened alone can be modelled from the Runner window without typing anything."""
     v = identity(attrs, class_field)
     h = _num(attrs.get("height_m"))
     if h is not None and h > 0:
         v["height_ft"] = round3(h / FT)          # the same rounding as tool 7b's HEIGHT_FT
+    for key in STORAGE_KEYS:
+        vol = _num(attrs.get(key))
+        if vol is not None and vol > 0:
+            v["storage_acft"] = round3(vol / AF_M3)
+            break
+    area = _num(attrs.get("est_area_m2"))
+    if area is None or area <= 0:
+        area = _num(attrs.get("inv_area_m2"))
+    if area is not None and area > 0:
+        v["surface_area_ac"] = round3(area / AC_M2)
+    crest = _num(attrs.get("crest_len_m"))
+    if crest is not None and crest > 0:
+        v["dam_length_ft"] = round3(crest / FT)
+    x, y, crs = _num(attrs.get("_x")), _num(attrs.get("_y")), _txt(attrs.get("_crs"))
+    if x is not None and y is not None and crs:
+        if crs.upper() in ("EPSG:4326", "OGC:CRS84"):
+            v["lon"], v["lat"] = round(x, 6), round(y, 6)
+        else:
+            v["x"], v["y"], v["crs"] = round3(x), round3(y), crs
     return v
+
+
+# ------------------------------------------------- 0.28.0: what the detailed run should reuse --
+# ND Dam Breach Runner starts a detailed run from the newest "screened" result (its
+# core/screenhandoff.py) and fills only the inputs the engineer left empty. Without these three
+# keys a 20 m screening became a 10 m Runner run with the Runner's own default breach - the same
+# dam modelled twice, differently, and nobody could see why the numbers moved. The keys and the
+# spellings are the Runner's, not ours: "cell_m" in METRES, "method" one of its core/breach.py
+# METHODS keys, "scenario" exactly "sunny" or "flood".
+RUNNER_SUNNY, RUNNER_FLOOD = "sunny", "flood"
+# This plugin's two loading cases, in the Runner's vocabulary. BOTH are "sunny" there, and that
+# is not a mapping bug: the Runner's "flood" routes a flood INFLOW hydrograph (PMF) through the
+# reservoir, which no screening run does - core/breach_hydro: "no added inflow, no coincident
+# downstream flooding". The screening's "td" starts the breach with the pool already at the top
+# of dam and no inflow (ND 5.1.1), which is the Runner's sunny-day case with a higher starting
+# pool; its own core/screenhandoff.py reads the words "top of dam" as sunny for the same reason.
+# Handing over "flood" would start a different model (and fail outright on a dam with no
+# flood-frequency data), so the case itself is recorded beside it as loading_case.
+SCENARIO_WORD = {"td": RUNNER_SUNNY, "sd": RUNNER_SUNNY}
+LOADING_CASE = {"td": "top of dam", "sd": "sunny day"}
+# (brch_eq of tool 5, breach mode) -> the Runner's method key. VTG and MLM have one key each
+# there (the mode is in their own equations), and TR-60 is a peak, not a width.
+RUNNER_METHOD = {
+    ("F2008", "piping"): "piping", ("F2008", "overtopping"): "overtopping",
+    ("F1995", "piping"): "froehlich1995_piping",
+    ("F1995", "overtopping"): "froehlich1995_overtopping",
+    ("MLM", ""): "mlm1984", ("VTG-E", ""): "vtg1990", ("VTG-R", ""): "vtg1990",
+    ("TR60", ""): "tr60", ("TR60-C", ""): "tr60_curvilinear",
+}
+DEFAULT_MODE = "piping"                                # tool 5's own default (the ND standard)
+
+
+def runner_method(attrs):
+    """The Runner's breach-method key for a screened dam ("" when tool 5 has not run).
+
+    tool 5 records the equation (brch_eq) and, since 0.28.0, the mode (brch_mode). An older row
+    has no mode: piping is tool 5's default and the ND standard, so it is assumed rather than
+    leaving the Runner with its own default, and the mode only matters for the two Froehlich
+    equations anyway.
+    """
+    eq = _txt(attrs.get("brch_eq")) or ""
+    if not eq:
+        return ""
+    mode = (_txt(attrs.get("brch_mode")) or "").lower()
+    if eq in ("F2008", "F1995"):
+        mode = "overtopping" if mode.startswith("overtop") else DEFAULT_MODE
+    else:
+        mode = ""
+    return RUNNER_METHOD.get((eq, mode), "")
+
+
+def governing_case(attrs):
+    """This plugin's key ("td" / "sd") for the loading case the reported class came from ("" when
+    there is none).
+
+    With both loading cases in one run (0.28.0) tool 8 writes the governing one in hz_scen, and
+    that is the case to hand on: the Runner fills ONE scenario, and it has to be the case the
+    class was taken from, not the first one that happened to run.
+    """
+    key = (_txt(attrs.get("hz_scen")) or _txt(attrs.get("scenario")) or "").lower()
+    return key if key in SCENARIO_WORD else ""
+
+
+def runner_scenario(attrs):
+    """The Runner's word for that case ("" when there is none). See SCENARIO_WORD."""
+    return SCENARIO_WORD.get(governing_case(attrs), "")
+
+
+def runner_cell_m(attrs):
+    """The grid cell the flood really ran at, in metres (None when no flood ran).
+
+    sim_cell_m is written by tool 7 from the grid the engine actually used - not the Settings
+    tab's box and not the preset, which is the whole point (core/runplan.py). A dam cleared by
+    triage has no flood and therefore no cell: better none than a number nothing ran at.
+    """
+    cell = _num(attrs.get("sim_cell_m"))
+    if cell is None or cell <= 0:
+        return None
+    return round3(cell)
 
 
 def screening_result(attrs, by):
@@ -176,10 +288,22 @@ def screening_result(attrs, by):
         res["triage_reason"] = _txt(attrs.get("tri_reason"))
     if _txt(attrs.get("tri_audit")) == "yes":
         res["triage_audit"] = "yes (sent to the 2D model anyway)"
+    # 0.28.0: what a detailed run of the same dam should start from (see RUNNER_METHOD above)
+    cell = runner_cell_m(attrs)
+    if cell is not None:
+        res["cell_m"] = cell
+    for key, value in (("method", runner_method(attrs)), ("scenario", runner_scenario(attrs)),
+                       ("loading_case", LOADING_CASE.get(governing_case(attrs), ""))):
+        if value:
+            res[key] = value
     return res
 
 
-SUBSTANCE = ("triage", "hz_class", "border", "gaps")   # what next_action / the dashboards read
+# what next_action / the dashboards read - and, since 0.28.0, what a detailed run reuses: a
+# screening re-run at another cell, breach or loading case is a new status entry, because the
+# Runner reads the NEWEST one and a stale grid size there is worse than an extra entry
+SUBSTANCE = ("triage", "hz_class", "border", "gaps", "cell_m", "method", "scenario",
+             "loading_case")
 
 
 def same_substance(a, b):

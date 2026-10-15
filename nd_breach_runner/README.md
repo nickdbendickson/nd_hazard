@@ -5,6 +5,192 @@ with **LISFLOOD-FP** and, optionally, **ANUGA**, following the North Dakota Dam 
 Standards Policy (REG_05.2026). It writes the rasters the ND hazard classification plugin
 reads:
 
+## New in 3.20.0
+
+Everything the 2026-10 walk-through and review asked for. **No number in an existing run
+changes**, with one exception that is off by default and named below.
+
+**The window fits a laptop.** The DEM download box is a collapsible group that folds itself
+away once the dam has a DEM; the four engineering settings that sat in the header (grid size,
+simulated time, longest simulated time, force ANUGA) moved to a new **Advanced** tab; the tool
+tabs and the log may shrink. The minimum height is 560 px instead of 902, so *Run breach model*
+is above the fold on a 768 px screen.
+
+**A grey button says why.** Every disabled Run button carries the reason in its tooltip and in
+a status line under the tabs, naming the missing input and the button that fixes it - *"needs a
+DEM: Download DEM for this dam"*. The reasons are the suite's own blocking set-up errors
+(`damsuite.suitecheck`) plus what this plugin can see without reading a raster: a Dams folder, a
+dam ID, a DEM, the dam's height and storage, and - for a results tool - a finished run. Tools
+that need nothing of a dam (check the installation, the self-test, the data tools) are never
+greyed out, so a new user always has something to press.
+
+**Hand-off fidelity.** What ND Dam Breach Screening ran for a dam - grid size, breach method,
+scenario - is read back from the dam folder and used to fill the *empty* CELL, METHOD and
+SCENARIO of the run tools and the wizard. The page says where it came from: *"from dam.json (ND
+Dam Breach Screening 0.28.0, 2026-10-10)"*. It is read from dam.json's newest `screened` status
+result (keys `cell_m`, `method`, `scenario`) and, failing that, from
+`<dam folder>/_screening_model/run_manifest.json`. Nothing is guessed from a file name or a
+raster's pixel size: a value the screening has not recorded stays missing, and the page and the
+run report say which of the three it is and that the Screening plugin must record it. A grid
+size you typed is never replaced.
+
+**Walk-through fixes.** The grey DEM-source note has a row of its own (it used to be drawn over
+*Grid size*) and shows the file name, with the full path in its tooltip. The *ND LiDAR path* row
+is hidden unless Source = ND LiDAR. A DEM whose `UNITS` metadata item says metres or feet is
+read that way instead of logging *"no units recorded"* - which is what a mosaic from the
+screening's step 2 does - and the Runner's own VRT builder writes that tag. After each finished
+pass the log names the rasters that can already be opened in the dam folder.
+
+**Population at risk and loss of life** (`damsuite.loss`). The consequences step and its report
+now carry PAR by day and by night, the flood-severity split (high / medium / low) and the
+warning-time split (under 15 min / 15 to 60 / over 60), written as *Population at Risk
+(PAR).csv*. Loss of life is estimated **only** from a fatality rate table an engineer has
+entered and signed off: `core/fatality_rates.json` ships empty and unsigned, and until it is
+signed every report says loss of life is not estimated and why. Sign it in the window's Advanced
+tab or with *Sign off the fatality rate table* (`ndbreach:signrates`); a signed table with an
+empty cell still produces no number, because a total that left those people out would be too
+low. These numbers are reported **beside** the consequences tool's own estimate, never instead
+of it.
+
+**Road and railroad crossings** (`ndbreach:crossings`). One row per unbroken stretch of road or
+railroad the flood wets: when it first gets wet, the maximum depth and velocity there, how long
+it stays wet and whether it counts as closed to traffic, as *Road and Rail Crossings.csv*,
+*.geojson* and *.md* in the dam folder. The duration is bounded by the end of the simulated run
+and the column says so rather than passing an upper bound off as a measurement. The closure
+rule is yours (0.5 ft deep or 7 ft²/s), not a published standard.
+
+**Cascade check** (`ndbreach:cascadecheck`). After a run, the flood footprint is tested against
+the dam inventory (every dam folder's dam.json plus a dam layer you give) with
+`damsuite.cascade`, and the dams the flood reaches are listed nearest first. For each one the
+next job is written to `_cascade/next_jobs.json` and this run's breach outflow is copied into
+that dam's own `inputs/upstream_breach_inflow.csv`; where it already has a `pmf_inflow.csv`, the
+**sum** of the two is written beside it. The inflow is **recorded, not consumed**: the tool does
+not start the next run and never replaces an existing PMF inflow, because a PMF inflow may be
+the larger flow and overwriting it would quietly make the next run milder.
+
+**Crossings as embankment gaps.** Inventory crossings (NBI bridges and culverts from the offline
+pack, rail grade crossings, your own surveyed layer; parameter `CROSSINGS`, filled from the pack)
+are measured against the embankment the bare-earth DEM leaves across them, and every blocking
+one is reported in the log and the run report whether or not anything is done about it. With
+`CROSSING_GAPS` on, the ones whose **span and rise are surveyed** are cut as gaps using the
+existing culvert / notch machinery; a crossing with no surveyed opening is never cut. **This is
+the one option that changes a result**, and it is off by default: a gap lowers the water behind
+the road, which is the less conservative direction for anyone upstream of it.
+
+**Compare two runs** (`ndbreach:compareruns`). A depth difference raster (B minus A, dry in both
+= no data) with its statistics, the two runs described from their run reports, and - with a
+structures layer - the structures whose ACER TM 11 danger zone is not the same in the two runs
+and which way it moved.
+
+**A queue of dams** (`ndbreach:queue`). One run per dam ID of a list (the Screening priority
+list's *Dam ID* column, or one ID per line), with each dam's values from its own dam.json.
+`_queue/breach_queue.json` records each dam as waiting, running, done, skipped or failed, so the
+work can be cancelled and picked up where it stopped. **Two dams run side by side at one thread
+each** by default: that measured 1.76x faster than one dam on two threads, and oversubscribing
+the solvers was much slower than either. The batch tool's default is two dams as well. A speed
+setting only - it changes nothing about any result.
+
+## New in 3.19.0
+
+**Streams and waterbodies are USGS 3DHP.** With ND Dam Hazard 2.29.0 (suite 1.15.0) the stream lines and
+waterbodies the culvert finder and the pond finder read come from the USGS 3D Hydrography Program instead
+of NHD: the offline pack layers are 3DHP_flowlines and 3DHP_waterbodies, the servers list has 3DHP as the
+default, and each 3DHP feature carries the NHD name and type fields too (gnis_name, ftype). A pack from
+before 1.19 (NHD_ layers) is still read. The model is unchanged.
+
+## New in 3.18.0
+
+**Download the DEM from the wizard.** The terrain page has a button *Download DEM for this dam*
+with the resolution (10 m, or 1 m) next to it. It runs the same download as the Runner window's
+DEM box (ND Dam Breach Screening's DEM tool: USGS 3DEP around the dam point, the buffer half the
+run tool's largest domain side) for the wizard's dam, writes the GeoTIFF into the dam folder as
+`data/dem_<cell>m.tif` (EPSG:5070, metres), records it in dam.json and chooses it as the DEM when
+it finishes. The tool's own window shows the progress; the page's note says what happened. Needs
+ND Dam Breach Screening, as the window's box does.
+
+**The last finished pass is kept.** After every finished LISFLOOD-FP run (pass) the depth,
+velocity and arrival rasters are written to the dam folder with the final names and units
+(`Depth (Max).tif`, `Velocity (Max).tif`, `Arrival Time.tif`), so a run that is cancelled or dies
+later still leaves the last finished pass. The final results replace them; `products_pass` in
+`run_report.json` says which pass the rasters on disk come from (the final pass of a finished
+run). One write per pass, nothing else.
+
+**Results cut off.** When a run ends with the flood still moving - the duration cap, the number
+of domain runs (`MAX_ITERATIONS`) or the largest domain side (`MAX_EXTENT_MI`) - the run report
+(`run_report.md`) has a section *Results cut off* before *Check these* with the reason and the
+warning text, `run_report.json` has `cut_off = {"reason", "detail"}`, and the dam.json run entry
+records it too. The reasons are `duration cap`, `domain-run limit` and `largest domain side`.
+
+Smaller: the tool version in the reports is read from `metadata.txt` (it was a copy in the code
+that went stale); the ANUGA worker no longer inherits `PYTHONNOUSERSITE` from QGIS, so an ANUGA
+installed with `pip --user` is found.
+
+## New in 3.14.0 (ND dam suite release set: ND Dam Hazard 2.24.0, ND Dam Breach Screening 0.22.0)
+
+The offline pack is now a folder, ND_Dam_Suite_Pack, with one GeoPackage per layer (structures/, roads/, railroads/, lifelines/, hydro/, dwr/, hifld/, boundaries/, landcover/). Each file opens in QGIS by itself. LAYERS.txt in the folder lists every layer, its file, feature count and source, and what was left out. The DWR inventory files, the HIFLD lifeline layers and NLCD land cover are inside the pack, so the pack alone is enough. An older nd_offline_pack.zip still works, and the dwr/, hifld/ and nlcd/ drop-in folders are still read when the pack lacks a layer.
+
+Data source, shared by the three plugins: Offline pack (choose its folder or zip) or Download from the servers (the pack is not read). Set it in Suite data and servers in any of the plugins; the setting is the same in all three. The wizard's DWR dam IDs and the suite layer list take the DWR layers from the pack.
+
+## New in 3.13.1 (ND dam suite release set: ND Dam Hazard 2.23.1, ND Dam Breach Screening 0.21.1)
+
+**Pick a county in the wizard.** The dam page has a County list under the dam layer. With a county
+chosen, the dam list shows only the dams whose point is inside that county (a dam point just over
+the state line goes by the layer's county field), and the note says how many there are. The
+statewide DWR inventory has over 10,000 dams, more than the list's 5,000, so this is also how to
+reach every dam. The county outlines ship with the plugin (`core/nd_counties.geojson`: the 53
+counties of the suite offline pack, simplified to about 10 m); the same file is in ND Dam Breach
+Screening.
+
+## New in 3.13.0 (ND dam suite release set: ND Dam Hazard 2.23.0, ND Dam Breach Screening 0.21.0)
+
+Ideas taken from the DamSafety plugins audit (2026-10-08) and rebuilt on this plugin's own rules.
+
+**Pre-run check.** Just before the flood solve, `damsuite/solvegate.py` checks that the DEM
+covers the dam point (and that most of the ground around it has data), that the breach
+hydrograph has a peak and a volume (a 2-point straight line is a warning), and that the
+LISFLOOD-FP executable runs 1 simulated second on a 5 x 5 grid. The smoke run happens once
+per executable and modification time, never for the built-in engine, and
+`ND_DAM_PRE_RUN_SMOKE=0` in the environment skips it. A failure stops the run in seconds
+with the reason; the run report lists every check (`pre_run_check`).
+
+**Layers that miss the study area.** A structures layer (`RECEPTOR_POINTS`) or culvert
+layer (`STRUCTURES`) whose whole extent misses the study area stops the run, and the
+message says which of two things is wrong: the layer has no CRS, or it has one and simply
+does not overlap. A statewide layer with nothing near this dam passes.
+
+**The DWR dam line is the crest.** `CREST_LINE` now fills from the dam folder's DWR dam
+lines (`dwr_dam_lines`, written by Get data for this dam). The line whose `structure_id`
+matches the dam (dam.json `dwr_structure_id`, or a dam ID `DWR-nnnn`) wins; otherwise the
+nearest line within 500 m. When you gave no `BREACH_POSITION`, a dam point off the line is
+moved to the nearest point on it, and the log says by how much.
+
+**Breach inflow fallback.** The first search is unchanged (lowest cell at least half the
+dam height down near the dam point), so earlier runs give the same results. When it finds
+nothing, the nearest such cell within 400 m is used. When that also fails and the top of
+dam is known, the dam point moves to the highest ground within 400 m that is within
+max(3 ft, a quarter of the dam height) of the top of dam, and the search runs from there.
+Each fallback is a warning in the report, with the point you gave (`dam_xy_given`).
+
+**Culvert candidates.** Every place a road (the `RECEPTOR_ROADS` layer) crosses the
+downstream flow path with no inventory culvert, bridge or notch within 30 m is listed in
+the report (`culvert_candidates`), in `culvert_candidates.csv` and in the HEC-RAS model
+folder (`GIS/culvert_candidates.csv`, a section in `README_HECRAS.md`). They are a list to
+check in the field. They are never put in the model.
+
+**Terrain downloads.** Through the suite terrain cache, a tile whose request fails (a big
+3DEP export can time out) is asked for again as four quarters and joined (needs GDAL). The
+cache grid and tile size are unchanged, so cached tiles stay valid.
+
+**Load the dam's data layers** (Plugins > ND Dam Breach Runner): the layers a run of this
+dam would take from the dam folder, plus the suite data folder's DWR dams and dam lines, in
+one layer group, so you can see them before the run. A layer already in the project is not
+added again.
+
+**Wizard.** With no layer chosen, the dam page starts on the suite data folder's DWR dam
+inventory (added to the project when needed). Each dam is listed as ID, name, height and
+storage; a DWR dam without an NID ID is `DWR-<structure id>`. DWR's `max_pool_vol` and
+`max_pool_area` fill the storage and area.
+
 ## New in 3.12.0 (ND dam suite release set: ND Dam Hazard 2.22.0, ND Dam Breach Screening 0.20.0)
 
 **The computer is kept awake while a model runs.** LISFLOOD-FP, ANUGA and the built-in
@@ -445,10 +631,11 @@ unchanged.
   the same table ND Dam Hazard 2.11.0 uses). A screenshot trace of the two figures agrees with the
   table within 0.05 ft (house high line), 0.09 ft (house low line) and 0.02 ft (mobile homes) for
   95 % of its points.
-- The file's status stays "not digitized" until it records the person who digitized the curves
-  and a DIFFERENT person who checked them (`digitized_by` / `checked_by`, status "digitized";
-  ND Dam Hazard > Chart sign-off writes it that way). Until then the chart method still refuses
-  and now says that the polygons are there and only the two names are missing.
+- Since suite 1.14.1 the file ships signed off by Nicholas Bendickson (2026-10-12): one
+  engineer's sign-off is enough (`signed_off_by`, status "digitized"; a second engineer in
+  `checked_by` is optional). ND Dam Hazard > Chart sign-off writes a file for another engineer
+  and installs it in both plugins. A chart file without a signing engineer still refuses the chart
+  method and says what is missing.
 - Suite version check: ND Dam Hazard below 2.11.0 is reported (it uses older quartic curves, up to
   0.18 ft from the table).
 - Not run in a real QGIS.
@@ -739,12 +926,12 @@ when not chosen (NSI `OCCTYPE`, USA Structures `OCC_CLS` / `PRIM_OCC`, `AADT`, T
 FRA `PASSNGR` with codes A, B, C by default, NID `NIDID` / `HAZARD`); the log lists the fields
 used.
 
-**The charts must be digitized and checked before the chart method runs.**
-`core/acer_tm11_charts.json` ships with status "not digitized" and no zones, so the chart
-method stops with a message; until the figures are digitized (zone polygons in velocity ft/s,
-depth ft, with who digitized and who checked them - both names are required), use the
-conservative method (every inundated habitable structure counted as potentially lethal, which
-over-classifies), or give a digitized chart file. The 1D 2 ft rule is offered only for results
+**The charts are signed off.** `core/acer_tm11_charts.json` ships signed off by Nicholas
+Bendickson (2026-10-12), so the chart method runs by default. A chart file of your own must
+record the engineer who signed it off (one engineer is enough; ND Dam Hazard > Chart sign-off
+writes one and installs it here and in the Screening); without that the tool stops with a
+message and offers the conservative method (every inundated habitable structure counted as
+potentially lethal, which over-classifies). The 1D 2 ft rule is offered only for results
 from a 1D model; this plugin's results are 2D, and the tool warns if it is chosen. Re-running
 a dam removes its old classification files, so the report never shows a stale class. The tool writes
 `Hazard Classification (ND 5.2).md` / `.json`, `Hazard Classification Findings.csv` /

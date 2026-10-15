@@ -11,6 +11,8 @@ from qgis.core import QgsBlockingNetworkRequest
 from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
+from .qtcompat import ALWAYS_NETWORK, BLOCKING_NO_ERROR, CACHE_LOAD_CONTROL, HTTP_STATUS
+
 from .core import Cancelled, NetworkError, UpdateError
 
 USER_AGENT = b"ND-Data-Updater-QGIS/1.0"
@@ -28,15 +30,15 @@ class QgisHttp:
         req.setRawHeader(b"User-Agent", USER_AGENT)
         for k, v in (headers or {}).items():
             req.setRawHeader(k.encode(), v.encode())
-        req.setAttribute(QNetworkRequest.CacheLoadControlAttribute, QNetworkRequest.AlwaysNetwork)
+        req.setAttribute(CACHE_LOAD_CONTROL, ALWAYS_NETWORK)
         return req
 
     def _check(self, blocking, err, url):
         if self.qgs_feedback is not None and self.qgs_feedback.isCanceled():
             raise Cancelled()
-        if err == QgsBlockingNetworkRequest.NoError:
+        if err == BLOCKING_NO_ERROR:
             return blocking.reply()
-        status = blocking.reply().attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = blocking.reply().attribute(HTTP_STATUS)
         try:
             status = int(status)
         except (TypeError, ValueError):

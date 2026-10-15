@@ -51,6 +51,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from . import netproxy
+
 FORMAT = "ndsuite/services"
 FORMAT_VERSION = 1
 SERVICES_FILE = "services.json"
@@ -74,8 +76,11 @@ ROLES = {
     "nid_dams": ("National Inventory of Dams", "vector", "all three"),
     "dwr_dams": ("ND DWR dams inventory", "vector", "Screening"),
     "dwr_dam_lines": ("ND DWR dam lines", "vector", "Screening"),
-    "flowlines": ("NHD flowlines (streams)", "vector", "all three"),
-    "waterbodies": ("NHD waterbodies", "vector", "Screening, Breach Runner"),
+    "flowlines": ("Flowlines (streams; 3DHP, was NHD)", "vector", "all three"),
+    "waterbodies": ("Waterbodies (3DHP, was NHD)", "vector", "Screening, Breach Runner"),
+    "barrier_dams": ("Aquatic barrier dams (SARP)", "vector", "offline pack"),
+    "barrier_crossings": ("Aquatic barrier road-stream crossings (SARP, surveyed)", "vector",
+                          "offline pack"),
     "flood_zones": ("FEMA flood zones", "vector", "reference"),
     "counties": ("County boundaries", "vector", "reference"),
     "imagery": ("Aerial imagery", "display", "map display"),
@@ -86,13 +91,17 @@ ROLES = {
 _NDHUB = "https://ndgishub.nd.gov/arcgis/rest/services/"
 _TNM = "https://hydro.nationalmap.gov/arcgis/"
 _BASE = "https://basemap.nationalmap.gov/arcgis/"
+_SARP = "https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/services/"
 
 
 def _s(id, role, name, kind, url, layer="", fields=(), source="", confidence="documented",
-       notes=""):
-    return {"id": id, "role": role, "name": name, "kind": kind, "url": url, "layer": layer,
-            "fields": list(fields), "source": source, "confidence": confidence, "notes": notes,
-            "builtin": True}
+       notes="", scale_axes=None):
+    d = {"id": id, "role": role, "name": name, "kind": kind, "url": url, "layer": layer,
+         "fields": list(fields), "source": source, "confidence": confidence, "notes": notes,
+         "builtin": True}
+    if scale_axes:                       # WCS grid axis names for scaleSize (1.19.0)
+        d["scale_axes"] = list(scale_axes)
+    return d
 
 
 BUILTIN = [
@@ -113,8 +122,9 @@ BUILTIN = [
     # --- land cover
     _s("mrlc_nlcd2021_wcs", "nlcd", "NLCD 2021 land cover (MRLC WCS)", "wcs",
        "https://www.mrlc.gov/geoserver/mrlc_download/wcs",
-       layer="mrlc_download__NLCD_2021_Land_Cover_L48", confidence="inferred",
-       source="https://www.mrlc.gov/data-services-page", notes="WCS 2.0.1, EPSG:5070, 30 m"),
+       layer="mrlc_download__NLCD_2021_Land_Cover_L48", confidence="documented",
+       source="https://www.mrlc.gov/data-services-page", notes="WCS 2.0.1, EPSG:5070, 30 m; "
+       "tried 2026-10-12: the grid axes are i / j", scale_axes=("i", "j")),
     _s("esri_nlcd_annual", "nlcd", "Annual NLCD land cover (Esri ImageServer)", "arcgis_image",
        "https://di-nlcd.img.arcgis.com/arcgis/rest/services/USA_NLCD_Annual_LandCover/ImageServer",
        source="https://www.arcgis.com/home/item.html?id=12bb5ad7b1d145648d1ec8a68ee5c8c4",
@@ -176,20 +186,46 @@ BUILTIN = [
        "https://mapservice.dwr.nd.gov/swcwms", confidence="inferred",
        source="https://www.swc.nd.gov/info_edu/map_data_resources/mapservices.html",
        notes="layer names: use Test / Browse layers"),
-    # --- hydrography
-    _s("usgs_nhd_flowline", "flowlines", "USGS NHD flowlines (large scale)", "arcgis_feature",
+    # --- hydrography (1.19.0: the USGS 3D Hydrography Program is the default; NHD stays listed)
+    _s("usgs_3dhp_flowline", "flowlines", "USGS 3DHP flowlines", "arcgis_feature",
+       _TNM + "rest/services/3DHP_all/MapServer/50",
+       fields=("gnisidlabel", "featuretypelabel", "lengthkm", "streamorder"),
+       source="ND Dam Hazard constants.NHD_FLOWLINE_URL",
+       notes="NHD-style gnis_name / ftype are added to each feature when it is downloaded"),
+    _s("usgs_3dhp_waterbody", "waterbodies", "USGS 3DHP waterbodies", "arcgis_feature",
+       _TNM + "rest/services/3DHP_all/MapServer/60",
+       fields=("gnisidlabel", "featuretypelabel", "areasqkm"),
+       source="ND Dam Hazard constants.NHD_WATERBODY_URL",
+       notes="NHD-style gnis_name / ftype are added to each feature when it is downloaded"),
+    _s("usgs_nhd_flowline", "flowlines", "USGS NHD flowlines (large scale, older)",
+       "arcgis_feature",
        _TNM + "rest/services/nhd/MapServer/6", fields=("gnis_name", "ftype", "fcode"),
-       source="ND Dam Hazard constants.NHD_FLOWLINE_URL"),
+       source="https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer"),
     _s("usgs_nhdplushr_flowline", "flowlines", "USGS NHDPlus HR network flowlines",
        "arcgis_feature", _TNM + "rest/services/NHDPlus_HR/MapServer/3",
        source="https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServer"),
-    _s("usgs_nhd_waterbody", "waterbodies", "USGS NHD waterbodies (large scale)",
+    _s("usgs_nhd_waterbody", "waterbodies", "USGS NHD waterbodies (large scale, older)",
        "arcgis_feature", _TNM + "rest/services/nhd/MapServer/12",
        fields=("gnis_name", "ftype", "fcode", "areasqkm"),
        source="https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer"),
     _s("usgs_nhdplushr_waterbody", "waterbodies", "USGS NHDPlus HR waterbodies",
        "arcgis_feature", _TNM + "rest/services/NHDPlus_HR/MapServer/9",
        source="https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServer"),
+    # --- aquatic barriers (Southeast Aquatic Resources Partnership; the data behind
+    # tool.aquaticbarriers.org, Great Plains / Intermountain West region)
+    _s("sarp_barrier_dams", "barrier_dams", "SARP aquatic barrier prioritisation - dams",
+       "arcgis_feature", _SARP + "Aquatic_Barrier_Prioritization_Dams_v360/FeatureServer/0",
+       fields=("Name", "River", "YearCompleted", "Height", "Hazard", "Passability"),
+       source="https://aquaticbarriers.org/", confidence="inferred",
+       notes="~7,000 dams in North Dakota; includes the National Inventory of Dams and state "
+             "records"),
+    _s("sarp_barrier_crossings", "barrier_crossings",
+       "SARP aquatic barrier prioritisation - surveyed road-stream crossings", "arcgis_feature",
+       _SARP + "Aquatic_Barrier_Prioritization_RoadBarriers_v360/FeatureServer/0",
+       fields=("Name", "River", "Road", "CrossingType", "BarrierSeverity"),
+       source="https://aquaticbarriers.org/", confidence="inferred",
+       notes="field-surveyed crossings only; unsurveyed (modelled) crossings are not in this "
+             "service"),
     _s("ndhub_hydro_wms", "reference", "ND GIS Hub hydrography (WMS)", "wms",
        "https://ndgishub.nd.gov/arcgis/services/All_Hydrography/MapServer/WMSServer",
        source="https://ndgishub.nd.gov/arcgis/rest/services/All_Hydrography/MapServer",
@@ -505,9 +541,9 @@ def list_layers(service, text):
 
 
 def urllib_get(url, timeout=60):
-    """http_get outside QGIS (no proxy settings of QGIS; the system's apply)."""
+    """http_get without QGIS's network client (QGIS's proxy setting still applies, 1.16.2)."""
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with netproxy.urlopen(req, timeout=timeout) as r:
         return r.read()
 
 
@@ -579,6 +615,11 @@ def fetch_features(service, box_lonlat, http_get=None, page=1000, max_pages=200,
     http_get = http_get or urllib_get
     lay = layer_url(service)
     feats = []
+    try:                                  # 1.19.0: 3DHP features also get the NHD properties
+        from . import hydro3dhp as _H
+    except ImportError:                   # outside the package
+        import hydro3dhp as _H            # noqa
+    norm = _H.normaliser_for_url(lay) or (lambda f: f)
     for n in range(max_pages):
         if cancel and cancel():
             raise ServiceError("cancelled")
@@ -598,7 +639,7 @@ def fetch_features(service, box_lonlat, http_get=None, page=1000, max_pages=200,
         more = bool(d.get("exceededTransferLimit")) or \
             bool((d.get("properties") or {}).get("exceededTransferLimit"))
         if not got or (len(got) < page and not more):
-            return feats
+            return norm(feats)
     raise ServiceError("{}: more than {} features in the area - use a smaller area or the "
                        "offline pack".format(service.get("name"), page * max_pages))
 
@@ -620,12 +661,15 @@ def wcs_coverage_url(service, box, size, crs="EPSG:5070"):
     cov = service.get("layer") or ""
     if not cov:
         raise ServiceError("{}: choose a coverage first".format(service.get("name")))
+    # 1.19.0: the scaling extension names the coverage's GRID axes: MRLC's GeoServer calls them i / j
+    # (X / Y answered "ScaleAxisUndefined" - the land cover could not be fetched); `scale_axes`
+    ax = tuple(service.get("scale_axes") or ("X", "Y"))
     q = [("service", "WCS"), ("version", "2.0.1"), ("request", "GetCoverage"),
          ("coverageId", cov), ("format", "image/tiff"),
          ("subset", "X({},{})".format(box[0], box[2])), ("subset", "Y({},{})".format(box[1], box[3])),
          ("subsettingCrs", "http://www.opengis.net/def/crs/EPSG/0/" + crs.split(":")[-1]),
          ("outputCrs", "http://www.opengis.net/def/crs/EPSG/0/" + crs.split(":")[-1]),
-         ("scaleSize", "X({}),Y({})".format(int(size[0]), int(size[1])))]
+         ("scaleSize", "{}({}),{}({})".format(ax[0], int(size[0]), ax[1], int(size[1])))]
     return url + "?" + urllib.parse.urlencode(q)
 
 

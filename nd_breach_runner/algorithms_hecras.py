@@ -71,7 +71,7 @@ class HecRasExportAlgorithm(_ToolBase):
         feedback.pushInfo(msg)
         feedback.pushInfo("Set the boundary condition's data interval to {}.".format(step[0]))
         for n in i["notes"]:
-            feedback.reportError("Check: " + n, fatalError=False)
+            feedback.pushWarning("Check: " + n)
         feedback.reportError("Check: the breach values are the plugin's estimates; the center "
                              "station is blank. See the basis column.", fatalError=False)
         return {"HYDROGRAPH_TXT": r["hydrograph_txt"], "HYDROGRAPH_CSV": r["hydrograph_csv"],
@@ -193,7 +193,7 @@ class HecRasImportAlgorithm(_ToolBase):
         feedback.pushInfo("Used: " + "; ".join("{}: {}".format(k, v) for k, v
                                                in info["used"].items()))
         for n in info["notes"]:
-            feedback.reportError("Check: " + n, fatalError=False)
+            feedback.pushWarning("Check: " + n)
         summary, msg = "", "wrote {}".format(", ".join(sorted(arrays)))
         if compare:
             try:
@@ -332,7 +332,7 @@ class HecRasModelAlgorithm(_ToolBase):
                 len(si["exported"]))
         feedback.pushInfo(msg)
         for n in r["notes"]:
-            feedback.reportError("Check: " + n, fatalError=False)
+            feedback.pushWarning("Check: " + n)
         layers = []
         if si.get("exported"):
             feedback.pushInfo("Culverts, bridges and notches in the 2D area: {}. Not checked in "

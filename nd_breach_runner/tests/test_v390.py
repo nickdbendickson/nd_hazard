@@ -340,7 +340,10 @@ def v390_window_shows_the_dam_folder_dem_and_takes_a_downloaded_dem():
             dlg.dam_edit.setText("D1")
             dlg._changed()
             dem = os.path.join(f, "data", "dem.vrt")
-            assert dlg.dem_note.text() == "(from dam folder) " + dem
+            # 3.20.0: the row shows the file name and the tooltip the whole path (a 1,100 px
+            # path on the row drew over the row below it)
+            assert dlg.dem_note.text() == "(from dam folder) dem.vrt"
+            assert dlg.dem_note.toolTip() == dem
             assert dlg.settings()["dem"] == ""                         # the choice stays empty
             assert dlg.dem_point.text() == "-100.500000,47.250000"
             assert dlg.dem_out.text() == os.path.join(f, "data")

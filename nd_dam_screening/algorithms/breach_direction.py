@@ -35,6 +35,11 @@ class BreachDirection(QgsProcessingAlgorithm):
     def groupId(self): return "dams"
     def createInstance(self): return BreachDirection()
 
+    # 0.21.0: opened from the Processing Toolbox (no work folder), the dialog starts with the
+    # last Standardized dams written (only the dialog: a run given no layer still stops)
+    def createCustomParametersWidget(self, parent=None):
+        return cm.dialog_with_last(self, parent, self.DAMS, "dams3", "dams")
+
     def shortHelpString(self):
         return ("Matches each dam to its DWR dam line (by DWR structure ID first, then by "
                 "distance and name), works out which side is downstream "

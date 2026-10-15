@@ -199,7 +199,10 @@ folder = os.path.join(work, "Dams")
 
 def run7b(fb=None, **kw):
     fb = fb or QgsProcessingFeedback()
-    base = dict(DAMS=DAMS, BPTS=BPTS, DEM="nd_dem.vrt", DAMS_FOLDER=folder, LETHALITY=1)
+    # 0.28.3: FAIL_ON_ERROR (on by default) fails the tool at the end when a dam failed, so
+    # qgis_process exits non-zero; these runs want the layer, so they switch it off
+    base = dict(DAMS=DAMS, BPTS=BPTS, DEM="nd_dem.vrt", DAMS_FOLDER=folder, LETHALITY=1,
+                FAIL_ON_ERROR=False)
     r = RunnerHandoff().run_mock(dict(base, **kw), ctx, fb)
     out = ctx.layers[r["OUT"]]
     n = out.fields().names()
@@ -235,6 +238,18 @@ assert haz[0][1] == {"DAM_FOLDER": os.path.join(folder, "DWR-1"), "LETHALITY": 1
                      "UNINHABITED_WORDS": ", ".join(nh.UNINHABITED_KEYWORDS),
                      "PASSENGER_CODES": "A, B, C"}, haz[0][1]
 print("OK (7b: done / failed / skipped, the batch continues)")
+
+# 0.28.3: the same run with FAIL_ON_ERROR on (the default) fails the tool at the end, naming the
+# counts, so qgis_process exits non-zero; the dams that ran keep their results
+del processing.CALLS[:]
+try:
+    run7b(BLD=BLD, S_OCC="OCC_CLS", R_SOLE="sole", FAIL_ON_ERROR=True)
+    raise AssertionError("a hand-off with failed dams did not fail the tool")
+except QgsProcessingException as e:
+    assert "2 of 6 dams failed" in str(e) and "3 done, 1 skipped" in str(e), str(e)
+assert [p["DAM_ID"] for a, p in processing.CALLS if a == ho.RUNNER_ALG] == \
+    ["DWR-1", "DWR-2", "DWR-5", "DWR-6"]
+print("OK (7b: a failed dam fails the tool unless FAIL_ON_ERROR is off)")
 
 # screening hydrograph as the runner's own-hydrograph CSV; a stricter runner class
 RUNNER_CLASS["DWR-5"] = ("High", False, [])
@@ -277,11 +292,13 @@ except QgsProcessingException as e:
 res, _ = run7b(DAMS=ctx.add(plain), WHICH=ho.SELECT_ALL)
 assert res["DWR-1"]["rn_status"] == "done" and res["DWR-1"]["scr_class"] is None and res["DWR-1"]["rn_agree"] == "n/a"
 
-# charts method with the shipped (not digitized) chart file -> stops before any run
+# charts method with a chart file nobody signed off -> stops before any run (the shipped file is signed off)
 del processing.CALLS[:]
+_uns = nh.load_charts(); _uns.digitized_by = _uns.checked_by = _uns.signed_off_by = ""
+_uns_file = nh.save_charts(os.path.join(work, "TEST_charts_unsigned.json"), _uns)
 try:
-    run7b(LETHALITY=0)
-    raise SystemExit("7b ran the chart method without digitized charts")
+    run7b(LETHALITY=0, CHART_FILE=_uns_file)
+    raise SystemExit("7b ran the chart method with an unsigned chart file")
 except QgsProcessingException as e:
     assert nh.LETHALITY_LABELS[nh.LETHALITY_ALL_WET] in str(e) and nh.LETHALITY_LABELS[nh.LETHALITY_1D] not in str(e)
 assert not processing.CALLS

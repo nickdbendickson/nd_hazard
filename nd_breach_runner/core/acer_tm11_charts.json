@@ -1,11 +1,13 @@
 {
- "status": "not digitized",
+ "status": "digitized",
  "source": "Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. 5.1), Fig. 3 mobile homes (ND Fig. 5.2)",
  "digitized_from": "ND Dam Safety Standards REG_05.2026 Figures 5.1 and 5.2 (Reclamation 1988, ACER TM 11 Figures 2 and 3), digitized by the engineer (flood_danger_classifier.py, stated accuracy +/-0.06 ft)",
- "digitized_by": "",
- "digitized_on": "",
+ "digitized_by": "Nicholas Bendickson",
+ "digitized_on": "2026-10-12",
  "checked_by": "",
- "notes": "Zone polygons from damsuite.tm11_curves (table SHA-256 2fb490ca2f082ff3939a7990351484a81f91f2ceee052e6331c4f0ab2c8a4a2f): the table digitized from REG_05.2026 Figs 5.1 / 5.2, linear between the tabulated velocities. Axes (velocity, depth): ND Fig. 5.1 = TM 11 Fig. 2 velocity 0-25 ft/s, depth 0-10 ft; ND Fig. 5.2 = TM 11 Fig. 3 velocity 0-16 ft/s, depth 0-3 ft. Status stays 'not digitized' until the person who digitized the curves and a different person who checked them are recorded (digitized_by / checked_by, or ND Dam Hazard > Chart sign-off). Written for ND Dam Breach Runner 3.3.1 / ND Dam Breach Screening 0.10.1 from the engineer's REG_05.2026 table.",
+ "signed_off_by": "Nicholas Bendickson",
+ "signed_off_on": "2026-10-12",
+ "notes": "Zone polygons from damsuite.tm11_curves (table SHA-256 2fb490ca2f082ff3939a7990351484a81f91f2ceee052e6331c4f0ab2c8a4a2f): the table digitized from REG_05.2026 Figs 5.1 / 5.2, linear between the tabulated velocities. Axes (velocity, depth): ND Fig. 5.1 = TM 11 Fig. 2 velocity 0-25 ft/s, depth 0-10 ft; ND Fig. 5.2 = TM 11 Fig. 3 velocity 0-16 ft/s, depth 0-3 ft. Signed off by Nicholas Bendickson on 2026-10-12. Shipped with the suite: the engineer who digitized the table signed it off for the suite's default (release 1.18.1).",
  "charts": {
   "house": {
    "title": "Houses built on foundations",

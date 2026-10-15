@@ -16,6 +16,7 @@ Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_v0111.
  8 GDAL: a damaged raster names the file; no process-wide gdal.UseExceptions()
 """
 import configparser
+import re
 import os
 import stat
 import sys
@@ -81,7 +82,10 @@ def _():
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
     g = cp["general"]
     assert g["hasProcessingProvider"] == "yes" and g["supportsQt6"] == "True"
-    assert g["qgisMaximumVersion"] == "4.99" and g["version"] == "0.20.0"
+    # 0.26.0: the version is read from metadata.txt (by the plugin's own reader), not pinned here
+    from nd_dam_screening.core import damrecord_io as dri
+    assert g["qgisMaximumVersion"] == "4.99" and g["version"] == dri.plugin_version()
+    assert re.match(r"^\d+\.\d+\.\d+$", g["version"]), g["version"]
 
 
 # ---------------------------------------------------------------------------- 2

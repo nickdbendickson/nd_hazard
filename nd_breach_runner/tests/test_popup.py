@@ -377,7 +377,9 @@ def popup_window_shows_the_dam_and_opens_tools():
         q.project.layers["dem1"] = q.Raster("dem1", "ND LiDAR 1m")
         q.project.layers["dem2"] = q.Raster("dem2", "Another DEM")
         dlg = q.dialog.NDBreachRunnerDialog()
-        assert dlg.tabs.count() == 6 and [dlg.tabs.tabText(i) for i in range(6)] == [t for t, _x in pl.TABS] + ["Settings"]
+        # 3.20.0: the run settings moved off the header onto an Advanced tab
+        assert dlg.tabs.count() == 7 and [dlg.tabs.tabText(i) for i in range(7)] == \
+            [t for t, _x in pl.TABS] + [q.dialog.ADVANCED_TAB, "Settings"]
         # 3.5: the suite settings grid, one tab per popup tab, the tools' defaults from the file
         assert dlg.grid.tabs.titles == [t for t in pl.TAB_ORDER if t in dlg.grid.groups]
         assert len(dlg.grid.catalog) > 30 and all(s.plugin == "ndbreach" for s in dlg.grid.catalog)
@@ -507,7 +509,12 @@ def popup_plugin_menu_entry_single_window_and_unload():
         first = iface.menu[0]
         assert first[0] == q.plugin.MENU and p.action is first[1]
         assert p.action.triggered._slots == [p.run_plugin]
-        assert len(iface.menu) > 30                                    # the old menu entries are still there
+        # 3.20.1: the tools moved into the "Breach tools" submenu: all of them still there, and the
+        # menu itself is short
+        tools = [a for a in p.tools_menu.items if a is not None]
+        own = [a for m, a in iface.menu if m == q.plugin.MENU]
+        assert len(tools) > 30 and len(own) < 10
+        assert own[-3] is p.tools_menu.menuAction()
         p.action.triggered.emit()
         w = p.dialog
         assert w is not None and w.isVisible()

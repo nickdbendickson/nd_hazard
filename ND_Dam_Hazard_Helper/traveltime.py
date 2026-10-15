@@ -11,7 +11,7 @@ culverts / crossings, closed roads and other dams are placed at their
 river mile with their own first arrival.
 
 Centerline: the engineer's line layer (parts are joined end to end; the
-longest chain is used), else USGS NHD flowlines traced downstream from the
+longest chain is used), else USGS 3DHP flowlines traced downstream from the
 dam (or from the first cell the flood reaches) through connected lines,
 preferring the same stream name.
 
@@ -352,13 +352,13 @@ def build(depth_sampler, arr_sampler, peak_path, analysis_crs, transform_ctx, la
                 start, start_note = c, "the first cell the flood reaches"
         if start is None:
             return {"rows": [], "line": [], "source": "", "notes": [
-                "no dam point and no arrival raster - the NHD flowlines cannot be traced; "
+                "no dam point and no arrival raster - the 3DHP flowlines cannot be traced; "
                 "give a centerline layer"]}
         pts, names, note = trace(lines, start, snap_ft * unit, max_mi * 5280.0 * unit,
                                  2640.0 * unit)
         if note:
             notes.append(note)
-        source = "USGS NHD flowlines traced downstream from {}{}".format(
+        source = "USGS 3DHP flowlines traced downstream from {}{}".format(
             start_note, " ({})".format(" > ".join(names[:4])) if names else "")
     if len(pts) < 2:
         return {"rows": [], "line": [], "source": source,

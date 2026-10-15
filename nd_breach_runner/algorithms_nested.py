@@ -55,7 +55,7 @@ class NestedRunAlgorithm(RunDamAlgorithm):
         except (ModelError, brmod.BreachInputError) as e:
             raise QgsProcessingException(str(e))
         for w in out.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         for k, v in out.summary.items():
             feedback.pushInfo("{}: {}".format(k, v))
 

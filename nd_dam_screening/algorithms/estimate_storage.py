@@ -27,6 +27,10 @@ NEW_FIELDS = [("est_pool_m", FT_DOUBLE), ("est_crest_m", FT_DOUBLE),
               # 0.19.0: the DEM height estimate and the spill level of the leak guard
               ("est_h_m", FT_DOUBLE), ("spill_m", FT_DOUBLE)]
 
+# 0.28.3: a basin found in the DEM shallower than this fraction of the dam height is not the
+# reservoir of the dam (see processAlgorithm)
+SHALLOW_BASIN = 0.5
+
 
 class EstimateStorage(QgsProcessingAlgorithm):
     DAMS, WB, DEMDIR, SEARCH, SHAPE, OUT, CURVES = ("DAMS", "WB", "DEMDIR", "SEARCH",
@@ -37,6 +41,11 @@ class EstimateStorage(QgsProcessingAlgorithm):
     def group(self): return "Dam screening"
     def groupId(self): return "dams"
     def createInstance(self): return EstimateStorage()
+
+    # 0.21.0: opened from the Processing Toolbox (no work folder), the dialog starts with the
+    # last Standardized dams written (only the dialog: a run given no layer still stops)
+    def createCustomParametersWidget(self, parent=None):
+        return cm.dialog_with_last(self, parent, self.DAMS, "dams")
 
     def shortHelpString(self):
         return ("For each dam, finds the nearest NHD HR waterbody, reads the pool elevation "
@@ -56,7 +65,19 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 "the maximum (stor_method = inventory max); (3) a structure with no height gets one "
                 "from the DEM (crest minus the lowest ground near the point): height_m is filled and "
                 "h_src = 'estimated (DEM)'; with no inventory storage stor_src = 'estimated (DEM)'. "
-                "Estimated values carry low confidence and are named in the reports.")
+                "Estimated values carry low confidence and are named in the reports.\n"
+                "0.26.0: a dam with no basin at all in the DEM (no mapped water body, no flat water, "
+                "no closed depression within the search distance) but an inventory storage (maximum, "
+                "else normal) and a height no longer fails: a quadratic stage-storage curve from the "
+                "ground at the dam point to ground + height holding the inventory volume is ASSUMED "
+                "(stor_method = inventory curve, stor_src = 'inventory (assumed curve)', low confidence, "
+                "a note starting with ASSUMPTION, a warning in the log). Verify the location and the "
+                "DWR values of such dams. Without a storage or a height the dam still fails.\n"
+                "0.28.3: the same assumed curve is used when the basin FOUND in the DEM (flat water "
+                "or a closed depression, not a mapped water body) is less than half the dam height "
+                "deep: such a basin is a puddle on the floor of a dry basin, and stretching its "
+                "curve to the inventory maximum put almost all of the storage in the top few feet "
+                "of the dam. THIS MOVES THE PEAK BREACH FLOW of dry dams screened before 0.28.3.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
@@ -91,6 +112,25 @@ class EstimateStorage(QgsProcessingAlgorithm):
         gdal.RasterizeLayer(mem, [1], lyr, burn_values=[1])
         return mem.ReadAsArray().astype(bool)
 
+    @staticmethod
+    def _inventory_curve(f, names, arr, rc, why=storage.NO_BASIN):
+        """0.26.0: the last-resort curve of a dam with no basin in the DEM: (StorageResult, volume
+        used) from the inventory maximum storage (else the normal) and the height, or None when the
+        record lacks either (height_m must be over 0.5 m) or the DEM has no ground at the point."""
+        def num(k):
+            v = f[k] if k in names else None
+            try:
+                v = float(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                v = None
+            return v if v is not None and np.isfinite(v) else None
+        vmax, vnorm, h = num("inv_max_m3"), num("inv_norm_m3"), num("height_m")
+        vol, which = (vmax, "maximum") if vmax and vmax > 0 else (vnorm, "normal")
+        if not vol or vol <= 0 or h is None or h <= 0.5:
+            return None
+        res = storage.inventory_curve(arr, rc, h, vol, which, why)
+        return (res, vol) if res is not None else None
+
     def processAlgorithm(self, params, context, feedback):
         dams = self.parameterAsSource(params, self.DAMS, context)
         wbs = self.parameterAsSource(params, self.WB, context)
@@ -118,6 +158,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
             out = QgsFeature(fields); out.setGeometry(f.geometry())
             vals = list(f.attributes()) + [None] * len(NEW_FIELDS)
             res, note = None, ""
+            assumed = None                   # 0.26.0: (result, volume) of the last-resort inventory curve
             try:
                 dem_path = os.path.join(demdir, f"dam_{dam_id}.tif")
                 if not os.path.exists(dem_path):
@@ -146,15 +187,41 @@ class EstimateStorage(QgsProcessingAlgorithm):
                     if mask is None:         # a dry pond: the closed basin in the terrain
                         mask, dnote = storage.depression_mask(arr, cell, (row, col), search)
                         if mask is None:
-                            raise LookupError("no waterbody within search distance ({}; {})".format(wnote, dnote))
-                        wnote = dnote
+                            # 0.26.0: no basin at all - an inventory storage and a height give an
+                            # assumed quadratic curve instead of a FAILED dam
+                            assumed = self._inventory_curve(f, names, arr, (row, col))
+                            if assumed is None:
+                                raise LookupError("no waterbody within search distance ({}; {})".format(wnote, dnote))
+                            wnote = "{}; {}".format(wnote, dnote)
+                        else:
+                            wnote = dnote
                 h = f["height_m"] if "height_m" in names else None
                 h = float(h) if h not in (None, "") else None
-                res = storage.estimate_storage(arr, mask, cell, (row, col),
-                                               known_height_m=h, shape_factor=shape)
-                note = "; ".join(([wnote] if wnote else []) + res.notes)
-                if wnote:
-                    res.confidence = "low"
+                if assumed is not None:
+                    res = assumed[0]
+                    note = "{} (DEM: {})".format(res.notes[0], wnote)
+                    feedback.pushWarning("dam {}: {}".format(dam_id, res.notes[0]))
+                else:
+                    res = storage.estimate_storage(arr, mask, cell, (row, col),
+                                                   known_height_m=h, shape_factor=shape)
+                    note = "; ".join(([wnote] if wnote else []) + res.notes)
+                    if wnote:
+                        res.confidence = "low"
+                    # 0.28.3: a basin taken from the DEM (flat water or a closed depression, not
+                    # a mapped water body) that is far shallower than the dam is not the
+                    # reservoir: it is a puddle on the floor of a dry basin. Stretching its
+                    # curve to the inventory maximum below put nearly all the volume in the top
+                    # few feet, which handed the Runner a storage-area exponent at its cap. The
+                    # full-height inventory curve is used instead, when the record allows it.
+                    span = res.crest_elev - res.pool_elev
+                    if wnote and h and span < SHALLOW_BASIN * h:
+                        alt = self._inventory_curve(f, names, arr, (row, col),
+                                                    storage.SHALLOW_BASIN_WHY.format(
+                                                        span / cm.FT, h / cm.FT))
+                        if alt is not None:
+                            assumed, res = alt, alt[0]
+                            note = "{} (DEM: {})".format(res.notes[0], wnote)
+                            feedback.pushWarning("dam {}: {}".format(dam_id, res.notes[0]))
             except Exception as e:  # keep going, record why
                 note = "FAILED: " + er.plain(e, dam_id, "3")
                 feedback.reportError("dam {}: {}".format(dam_id, er.plain(e, dam_id, "3")))
@@ -209,6 +276,12 @@ class EstimateStorage(QgsProcessingAlgorithm):
                     conf = "low"
                 elif method == "inventory max" and "stor_src" in names and not vals[names.index("stor_src")]:
                     vals[names.index("stor_src")] = "inventory"
+                if assumed is not None:
+                    # 0.26.0: the assumed curve already holds the inventory volume at its top (no
+                    # rescale note above); it is an assumption, whatever the inventory fields say
+                    used, method, conf = assumed[1], "inventory curve", "low"
+                    if "stor_src" in names:
+                        vals[names.index("stor_src")] = "inventory (assumed curve)"
                 spill = next((float(x.split("spill level ")[1].split(" m")[0]) for x in res.notes
                               if "spill level " in x), None)
                 vals[k:] = [res.pool_elev, crest_used, res.surface_area_m2, res.below_pool_m3,
@@ -223,4 +296,5 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 vals[k + 9] = "none"; vals[k + 10] = "none"; vals[k + 12] = note
             out.setAttributes(vals)
             sink.addFeature(out)
+        cm.remember_output("dams3", dest)               # 0.21.0: tool 4 starts with it
         return {self.OUT: dest}

@@ -58,16 +58,15 @@ class DownloadDem(QgsProcessingAlgorithm):
             "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 10.0, minValue=1.0))
         self.addParameter(QgsProcessingParameterString(
             "COUNTY", "County (area County)", optional=True))
-        self.addParameter(QgsProcessingParameterNumber(
-            "CELL", "3DEP cell size (m)", NUM_DOUBLE, 10.0, minValue=1.0))
+        # 0.24.0: resolution choice instead of a free-form cell size
+        self.addParameter(QgsProcessingParameterEnum(
+            "RESOLUTION", "Resolution", ["10 m", "1 m"], defaultValue=0))
         self.addParameter(QgsProcessingParameterString(
             "DWR_PATH", "ND LiDAR FTP link or /temp/<id> path (empty = tiles for the area over HTTPS)", optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             "ASCII_FT", "ND LiDAR: ASCII_Grids_ft (feet; converted to metres)", False))
         self.addParameter(QgsProcessingParameterBoolean(
             "IMAGINE", "ND LiDAR: DEM_Imagine", True))
-        self.addParameter(QgsProcessingParameterString(
-            "WORK_CRS", "Work CRS (empty = keep the source CRS)", optional=True))
         # 0.16.0: the dam the DEM is for (its dam folder gets the DEM; its point fills DAM_POINT)
         self.addParameter(QgsProcessingParameterFile(
             "DAMS_FOLDER", "Dams folder (one folder per dam; optional)", behavior=FILE_FOLDER,
@@ -76,7 +75,7 @@ class DownloadDem(QgsProcessingAlgorithm):
             "DAM_ID", "Dam ID (names the file; with the Dams folder the DEM goes into "
             "<dam folder>/data/ and dam.json)", optional=True))
         self.addParameter(QgsProcessingParameterFolderDestination("OUT", "Output folder"))
-        self.addOutput(QgsProcessingOutputFile("VRT", "DEM VRT"))
+        self.addOutput(QgsProcessingOutputFile("VRT", "DEM (standardised GeoTIFF)"))
 
     def processAlgorithm(self, parameters, context, feedback):
         out = self.parameterAsString(parameters, "OUT", context)
@@ -88,6 +87,27 @@ class DownloadDem(QgsProcessingAlgorithm):
             out = os.path.join(dam_folder, DD.DATA_DIR)
             dam_id = dam_id or str(rec.get("dam_id") or os.path.basename(dam_folder))
             feedback.pushInfo("dam folder {}: the DEM is written to {}".format(dam_folder, out))
+
+        scope = self.parameterAsEnum(parameters, "SCOPE", context)
+        resolution_idx = self.parameterAsEnum(parameters, "RESOLUTION", context)
+        cell_m = 10.0 if resolution_idx == 0 else 1.0
+        county = (self.parameterAsString(parameters, "COUNTY", context) or "").strip()
+
+        # For dam scope get the point early (needed for stem and extent)
+        lon, lat = None, None
+        if scope == 0:
+            lon, lat = _dam_point(self, parameters, context, feedback, rec)
+
+        # 0.24.0: standardised local GeoTIFF path and reuse check
+        point = (lon, lat) if lon is not None else None
+        tif_stem = dd.local_tif_stem(scope, cell_m, dam_id, county, point)
+        tif_path = os.path.join(out, tif_stem + ".tif")
+        sidecar = tif_path[:-4] + "_dem.txt"
+        if os.path.isfile(tif_path) and os.path.isfile(sidecar):
+            feedback.pushInfo("reusing existing DEM: {}".format(tif_path))
+            _record(rec, tif_path, "reused by tool 20", feedback)
+            return {"VRT": tif_path, "OUT": out}
+
         if self.parameterAsEnum(parameters, "SOURCE", context) == 1:
             products = []
             if self.parameterAsBool(parameters, "ASCII_FT", context):
@@ -100,51 +120,48 @@ class DownloadDem(QgsProcessingAlgorithm):
                     vrt = dd.fetch_dwr(package, out, products, feedback)
                     n = None
                 else:
-                    scope = self.parameterAsEnum(parameters, "SCOPE", context)
                     box = None
-                    if scope == 0:                       # 0.18.1: a dam point and buffer
-                        lon, lat = _dam_point(self, parameters, context, feedback, rec)
+                    if scope == 0:
                         box = dd.point_box_2266(
                             lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context))
                     vrt, n = dd.fetch_dwr_area(
-                        scope, self.parameterAsString(parameters, "COUNTY", context),
-                        out, products, feedback, box_2266=box)
+                        scope, county, out, products, feedback, box_2266=box)
             except QgsProcessingException:
                 raise
             except Exception as e:
                 raise QgsProcessingException(str(e))
-            vrt = _warp(vrt, out, parameters, context, feedback)
-            feedback.pushInfo("ND LiDAR: {}{}".format(vrt, "" if n is None else " ({} tiles)".format(n)))
-            _record(rec, vrt, "ND DWR LiDAR (lidar.dwr.nd.gov) by tool 20", feedback)
-            return {"VRT": vrt, "OUT": out}
-        scope = self.parameterAsEnum(parameters, "SCOPE", context)
-        cell = self.parameterAsDouble(parameters, "CELL", context)
+            dd.warp_to_local(vrt, tif_path, cell_m, feedback)
+            dd.write_sidecar(tif_path, "ND DWR LiDAR (lidar.dwr.nd.gov)", cell_m, "dwr")
+            feedback.pushInfo("ND LiDAR: {}{}".format(
+                tif_path, "" if n is None else " ({} tiles)".format(n)))
+            _record(rec, tif_path, "ND DWR LiDAR (lidar.dwr.nd.gov) by tool 20", feedback)
+            return {"VRT": tif_path, "OUT": out}
+
+        # USGS 3DEP branch
         if scope == 0:
-            lon, lat = _dam_point(self, parameters, context, feedback, rec)
             extent = dd.point_box(lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context))
-            stem = dd.output_stem(0, cell, dam_id, point=(lon, lat))
+            vrt_stem = dd.output_stem(0, cell_m, dam_id, point=(lon, lat))
         elif scope == 1:
-            name = (self.parameterAsString(parameters, "COUNTY", context) or "").strip()
-            box = dd.COUNTIES.get(name)
+            box = dd.COUNTIES.get(county)
             if box is None:
                 raise QgsProcessingException("Unknown county {!r}. One of: {}".format(
-                    name, ", ".join(dd.county_names())))
+                    county, ", ".join(dd.county_names())))
             extent = dd.to_5070(*box)
-            stem = dd.output_stem(1, cell, county=name)
+            vrt_stem = dd.output_stem(1, cell_m, county=county)
         else:
             extent = dd.to_5070(*dd.STATE)
-            stem = dd.output_stem(2, cell)
+            vrt_stem = dd.output_stem(2, cell_m)
         try:
-            vrt = dd.download(extent, cell, out, stem, feedback)
+            vrt = dd.download(extent, cell_m, out, vrt_stem, feedback)
         except QgsProcessingException:
             raise
-        except Exception as e:                    # a message, not a traceback (0.18.0)
+        except Exception as e:
             raise QgsProcessingException(str(e))
-        vrt = _warp(vrt, out, parameters, context, feedback)
-        feedback.pushInfo("DEM: {}".format(vrt))
-        _record(rec, vrt, "USGS 3DEP {} m by tool 20".format(dd.cell_tag(cell).replace("p", ".")),
-                feedback)
-        return {"VRT": vrt, "OUT": out}
+        dd.warp_to_local(vrt, tif_path, cell_m, feedback)
+        dd.write_sidecar(tif_path, "USGS 3DEP {} m".format(int(cell_m)), cell_m, "3dep")
+        feedback.pushInfo("DEM: {}".format(tif_path))
+        _record(rec, tif_path, "USGS 3DEP {} m by tool 20".format(int(cell_m)), feedback)
+        return {"VRT": tif_path, "OUT": out}
 
 
 def _dam_point(alg, parameters, context, feedback, rec):
@@ -191,21 +208,4 @@ def _record(rec, path, source, feedback):
         feedback.reportError("dam.json: the DEM was not recorded: {}".format(e))
 
 
-def _warp(vrt, out, parameters, context, feedback):
-    import os
-    crs = ""
-    try:
-        crs = (parameters.get("WORK_CRS") or "")
-        if not isinstance(crs, str):
-            crs = ""
-    except Exception:
-        crs = ""
-    crs = str(crs).strip()
-    if not crs:
-        return vrt
-    epsg = crs.split(":")[-1]
-    dest = os.path.join(out, "dem_{}.tif".format(epsg))
-    if feedback is not None:
-        feedback.pushInfo("warping to {}".format(crs))
-    dd.warp_to(vrt, dest, epsg)
-    return dest
+

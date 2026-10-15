@@ -24,6 +24,8 @@ Where each role comes from (`get_data_for_dam`, first that has it):
   every vector role
           the offline pack (when it covers the area), else the drop-in folder (dwr/), else the
           chosen ArcGIS service (live download of the area)
+  1.10.0: the pack is suitedata.active_pack() - none with Data source = Download (then every
+          role comes from the servers); a format-2 pack also gives the land cover and DWR files
 
 Decisions:
   * Dam values (name, height, storage, county, existing hazard class, location) found in the NID /
@@ -63,7 +65,7 @@ LABELS = {"dem": "DEM", "nlcd": "land cover", "structures": "structures",
           "roads": "roads", "rail": "railroads", "crossings": "grade crossings",
           "bridges": "bridges and culverts", "lifelines": "lifeline facilities",
           "nid_dams": "NID dams", "dwr_dams": "DWR dams", "dwr_dam_lines": "DWR dam lines",
-          "flowlines": "NHD flowlines", "waterbodies": "NHD waterbodies",
+          "flowlines": "3DHP flowlines", "waterbodies": "3DHP waterbodies",
           "flood_zones": "FEMA flood zones", "counties": "counties"}
 # role -> layer of the suite package (ND Dam Hazard's export for Screening)
 PACKAGE_LAYERS = {"structures": "structures", "structure_points": "structure_points",
@@ -74,8 +76,8 @@ PACK_SETS = {"structures": ("USA_Structures",), "structure_points": ("NSI_struct
              "address_points": ("NDGISHUB_address_points",),
              "roads": ("ND_roads_NG911", "ND_county_roads"), "rail": ("NARN_rail_lines",),
              "crossings": ("FRA_grade_crossings",), "bridges": ("NBI_bridges",),
-             "nid_dams": ("NID_dams",), "flowlines": ("NHD_flowlines",),
-             "waterbodies": ("NHD_waterbodies",), "dwr_dams": ("DWR_dams",),
+             "nid_dams": ("NID_dams",), "flowlines": ("3DHP_flowlines", "NHD_flowlines"),
+             "waterbodies": ("3DHP_waterbodies", "NHD_waterbodies"), "dwr_dams": ("DWR_dams",),
              "dwr_dam_lines": ("DWR_dam_lines",), "counties": ("ND_counties",),
              "flood_zones": ("FEMA_flood_zones",), "lifelines": ()}
 # role -> the suite service role (services.ROLES) used for a live download
@@ -519,7 +521,7 @@ def get_data_for_dam(folder, data_folder=None, catalog=None, http_get=None, make
     except ValueError as e:
         raise DataError(str(e))
     reader = None
-    pack = SD.find_pack(data_folder) if data_folder else ""
+    pack = SD.active_pack(data_folder or "")             # 1.10.0: "" in Download mode
     if pack:
         try:
             from .offline_pack import open_pack
@@ -695,6 +697,14 @@ def _get_nlcd(rec, ddir, lon, lat, data_folder, catalog, http_get, half_mi, say)
     return set_entry(rec, "nlcd", p, choice["name"])
 
 
+def _hydro():
+    try:
+        from . import hydro3dhp
+    except ImportError:                                  # outside the package
+        import hydro3dhp                                 # noqa
+    return hydro3dhp
+
+
 def _get_vector(rec, role, ddir, box, reader, data_folder, catalog, http_get, cancel, say):
     """One vector role from the pack, a drop-in file or a live service; None when no source."""
     path = os.path.join(ddir, "{}.gpkg".format(role))
@@ -704,6 +714,10 @@ def _get_vector(rec, role, ddir, box, reader, data_folder, catalog, http_get, ca
         if role == "lifelines":
             names = sorted(n for n in reader.datasets if n.startswith("lifeline_"))
         names = [n for n in names if reader.has(n)]
+        names = _hydro().dedupe(names)           # 1.19.0: 3DHP_ and its old NHD_ name: once
+        real = getattr(reader, "_real", None)    # the data set the pack really holds (alias)
+        if real is not None:
+            names = [real(n) for n in names]
         if names and all(reader.covers(box, n) for n in names):
             feats = []
             for n in names:
@@ -725,19 +739,29 @@ def _get_vector(rec, role, ddir, box, reader, data_folder, catalog, http_get, ca
             say("{}: {} from {}".format(LABELS.get(role, role), cnt, f))
             return set_entry(rec, role, "{}|layername={}".format(path, role), "your file " + f, cnt)
     # 3. the chosen service
+    got = fetch_role(role, box, catalog, http_get, cancel)
+    if got is None:
+        return None
+    feats, src, short = got
+    cnt = write_features(path, role, feats, src)
+    say("{}: {} from {}".format(LABELS.get(role, role), cnt, short))
+    return set_entry(rec, role, "{}|layername={}".format(path, role), src, cnt)
+
+
+def fetch_role(role, box, catalog=None, http_get=None, cancel=None):
+    """1.10.0: the features of a vector role in a lon / lat box from the server chosen for it in
+    Suite data and servers (or the file chosen there): (features, source text, short name), or
+    None when no server gives that role. Used by "Get data for this dam" and by Data source =
+    Download."""
+    catalog = catalog or SV.load()
+    http_get = http_get or SV.urllib_get
     srole = SERVICE_ROLE.get(role, role)
     s = catalog.chosen(srole) if srole else None
     if s is not None and s.get("kind") == "file":
-        feats = read_vector_file(s["url"], box)
-        cnt = write_features(path, role, feats, s["url"])
-        return set_entry(rec, role, "{}|layername={}".format(path, role), "your file " + s["url"],
-                         cnt)
+        return read_vector_file(s["url"], box), "your file " + s["url"], s["url"]
     if s is not None and SV.data_capable(s, srole):
         feats = SV.fetch_features(s, box, http_get=http_get, cancel=cancel)
-        src = "{} ({})".format(s["name"], SV.layer_url(s))
-        cnt = write_features(path, role, feats, src)
-        say("{}: {} from {}".format(LABELS.get(role, role), cnt, s["name"]))
-        return set_entry(rec, role, "{}|layername={}".format(path, role), src, cnt)
+        return feats, "{} ({})".format(s["name"], SV.layer_url(s)), s["name"]
     return None
 
 

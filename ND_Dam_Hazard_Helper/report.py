@@ -475,33 +475,74 @@ def _depth_layer(depth, scenario, add_to_project, group=None):
     return depth
 
 
-def _summary_page(layout, dam_name, res, scenario, all_results):
+CARD_HEAD = ["What was found", "How much"]
+CARD_WIDTHS = [78, 34]
+
+
+def _card_page(layout, dam_name, res, scenario):
+    """2.30.0: page 1 is the plain-language result card - the class, the ONE reason it is that
+    class, what would change it, the flags and the numbers. A dam owner and a county emergency
+    manager read this page; the criteria tables an engineer argues over follow on page 2.
+    Nothing is drawn when the run carries no card (an older result)."""
+    from . import resultcard as RC
+    card = res.get("card")
+    if not card:
+        return False
+    _label(layout, "{} - what this means".format(dam_name), MARGIN, MARGIN,
+           PAGE_W - 2 * MARGIN, 10, 0, size=16, bold=True)
+    cls = str(card.get("cls") or "?").upper()
+    _label(layout, "ND HAZARD CLASS (SCREENING): {}{}".format(
+        cls, " (PROVISIONAL)" if card.get("provisional") else ""), MARGIN, 22,
+        PAGE_W - 2 * MARGIN, 12, 0, size=22, bold=True)
+    left_w = PAGE_W - 2 * MARGIN - 120.0
+    text = ["Why it is {}:".format(str(card.get("cls") or "?").upper()),
+            card.get("reason") or "-", "", "What would change it:",
+            card.get("change") or "-"]
+    if card.get("flags"):
+        text += ["", "Flags on this result:"] + ["- " + f for f in card["flags"]]
+    if card.get("history"):
+        text += ["", "History: " + card["history"]]
+    _label(layout, "\n".join(text), MARGIN, 38, left_w, PAGE_H - 38 - MARGIN - 16, 0, size=11)
+    rows = [[label, value] for label, value in (card.get("numbers") or ())]
+    rx = MARGIN + left_w + 6
+    _label(layout, "The numbers behind it", rx, 38, PAGE_W - MARGIN - rx, 5, 0, size=9,
+           bold=True)
+    if rows:
+        _table(layout, CARD_HEAD, rows, 0, rx, 44, PAGE_W - MARGIN - rx, 110, size=7,
+               repeat=False, title="result card", widths=CARD_WIDTHS)
+    _label(layout, "{} v{} - {} - governing breach scenario '{}'. {}".format(
+        PLUGIN_NAME, PLUGIN_VERSION, time.strftime("%Y-%m-%d"), scenario.name, RC.CAVEAT),
+        MARGIN, PAGE_H - MARGIN - 12, PAGE_W - 2 * MARGIN, 10, 0, size=7)
+    return True
+
+
+def _summary_page(layout, dam_name, res, scenario, all_results, page=0):
     nd, tm11 = res["nd"], res["tm11"]
     _label(layout, "{} - dam hazard classification (screening)".format(dam_name),
-           MARGIN, MARGIN, PAGE_W - 2 * MARGIN, 9, 0, size=14, bold=True)
+           MARGIN, MARGIN, PAGE_W - 2 * MARGIN, 9, page, size=14, bold=True)
     sub = "ND hazard: {}    ACER TM 11: {} (lives in jeopardy {:.1f})    governing " \
           "scenario: {}{}".format(nd["cls"].upper(), tm11["cls"].upper(), tm11["lij"],
                                  scenario.name,
                                  "    (incremental - consequences the breach adds)"
                                  if res.get("incremental") else "")
-    _label(layout, sub, MARGIN, 20, PAGE_W - 2 * MARGIN, 6, 0, size=9, bold=True)
+    _label(layout, sub, MARGIN, 20, PAGE_W - 2 * MARGIN, 6, page, size=9, bold=True)
     left_w = 170.0
     _label(layout, "North Dakota Dam Safety Standards - " + ND_POLICY_REF, MARGIN, 28,
-           left_w, 5, 0, size=8, bold=True)
+           left_w, 5, page, size=8, bold=True)
     crit = nd.get("criteria") or []
     rows = [[c["section"], c["criterion"], c["found"], c["result"]] for c in crit]
     # v2.3.1: repeat=True so extra rows don't silently clip in PDF
-    _table(layout, ND_HEAD, rows, 0, MARGIN, 34, left_w, 100, size=7, repeat=True,
+    _table(layout, ND_HEAD, rows, page, MARGIN, 34, left_w, 100, size=7, repeat=True,
            title="ND criteria", widths=ND_WIDTHS)
     rx = MARGIN + left_w + 6
     rw = PAGE_W - MARGIN - rx
-    _label(layout, TM11_REF + " - Table 1", rx, 28, rw, 5, 0, size=8, bold=True)
+    _label(layout, TM11_REF + " - Table 1", rx, 28, rw, 5, page, size=8, bold=True)
     from .classification import tm11_rows
-    _table(layout, TM_HEAD, [list(r) for r in tm11_rows(tm11)], 0, rx, 34, rw, 52, size=7,
+    _table(layout, TM_HEAD, [list(r) for r in tm11_rows(tm11)], page, rx, 34, rw, 52, size=7,
            repeat=False, title="TM 11", widths=TM_WIDTHS)
     breaches = [(name, r) for name, r in (all_results or {}).items() if r.get("nd")]
     if len(breaches) > 1:
-        _label(layout, "Scenarios (the most severe governs)", rx, 90, rw, 5, 0, size=8,
+        _label(layout, "Scenarios (the most severe governs)", rx, 90, rw, 5, page, size=8,
                bold=True)
         srows = [[name, r["nd"]["cls"], r["tm11"]["cls"], "{:.1f}".format(r["tm11"]["lij"]),
                   r.get("method") or "", (r.get("incremental") or {}).get("baseline", "")]
@@ -509,7 +550,7 @@ def _summary_page(layout, dam_name, res, scenario, all_results):
         if len(srows) > 8:
             log_message("Report: {} scenario rows exceed frame - table continues "
                         "on extra page".format(len(srows)))
-        _table(layout, SCEN_HEAD, srows, 0, rx, 96, rw, 40, size=6, repeat=True,
+        _table(layout, SCEN_HEAD, srows, page, rx, 96, rw, 40, size=6, repeat=True,
                title="scenarios", widths=SCEN_WIDTHS)
     judg = nd.get("judgment") or []
     margin = (res.get("margin") or {}).get("lines") or []
@@ -519,11 +560,11 @@ def _summary_page(layout, dam_name, res, scenario, all_results):
     text += "Items requiring engineering judgment:\n" + "\n".join(
         "- " + j for j in judg[:nj]) + ("\n- ... {} more in Hazard_Classification_Summary.txt"
                                        .format(len(judg) - nj) if len(judg) > nj else "")
-    _label(layout, text, MARGIN, 140, PAGE_W - 2 * MARGIN, PAGE_H - 140 - MARGIN - 8, 0,
+    _label(layout, text, MARGIN, 140, PAGE_W - 2 * MARGIN, PAGE_H - 140 - MARGIN - 8, page,
            size=7)
     _label(layout, "{} v{} - {} - screening result; the engineer remains responsible for the "
            "classification".format(PLUGIN_NAME, PLUGIN_VERSION, time.strftime("%Y-%m-%d")),
-           MARGIN, PAGE_H - MARGIN - 6, PAGE_W - 2 * MARGIN, 5, 0, size=6)
+           MARGIN, PAGE_H - MARGIN - 6, PAGE_W - 2 * MARGIN, 5, page, size=6)
 
 
 def _dv_page(layout, dv):
@@ -623,8 +664,11 @@ def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen
     layout.setName(name)
     layout.pageCollection().page(0).setPageSize("Letter", _landscape())
 
-    # 1. summary tables
-    _summary_page(layout, dam_name, res, scenario, all_results)
+    # 1. the plain-language result card (2.30.0), then the summary tables
+    first = 0
+    if _card_page(layout, dam_name, res, scenario):
+        first = _add_page(layout)
+    _summary_page(layout, dam_name, res, scenario, all_results, page=first)
 
     # 2. overview map
     p = _add_page(layout)

@@ -29,6 +29,9 @@ TABS = (
          "One run per dam of a point layer; can hand each result to the hazard classification."),
         ("estimate", "Estimate the run time...",
          "The plan and the time of a run for this dam, without running it."),
+        ("queue", "Run a queue of dams from a list...",
+         "3.20.0: one run per dam ID of a CSV or text list, two dams side by side at one thread "
+         "each; cancel it and run it again to carry on where it stopped."),
     )),
     ("Model", (
         ("nested", "Nested fine grid near the dam...", "A fine grid near the dam, a coarse one downstream."),
@@ -38,8 +41,12 @@ TABS = (
          "Runs drawn from parameter distributions you set; 'Write each run's rasters' lets ND Dam "
          "Hazard give a class probability."),
         ("cascade", "Cascade failure of dams in a chain...", "Downstream dams that fail in turn."),
+        ("cascadecheck", "Cascade check after a run...",
+         "3.20.0: does this run's flood reach another dam? Writes the next job and the breach "
+         "outflow as that dam's inflow (recorded, not used on its own)."),
         ("hydrograph", "Breach hydrograph only...", "No flood model: the breach outflow hydrograph."),
         ("rainfallrunoff", "Rainfall to PMF inflow hydrograph...", "A PMF inflow from rainfall."),
+        ("spillwayadequacy", "Spillway adequacy...", "Does the dam pass its inflow design flood (no breach)?"),
     )),
     ("Data", (
         ("getdamdata", "Get data for this dam...",
@@ -56,6 +63,11 @@ TABS = (
     ("Results", (
         ("products", "Flood polygons and EAP map from rasters...", "Polygons, arrival contours, map."),
         ("consequences", "Life safety and damage estimate...", "Incremental life safety and damage."),
+        ("crossings", "Road and railroad crossing table...",
+         "3.20.0: per crossing, when it first gets wet, how deep and fast, how long, and "
+         "whether it counts as closed; a CSV and a layer the county can post."),
+        ("compareruns", "Compare two runs...",
+         "3.20.0: a difference raster and the structures whose danger zone changes."),
         ("ndhazardclass", "ND hazard classification (Section 5.2)...",
          "The Runner's own preview of the ND 5.2 class with the ACER TM 11 charts. ND Dam Hazard "
          "is the classification authority."),
@@ -77,6 +89,9 @@ TABS = (
         ("setupanuga", "Set up ANUGA (one-time download)...",
          "Installs ANUGA in its own private environment; no conda needed."),
         ("selftest", "Self-test in this QGIS...", "A short run of the whole chain in this QGIS."),
+        ("signrates", "Sign off the fatality rate table...",
+         "3.20.0: the rates that turn population at risk into loss of life. Ships empty and "
+         "unsigned; until an engineer signs it, loss of life is not estimated."),
     )),
 )
 ALL_TOOLS = tuple(t for _tab, tools in TABS for t in tools)
@@ -84,10 +99,11 @@ TOOL_LABEL = {t[0]: t[1] for t in ALL_TOOLS}
 
 # which parameters carry the dams folder / the dam
 WITH_DAM = frozenset({"rundam", "estimate", "sensitivity", "nested", "probabilistic"})   # + DEM
-WITH_DAMS_FOLDER = frozenset({"batch", "cascade"})                                       # + DEM
+# 3.20.0: "queue" takes a list of dam IDs and the dams folder, like batch
+WITH_DAMS_FOLDER = frozenset({"batch", "cascade", "queue"})                              # + DEM
 WITH_DAM_FOLDER = frozenset({"products", "consequences", "ndhazardclass", "animation", "benchmark",
                              "hecrasexport", "hecrasimport", "hecrasmodel",
-                             "submittal"})              # DAM_FOLDER
+                             "submittal", "crossings", "cascadecheck"})   # DAM_FOLDER
 WITH_DAM_ID = frozenset({"products", "submittal"})
 WITH_DEM = frozenset({"conditiondem", "animation"})
 # 3.9.0: tools whose empty DEM is the dam folder's ("Get data for this dam"; dam.json's data
@@ -286,6 +302,12 @@ def defaults(alg, dams_folder, dam_id, settings=None):
     if alg == "classify" and folder and os.path.isdir(folder):
         p.update({"MODE": 0, "FOLDER": folder})
         put("DAM_ID", did)
+    if alg == "cascadecheck":                                    # 3.20.0
+        put("DAMS_FOLDER", dams)
+    if alg == "compareruns" and folder and os.path.isdir(folder):
+        # 3.20.0: this dam's folder is the NEW run (B); the engineer picks the older one as A,
+        # because the window cannot know which earlier run they mean
+        put("FOLDER_B", folder)
     if alg == "verifymanifest" and folder and os.path.isdir(folder):
         put("TARGET", folder)
     if alg == "validationrecord" and folder and _file(folder, "Benchmark_Summary.csv"):
@@ -300,7 +322,64 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         if S.get("force_anuga"):
             p["FORCE_ANUGA"] = True
             p["TIER"] = 1
+    if alg in HANDOFF_TOOLS and folder:                          # 3.20.0
+        p.update(handoff_defaults(alg, folder, S, p)[0])
     return p
+
+
+# ------------------------------------------- the screening's own choices (3.20.0) --
+# the run tools whose breach and grid parameters the screening's hand-off can fill
+HANDOFF_TOOLS = frozenset({"rundam", "sensitivity", "nested", "probabilistic", "estimate"})
+
+
+def handoff_defaults(alg, folder, settings=None, already=None):
+    """({parameter: value}, notes) from what ND Dam Breach Screening recorded for this dam.
+
+    The screen's own choices beat the tool's starting values, because a dam that was screened
+    at 20 m and then modelled at 10 m because nobody told the Runner otherwise is the bug this
+    is for. What is NOT overruled is a choice the user made: the grid size is only taken from
+    the screening while the window still shows the starting value (DEFAULT_SETTINGS["grid_m"]),
+    and the breach method and the scenario are only filled when the tool has none - which is
+    always, since neither has ever been filled in from the dam folder before.
+
+    `already` is what `defaults` has filled in so far. Nothing here reaches the model directly:
+    these are the values the tool's dialog opens with, and every one can still be changed."""
+    out, notes = {}, []
+    if alg not in HANDOFF_TOOLS or not folder or not os.path.isdir(folder):
+        return out, notes
+    try:
+        from .core import screenhandoff as SH
+        from .core import breach as brmod
+        info = SH.read(folder)
+    except Exception:                                            # noqa - never stop a dialog
+        return out, notes
+    if not SH.from_screening(info):
+        return out, notes
+    where = SH.source_text(info)
+    S = dict(DEFAULT_SETTINGS)
+    S.update(settings or {})
+    already = already or {}
+    cell = info.get("cell_m")
+    if cell:                                # every run tool takes CELL (add_model_params)
+        untouched = float(S.get("grid_m") or 0.0) == float(DEFAULT_SETTINGS["grid_m"])
+        if untouched and float(already.get("CELL") or 0.0) == \
+                float(DEFAULT_SETTINGS["grid_m"]):
+            out["CELL"] = float(cell)
+            notes.append("Grid size {:g} m {} (the window still showed the starting "
+                         "{:g} m)".format(float(cell), where, DEFAULT_SETTINGS["grid_m"]))
+    method = info.get("method")
+    if method and "METHOD" not in already:
+        try:
+            out["METHOD"] = brmod.METHODS.index(method)
+            notes.append("Breach method {} {}".format(
+                brmod.METHOD_LABELS.get(method, method), where))
+        except ValueError:                                       # a method this release has not
+            pass
+    scenario = info.get("scenario")
+    if scenario and "SCENARIO" not in already:
+        out["SCENARIO"] = 0 if scenario == workflow.SCENARIO_SUNNY else 1
+        notes.append("Scenario {} {}".format(scenario, where))
+    return out, notes
 
 
 # ------------------------------------------------------ the suite's Dams folder (3.9.0) --

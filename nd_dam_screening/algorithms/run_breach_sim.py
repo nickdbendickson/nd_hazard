@@ -11,9 +11,14 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsFeatureRequest, QgsRectangle)
 
 from ..core import solver_io as sio, runner as rn, gridutil as gu
+from ..core import flood_polygons as fp
+from ..core import arrival as ar
+from ..core import resume as rsm
+from ..core import scenarios as sc
 from ..core.proposed import PHRASE as PROPOSED_PHRASE
 from . import _common as cm
 from ..core import us_units as uu
+from ..damsuite import solvegate as SG
 from ..compat import (FILE_FILE, FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, GEOM_POLYGON, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
 
 NEW_FIELDS = [("scenario", FT_STRING), ("sim_status", FT_STRING),
@@ -30,12 +35,24 @@ NEW_FIELDS = [("scenario", FT_STRING), ("sim_status", FT_STRING),
               # v0.11: no-breach baseline / incremental flood, buildings as obstructions
               ("base_run", FT_STRING), ("base_cfs", FT_DOUBLE),
               ("base_max_m", FT_DOUBLE), ("incr_max_m", FT_DOUBLE),
-              ("incr_tif", FT_STRING), ("buildings", FT_STRING)]
+              ("incr_tif", FT_STRING), ("buildings", FT_STRING),
+              # 0.28.0: the second loading case (SCEN_BOTH). Named scen2_, not sd_, because the
+              # chosen scenario can be either one: scen2 says which it was.
+              ("scen2", FT_STRING), ("scen2_status", FT_STRING), ("scen2_edge_flag", FT_STRING),
+              ("scen2_max_depth_m", FT_DOUBLE), ("scen2_max_vel_ms", FT_DOUBLE),
+              ("scen2_max_dv_m2s", FT_DOUBLE), ("scen2_area_ha", FT_DOUBLE),
+              ("scen2_depth_tif", FT_STRING), ("scen2_vel_tif", FT_STRING),
+              ("scen2_dv_tif", FT_STRING), ("scen2_arrive_tif", FT_STRING),
+              ("scen2_notes", FT_STRING)]
 ENGINES = ["LISFLOOD-FP ACC (fast, local inertial)", "LISFLOOD-FP FV1 (full shallow water)",
            "Built-in (no install; hydrograph injection)",
            "Built-in, reservoir in the grid (gradual breach, like DSS-WISE)"]
 TERRAIN = ["Cached clips only (tool 2)", "USGS 3DEP service", "Local DEM folder"]
 SCENARIOS = ["td - top of dam (ND standard)", "sd - sunny day"]
+# item 7: plain-language presets (cell_m, simh_max_h, simmax_h)
+PRESETS = ["Quick screen (50 m grid, ~12 s/dam)", "Standard (20 m, ~2 min/dam)",
+           "Detailed (10 m, ~15 min/dam)", "Custom (use settings below)"]
+PRESET_VALS = [(50.0, 12.0, 48.0), (20.0, 24.0, 96.0), (10.0, 36.0, 144.0)]  # cell_m, simh, simmax
 BUILDINGS = ["Not represented (bare terrain)", "Raise the DEM at building footprints",
              "Manning's n at building footprints"]                  # order = rn.BUILDING_MODES
 BASE_KEYS = ("base_depth", "base_vel", "incr_depth")                 # extra rasters when BASELINE is on
@@ -54,6 +71,38 @@ def _polys_near(source, xy, radius):
         kind, parts = cm.albers_parts(f, ta)
         if kind == "polygon":
             out.extend(parts)
+    return out
+
+
+def _layer_overlap(source, cases, radius):
+    """0.21.0: damsuite.solvegate.layer_overlap for the buildings layer: it must reach at least
+    one dam's study box (EPSG:5070); no CRS and a wrong extent are told apart."""
+    boxes = [(r["breach_xy"][0] - radius, r["breach_xy"][1] - radius,
+              r["breach_xy"][0] + radius, r["breach_xy"][1] + radius)
+             for r in cases if not r.get("skip") and r.get("breach_xy")]
+    if not boxes:
+        return SG.check(SG.OK, "Buildings layer", "no dam to run")
+    try:
+        crs = source.sourceCrs()
+        valid = crs is not None and crs.isValid()
+    except Exception:                                            # noqa
+        valid, crs = True, None
+    ext = None
+    if valid and crs is not None:
+        try:
+            r = cm.to_albers(source).transformBoundingBox(source.sourceExtent())
+            ext = (r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum())
+        except Exception:                                        # noqa
+            ext = None
+    try:
+        n = int(source.featureCount())
+    except Exception:                                            # noqa
+        n = None
+    union = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+             max(b[2] for b in boxes), max(b[3] for b in boxes))
+    out = SG.layer_overlap("Buildings layer", valid, ext, union, n if n is not None and n >= 0 else None)
+    if out["status"] == SG.OK and ext is not None and not any(SG.boxes_meet(ext, b) for b in boxes):
+        out = SG.layer_overlap("Buildings layer", True, ext, boxes[0], n)
     return out
 
 
@@ -110,7 +159,34 @@ class RunBreachSim(QgsProcessingAlgorithm):
                 "ft, YOUR value; water flows around the block) or get Manning's n = BUILDING_N "
                 "(default 0.15, YOUR value, times the n multiplier; water passes, slowed). Breach "
                 "injection cells, the modelled reservoir and the dam are never changed. Written to "
-                "sim_notes and the 'buildings' field. Screening approximation; not run in a real QGIS.")
+                "sim_notes and the 'buildings' field. Screening approximation; not run in a real QGIS.\n"
+                "TERRAIN FOR LARGER CLIPS (0.28.0): the default is the USGS 3DEP service, not "
+                "'cached clips only'. With cached clips only a flood that reaches the edge of the "
+                "step 2 clip STOPS there, the run finishes, and the result reads like an answer: a "
+                "3,937 ac-ft dam screened Medium with 0 buildings off a 3 km clip, and High with 27 "
+                "buildings and 86 roads when the clip could grow. The edge_flag column says YES when "
+                "it happened. PREGROW is on by default too, so the clip is sized from the downstream "
+                "trace before the first run; switch it off for a large county (the clip then grows "
+                "after a run that reaches the edge - a re-run, but it starts smaller).\n"
+                "BOTH LOADING CASES (0.28.0, SCEN_BOTH, off by default): the chosen scenario and the "
+                "other one are both modelled, each with its own rasters (<dam>_td_* and <dam>_sd_*), "
+                "and the second one's summary goes in the scen2_ columns. Step 8 classifies both and "
+                "the WORSE class governs: a hazard class follows the incremental consequences of a "
+                "breach, and the sunny-day flood arrives on a dry day on a road people are driving "
+                "on. It doubles the run time, so the window turns it on for a one-dam run and leaves "
+                "it off for a county.\n"
+                "RESUME (0.28.0): the output folder gets run_dams.json, one entry per dam, written as "
+                "each dam finishes, so an interrupted county run says 'Resuming: 124 of 200 dam(s) "
+                "already have a result' and models only the rest. A dam counts as done only while its "
+                "rasters are on disk, and a FAILED dam is always tried again. SKIPDONE off re-runs "
+                "every dam.\n"
+                "FLOOD POLYGONS (0.26.0, on by default): one GeoPackage per run, 7_flood_polygons.gpkg in "
+                "the output folder, with the layers extent (dam_id, scenario), velocity_class (vel_class: "
+                "0-2 ft/s, 2-5 ft/s, over 5 ft/s), arrival (within_hr: 0.5, 1, 2, 4, 8 h) and, from "
+                "0.28.0, arrival_contour: the flood front as LINES at 30 min, 1 h and 2 h, the "
+                "times an emergency action plan is measured against. Wet means a "
+                "depth of at least the suite's wet depth (0.1 ft). A dam run again replaces its own "
+                "polygons.")
 
     def initAlgorithm(self, config=None):
         P = self.addParameter
@@ -120,7 +196,12 @@ class RunBreachSim(QgsProcessingAlgorithm):
                                               [SRC_POINT]))
         P(QgsProcessingParameterFile("DEMDIR", "Folder of cached dam DEMs (tool 2)",
                                      behavior=FILE_FOLDER))
-        P(QgsProcessingParameterEnum("TSRC", "Terrain for larger clips", TERRAIN, defaultValue=0))
+        # 0.28.0: USGS 3DEP, not "cached clips only". With cached clips only, a flood that reaches
+        # the edge of the step 2 clip stops there and the run finishes looking finished: on a
+        # 3,937 ac-ft dam that gave Medium with 0 buildings where a clip that could grow gave
+        # High with 27 buildings and 86 roads. Choose "cached clips only" deliberately (offline,
+        # or a clip you know is big enough), not by accident.
+        P(QgsProcessingParameterEnum("TSRC", "Terrain for larger clips", TERRAIN, defaultValue=1))
         P(QgsProcessingParameterFile("LOCAL", "Local DEM folder (if selected above)",
                                      behavior=FILE_FOLDER, optional=True))
         P(QgsProcessingParameterEnum("ENGINE", "Flood engine", ENGINES, defaultValue=0))
@@ -130,20 +211,31 @@ class RunBreachSim(QgsProcessingAlgorithm):
         P(QgsProcessingParameterFile("CURVES", "Stage-storage curve folder (tool 3; reservoir-in-grid "
                                      "bed calibration)", behavior=FILE_FOLDER,
                                      optional=True))
-        cm.distance_params(P, "CELL_FT", "CELL", "Model cell size (ft), 0 = automatic by reservoir size",
+        # item 7: preset; when not Custom, overrides cell size and sim times below
+        P(QgsProcessingParameterEnum("PRESET", "Resolution preset", PRESETS, defaultValue=0))
+        cm.distance_params(P, "CELL_FT", "CELL", "Custom: model cell size (ft), 0 = auto by reservoir size",
                            33.0, min_ft=0.0)
-        P(QgsProcessingParameterNumber("SIMH", "Simulated time (h), 0 = automatic",
+        P(QgsProcessingParameterNumber("SIMH", "Custom: simulated time (h), 0 = automatic",
                                        NUM_DOUBLE, 12.0, minValue=0.0))
-        P(QgsProcessingParameterNumber("SIMMAX", "Longest allowed simulated time (h)",
+        P(QgsProcessingParameterNumber("SIMMAX", "Custom: longest allowed simulated time (h)",
                                        NUM_DOUBLE, 96.0, minValue=1.0))
         P(QgsProcessingParameterBoolean("CORR", "Model only a corridor along the flow path",
                                         defaultValue=True))
         cm.distance_params(P, "CORRW_FT", "CORRW", "Starting corridor half-width (ft)", 2000.0, min_ft=150.0)
         cm.distance_params(P, "RMAX_FT", "RMAX", "Largest terrain clip half-width (ft)", 40000.0, min_ft=1500.0)
-        # v0.20.0: opt-in (it was always on from 0.15.0)
+        # v0.20.0: opt-in (it was always on from 0.15.0). 0.28.0: on by default - the clip is
+        # sized from the valley before a flood is paid for that can only hit the edge. It costs
+        # run time; switch it off for a large county and let the clip grow after a run instead.
         P(QgsProcessingParameterBoolean("PREGROW", "Enlarge the clip before the flood run when the "
                                         "downstream trace reaches its edge (otherwise it grows "
-                                        "after a run that reaches the edge)", defaultValue=False))
+                                        "after a run that reaches the edge)", defaultValue=True))
+        # 0.28.0: both loading cases in one run (core/scenarios.py)
+        P(QgsProcessingParameterBoolean("SCEN_BOTH", "Also run the other scenario (top of dam AND "
+                                        "sunny day): the worse class governs", defaultValue=False))
+        # 0.28.0: resume (core/resume.py) - the switch that forces a county to be modelled again
+        P(QgsProcessingParameterBoolean("SKIPDONE", "Skip dams that already have a result (resume "
+                                        "an interrupted run); off re-runs every dam",
+                                        defaultValue=True))
         P(QgsProcessingParameterFeatureSource("STREAMS", "Stream lines for road-crossing cuts "
                                               "(NHD flowlines, optional)", [SRC_LINE],
                                               optional=True))
@@ -170,6 +262,9 @@ class RunBreachSim(QgsProcessingAlgorithm):
         P(QgsProcessingParameterBoolean("SKIPTRI", "Skip dams cleared by triage (tool 6)",
                                         defaultValue=True))
         P(QgsProcessingParameterBoolean("KEEP", "Keep raw solver files", defaultValue=False))
+        # 0.26.0: flood polygons (extent, velocity class, arrival) in one GeoPackage per run
+        P(QgsProcessingParameterBoolean("WRITE_POLYGONS", "Also write flood polygons (extent, velocity "
+                                        "class, arrival) to 7_flood_polygons.gpkg", defaultValue=True))
         P(QgsProcessingParameterBoolean("BASELINE", "Also run a no-breach baseline (steady ambient flow, "
                                         "dam intact) and write the incremental depth", defaultValue=False))
         P(QgsProcessingParameterNumber("BASELINE_CFS", "Baseline: steady ambient flow through the dam site "
@@ -196,10 +291,20 @@ class RunBreachSim(QgsProcessingAlgorithm):
         engine = rn.ENGINES[self.parameterAsEnum(params, "ENGINE", context)]
         exe = self.parameterAsString(params, "EXE", context)
         scen = ["td", "sd"][self.parameterAsEnum(params, "SCEN", context)]
+        # 0.28.0: the second loading case, and the resume switch
+        both = self.parameterAsBool(params, "SCEN_BOTH", context)
+        scen2 = (sc.SECOND if scen == sc.PRIMARY else sc.PRIMARY) if both else None
+        skipdone = self.parameterAsBool(params, "SKIPDONE", context)
         curves = self.parameterAsString(params, "CURVES", context)
-        cell = cm.distance_m(self, params, context, "CELL_FT", "CELL", 33.0)
-        simh = self.parameterAsDouble(params, "SIMH", context)
-        simmax = self.parameterAsDouble(params, "SIMMAX", context)
+        preset_idx = self.parameterAsEnum(params, "PRESET", context)
+        if preset_idx < len(PRESET_VALS):                       # item 7: Quick / Standard / Detailed
+            cell, simh, simmax = PRESET_VALS[preset_idx]
+            feedback.pushInfo("preset: {} (cell {:.0f} m, simh {:.0f} h, simmax {:.0f} h)".format(
+                PRESETS[preset_idx], cell, simh, simmax))
+        else:                                                    # Custom
+            cell = cm.distance_m(self, params, context, "CELL_FT", "CELL", 33.0)
+            simh = self.parameterAsDouble(params, "SIMH", context)
+            simmax = self.parameterAsDouble(params, "SIMMAX", context)
         corr = self.parameterAsBool(params, "CORR", context)
         pregrow = self.parameterAsBool(params, "PREGROW", context)
         corrw = cm.distance_m(self, params, context, "CORRW_FT", "CORRW", 2000.0)
@@ -216,6 +321,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
         tmo = self.parameterAsDouble(params, "TMO", context) * 60.0
         skiptri = self.parameterAsBool(params, "SKIPTRI", context)
         keep = self.parameterAsBool(params, "KEEP", context)
+        write_polys = self.parameterAsBool(params, "WRITE_POLYGONS", context)      # 0.26.0
         baseline = self.parameterAsBool(params, "BASELINE", context)
         base_cfs = self.parameterAsDouble(params, "BASELINE_CFS", context)
         bmode = rn.BUILDING_MODES[self.parameterAsEnum(params, "BUILDINGS", context)]
@@ -262,13 +368,17 @@ class RunBreachSim(QgsProcessingAlgorithm):
                                           dams.sourceCrs())
 
         # ---- gather everything each worker needs (QGIS objects stay on this thread)
-        feats, cases, hydro = {}, [], {}
+        feats, cases, hydro, hydro2 = {}, [], {}, {}
         for f in dams.getFeatures():
             dam_id = str(get(f, "dam_id") or f.id())
             feats[dam_id] = f
             csvp = get(f, f"{scen}_csv")
             if csvp and os.path.exists(str(csvp)):
                 hydro[dam_id] = sio.read_hydrograph_csv(str(csvp))
+            if scen2:                                   # 0.28.0: the other scenario's hydrograph
+                csvp = get(f, f"{scen2}_csv")
+                if csvp and os.path.exists(str(csvp)):
+                    hydro2[dam_id] = sio.read_hydrograph_csv(str(csvp))
         for dam_id, f in feats.items():
             rec = {"dam_id": dam_id, "skip": None}
             tri = str(get(f, "tri_result") or "")
@@ -328,7 +438,48 @@ class RunBreachSim(QgsProcessingAlgorithm):
                         "dam_line_xy": own, "pool_elev": pool, "v_below_m3": v_below,
                         "others": others if cascade != "off" else [],
                         "_streams": st, "_protect": protect, "_roads": rc})
+            if scen2 and dam_id in hydro2:               # 0.28.0: what the second run changes
+                t2, q2 = hydro2[dam_id]
+                tf2_min = get(f, f"{scen2}_tf_min", float)
+                rec["_second"] = {"t": t2, "q": q2,
+                                  "hb_m": get(f, f"{scen2}_hb_m", float),
+                                  "bb_m": get(f, f"{scen2}_bb_m", float),
+                                  "bavg_m": get(f, f"{scen2}_bavg_m", float),
+                                  "vw_m3": get(f, f"{scen2}_vw_m3", float),
+                                  "tf_s": tf2_min * 60.0 if tf2_min else None,
+                                  "start_elev": get(f, f"{scen2}_start_m", float)}
+            elif scen2:
+                rec["_second_why"] = "no {} hydrograph (tool 5 was not run for it)".format(scen2)
             cases.append(rec)
+
+        # 0.21.0: pre-run check (damsuite.solvegate) - a broken LISFLOOD-FP stops the tool before
+        # the first dam; a dam whose hydrograph is empty or whose breach point is off the terrain
+        # fails on its own (the other dams run)
+        if engine.startswith("lisflood"):
+            smoke = SG.lisflood_smoke(exe)
+            feedback.pushInfo("Pre-run check: " + SG.lines([smoke])[0])
+            if SG.failures([smoke]):
+                raise QgsProcessingException(SG.message([smoke]))
+        for rec in cases:
+            if rec.get("skip"):
+                continue
+            checks = [SG.hydro_stats(rec["t"], rec["q"])]
+            try:
+                on, why = loader.covers_point(rec["dam_id"], rec["breach_xy"])
+            except Exception as e:                               # noqa - not known: not blamed
+                on, why = None, str(e)
+            if on is False:
+                checks.append(SG.check(SG.FAIL, "DEM covers the dam", why,
+                                       "Run tool 2 for this dam or give terrain that covers it."))
+            for line in SG.lines(checks):
+                feedback.pushInfo("{}: pre-run check: {}".format(rec["dam_id"], line))
+            if SG.failures(checks):
+                rec["skip"] = SG.message(checks)
+        if bld is not None:
+            ov = _layer_overlap(bld, cases, rmax)
+            feedback.pushInfo("Pre-run check: " + SG.lines([ov])[0])
+            if SG.failures([ov]):
+                raise QgsProcessingException(SG.message([ov]))
 
         opts = dict(engine=engine, exe=exe, cell="auto" if cell <= 0 else cell, corridor=corr,
                     corridor_hw_m=corrw, radius_m=None, radius_max_m=rmax,
@@ -339,8 +490,8 @@ class RunBreachSim(QgsProcessingAlgorithm):
                     baseline=baseline, baseline_cfs=base_cfs, buildings=bmode,
                     building_raise_m=raise_m, building_n=bld_n, trace_grow=pregrow)
 
-        def paths(dam_id):
-            b = os.path.join(outdir, f"{dam_id}_{scen}")
+        def paths(dam_id, scen_key=None):
+            b = os.path.join(outdir, f"{dam_id}_{scen_key or scen}")
             return {k: f"{b}_{k}.tif" for k in ("depth", "vel", "dv", "arrive") + BASE_KEYS}
 
         MAIN = ("depth", "vel", "dv", "arrive")
@@ -353,19 +504,15 @@ class RunBreachSim(QgsProcessingAlgorithm):
                     return p[:-len(suf)] + us
             return p[:-4] + "_us.tif"
 
-        def worker(rec):
-            dam_id = rec["dam_id"]
-            if rec.get("skip"):
-                if rec["skip"] == "noflood":
-                    return {"dam_id": dam_id, "status": "noflood",
-                            "notes": ["no breach flood: " + rec.get("why", "")]}
-                if rec["skip"] == "excluded":
-                    return {"dam_id": dam_id, "status": "excluded", "notes": [rec.get("why", "")]}
-                return {"dam_id": dam_id, "status": "triage" if rec["skip"] == "triage" else "FAILED",
-                        "notes": [] if rec["skip"] == "triage" else [rec["skip"]]}
-            pth = paths(dam_id)
-            need = MAIN + (BASE_KEYS if baseline else ())
-            if all(os.path.exists(pth[k]) for k in need):
+        def run_scenario(case, scen_key, with_baseline):
+            """One scenario of one dam: re-read when its rasters are there (and SKIPDONE is on),
+            else run the model and write them. `case` is what core/runner.simulate takes - for
+            the second loading case the same dam with the other scenario's hydrograph and breach
+            (0.28.0). Worker thread: no feedback, no QGIS objects."""
+            dam_id = case["dam_id"]
+            pth = paths(dam_id, scen_key)
+            need = MAIN + (BASE_KEYS if with_baseline else ())
+            if skipdone and all(os.path.exists(pth[k]) for k in need):
                 out = {"dam_id": dam_id, "status": "cached", "notes": [], "cascade": [], "base_run": False}
                 for k in MAIN:
                     out[k if k != "arrive" else "arrive_h"], out["gt"] = cm.read_tif(pth[k])
@@ -385,7 +532,8 @@ class RunBreachSim(QgsProcessingAlgorithm):
                 dem_cell = 1.0
 
             def load_dem(center, half, c):
-                return loader.load(dam_id, center, half, c, rec["_streams"], rec["_protect"], rec["_roads"])
+                return loader.load(dam_id, center, half, c, case["_streams"], case["_protect"],
+                                   case["_roads"])
 
             def load_man(gt, shape):
                 if nlcd_src is None:
@@ -394,9 +542,9 @@ class RunBreachSim(QgsProcessingAlgorithm):
             r0 = min(max(radius0, 300.0), rmax)
             # with cached clips only there is no terrain beyond the clip: do not try to grow
             o = dict(opts, radius_m=r0, radius_max_m=rmax if tsrc != "cache" else r0, dem_cell=dem_cell,
-                     bld_polys=rec.get("_bld"))
+                     bld_polys=case.get("_bld"), baseline=with_baseline)
             logs = []                       # feedback is only touched on the main thread
-            r = rn.simulate(rec, load_dem, load_man, o, log=logs.append,
+            r = rn.simulate(case, load_dem, load_man, o, log=logs.append,
                             cancel=feedback.isCanceled)
             r["log"] = logs
             if r["status"] == "ok":
@@ -413,9 +561,60 @@ class RunBreachSim(QgsProcessingAlgorithm):
                         cm.write_tif(us_path(pth[k]), np.asarray(r[k], float) / uu.FT, r["gt"])
             return r
 
+        def worker(rec):
+            dam_id = rec["dam_id"]
+            if rec.get("skip"):
+                if rec["skip"] == "noflood":
+                    return {"dam_id": dam_id, "status": "noflood",
+                            "notes": ["no breach flood: " + rec.get("why", "")]}
+                if rec["skip"] == "excluded":
+                    return {"dam_id": dam_id, "status": "excluded", "notes": [rec.get("why", "")]}
+                return {"dam_id": dam_id, "status": "triage" if rec["skip"] == "triage" else "FAILED",
+                        "notes": [] if rec["skip"] == "triage" else [rec["skip"]]}
+            r = run_scenario(rec, scen, baseline)
+            if scen2 and r.get("status") in ("ok", "cached"):
+                # 0.28.0: the second loading case. Its own rasters, its own paths; the no-breach
+                # baseline belongs to the chosen scenario and is not repeated.
+                if rec.get("_second"):
+                    s = run_scenario(dict(rec, **rec["_second"]), scen2, False)
+                    s["scenario"] = scen2
+                    r["second"] = s
+                    r.setdefault("log", []).extend(s.get("log") or [])
+                else:
+                    r["second"] = {"dam_id": dam_id, "scenario": scen2, "status": "FAILED",
+                                   "notes": [rec.get("_second_why") or "nothing to run"]}
+            return r
+
         total = len(cases) or 1
         done = [0]
         counts = {"ok": 0, "cached": 0, "triage": 0, "noflood": 0, "excluded": 0, "FAILED": 0, "cancelled": 0}
+        # 0.26.0: the flood polygons of every dam of this run go to one GeoPackage, written on the
+        # main thread (on_done) only - never in a worker
+        poly_gpkg = os.path.join(outdir, fp.GPKG_NAME)
+        poly_logged = [False]
+        if write_polys and not fp.available():
+            feedback.pushWarning("Flood polygons not written: this GDAL cannot polygonize or write a GeoPackage.")
+            write_polys = False
+
+        def write_polygons(dam_id, r, scen_key=None):
+            scen_key = scen_key or scen
+            try:
+                n = fp.write_flood_polygons(poly_gpkg, dam_id, scen_key, r["depth"], r["vel"],
+                                            r["arrive_h"], r["gt"])
+            except Exception as e:                               # noqa - the rasters are the result; say why
+                feedback.pushWarning("dam {}: flood polygons not written ({})".format(dam_id, e))
+                return
+            if not poly_logged[0]:
+                feedback.pushInfo("Flood polygons (extent, velocity class, arrival, arrival contours at "
+                                  "{}; wet = depth >= {:g} ft): {}".format(
+                                      ", ".join(ar.label_for(h) for h in ar.CONTOUR_HOURS),
+                                      fp.DEFAULT_WET_M / fp.FT, poly_gpkg))
+                poly_logged[0] = True
+            feedback.pushInfo("dam {} ({}): flood polygons: {} extent, {} velocity class, {} arrival, "
+                              "{} arrival contour feature(s){}".format(
+                                  dam_id, scen_key, n.get(fp.LAYER_EXTENT, 0), n.get(fp.LAYER_VEL, 0),
+                                  n.get(fp.LAYER_ARRIVAL, 0), n.get(ar.LAYER_CONTOUR, 0),
+                                  " (an earlier run's replaced)" if n.get("deleted") else ""))
 
         def on_done(rec, r):
             done[0] += 1
@@ -449,6 +648,8 @@ class RunBreachSim(QgsProcessingAlgorithm):
                 put(a, "area_ha", float((depth > 0.05).sum() * cellm * cellm / 1e4))
                 for k in ("depth", "vel", "dv", "arrive"):
                     put(a, f"{k}_tif", pth[k])
+                if write_polys and r.get("arrive_h") is not None:          # 0.26.0: main thread
+                    write_polygons(rec["dam_id"], r)
                 put(a, "dv_kind", r.get("dv_kind")); put(a, "attempts", r.get("attempts"))
                 put(a, "radius_m", r.get("radius_m"))
                 put(a, "res_in_grid", "yes" if r.get("reservoir_in_grid") else "no")
@@ -472,10 +673,54 @@ class RunBreachSim(QgsProcessingAlgorithm):
                     f"{(c['arrival_h'] or 0):.2f} h{' (breached)' if c['breached'] else ''}" for c in cas))
             elif st == "FAILED":
                 feedback.reportError(f"dam {rec['dam_id']}: {'; '.join(r.get('notes') or [])}")
+            # 0.28.0: the second loading case, on the same row (core/scenarios.py: the worse
+            # class governs, and step 8 is the one that knows the classes)
+            sec = r.get("second")
+            if scen2:
+                put(a, "scen2", scen2)
+                put(a, "scen2_status", (sec or {}).get("status") or "not run")
+                put(a, "scen2_notes", "; ".join((sec or {}).get("notes") or []))
+            if sec and sec.get("status") in ("ok", "cached"):
+                spth = paths(rec["dam_id"], scen2)
+                sdepth, svel, sdv = sec["depth"], sec["vel"], sec["dv"]
+                scell = sec.get("cell_m") or abs(sec["gt"][1])
+                sedge = sec.get("edge_flag")
+                if sedge is None:
+                    sedge = bool(sio.edge_flooded(np.where(sdepth > gu.NODATA + 1, sdepth, 0)))
+                put(a, "scen2_edge_flag", "YES" if sedge else "no")
+                put(a, "scen2_max_depth_m", float(np.max(sdepth)))
+                put(a, "scen2_max_vel_ms", float(np.max(svel)))
+                put(a, "scen2_max_dv_m2s", float(np.max(sdv)))
+                put(a, "scen2_area_ha", float((sdepth > 0.05).sum() * scell * scell / 1e4))
+                for k in ("depth", "vel", "dv", "arrive"):
+                    put(a, "scen2_{}_tif".format(k), spth[k])
+                if write_polys and sec.get("arrive_h") is not None:
+                    write_polygons(rec["dam_id"], sec, scen2)
+            elif sec:
+                feedback.pushWarning("dam {}: the {} scenario did not run: {}".format(
+                    rec["dam_id"], scen2, "; ".join(sec.get("notes") or []) or "no reason given"))
+            # 0.28.0: the resume manifest - written per dam, so an interrupted county run can be
+            # picked up where it stopped (core/resume.py)
+            try:
+                rasters = [paths(rec["dam_id"])[k] for k in MAIN] if st in ("ok", "cached") else []
+                rsm.record(outdir, rec["dam_id"], st, scenario=scen, rasters=rasters,
+                           note="; ".join(notes), extra={"scen2": scen2 or "",
+                                                         "scen2_state": (sec or {}).get("status") or ""})
+            except Exception as e:                               # noqa - a lost note, not a lost run
+                feedback.pushWarning("dam {}: the run manifest was not written ({})".format(
+                    rec["dam_id"], e))
             o = QgsFeature(fields); o.setGeometry(f.geometry()); o.setAttributes(a)
             sink.addFeature(o)
 
         feedback.pushInfo(f"{len(cases)} dams, engine {engine}, {workers} at a time")
+        if scen2:
+            feedback.pushInfo("Both loading cases: {} and {}. {}".format(
+                sc.SHORT[scen], sc.SHORT[scen2], sc.INCREMENTAL_RULE))
+        # 0.28.0: resume. The manifest is what the last run got through; the rasters still decide.
+        was = rsm.summary_text(outdir, total=len(cases))
+        if was:
+            feedback.pushInfo("Resuming: " + was if skipdone else
+                              "Earlier run: " + was + " They are being RE-RUN (skip-done is off).")
         rn.run_batch(cases, worker, workers=workers, cancel=feedback.isCanceled, on_done=on_done)
         feedback.pushInfo("simulations: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
         return {"OUT": dest}

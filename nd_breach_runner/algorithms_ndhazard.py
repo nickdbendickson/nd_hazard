@@ -317,13 +317,13 @@ def _dam_id(folder):
 
 def not_digitized_message(cs):
     return ("The ACER TM 11 depth-velocity charts (ND Fig. 5.1 houses, Fig. 5.2 mobile homes) "
-            "are not digitized and checked in {} (status '{}', digitized by '{}', checked by "
+            "are not signed off in {} (status '{}', digitized by '{}', signed off by "
             "'{}'), so the chart method cannot run. These are 2D model results: until the "
-            "charts are digitized and checked, use the lethality method '{}' (it "
-            "over-classifies), or give a digitized and checked chart file. The 2 ft depth rule "
-            "is only allowed for a 1D model (5.2.1.1).".format(
+            "charts are signed off (ND Dam Hazard > Chart sign-off; one engineer is enough), "
+            "use the lethality method '{}' (it over-classifies), or give a signed-off chart "
+            "file. The 2 ft depth rule is only allowed for a 1D model (5.2.1.1).".format(
                 cs.path or "the chart file", cs.status, cs.digitized_by or "-",
-                cs.checked_by or "-", nh.LETHALITY_LABELS[nh.LETHALITY_ALL_WET]))
+                getattr(cs, "signer", "") or "-", nh.LETHALITY_LABELS[nh.LETHALITY_ALL_WET]))
 
 
 # ------------------------------------------------------------------------------ algorithm
@@ -354,9 +354,10 @@ class NDHazardAlgorithm(_ToolBase):
                 "(depth at its point at least the wet depth) passes its class on (5.3). 'Any "
                 "depth' means the wet depth (default 0.1 ft). Missing AADT or train counts are "
                 "data gaps, classified by the assumption you choose.\n\n"
-                "READ FIRST. The chart method needs digitized and checked charts "
-                "(core/acer_tm11_charts.json or your own chart file); the file shipped is not "
-                "digitized, so the chart method stops with a message until it is. The result is "
+                "READ FIRST. The chart method needs signed-off charts "
+                "(core/acer_tm11_charts.json or your own chart file); the file shipped is signed "
+                "off by the engineer named in it (one engineer is enough; ND Dam Hazard > Chart "
+                "sign-off writes and installs another). The result is "
                 "a screening classification for the engineer; the official classification is "
                 "made by the ND Department of Water Resources.\n\n" + SAMPLING + "\n\n"
                 "Writes 'Hazard Classification (ND 5.2).md' and '.json', 'Hazard Classification "
@@ -693,7 +694,7 @@ class NDHazardAlgorithm(_ToolBase):
         from .core import damjson
         state, text = damjson.classified_preview(folder)
         if state == "error":
-            feedback.reportError("Check: " + text, fatalError=False)
+            feedback.pushWarning("Check: " + text)
         else:
             feedback.pushInfo(text)
         if paths["geojson"]:

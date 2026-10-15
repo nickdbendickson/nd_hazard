@@ -1,9 +1,182 @@
-# ND Dam Breach Screening (v0.20.0)
+# ND Dam Breach Screening (v0.28.0)
 
 Screening-level batch tool: for each North Dakota dam, estimate storage, place a breach,
 compute a breach hydrograph, run a 2D flood simulation, and suggest a hazard class under
 the ND Dam Safety Standards policy (Sec. 5). **Output is for prioritising reviews. The
 official classification is the Department's.**
+
+## New in 0.28.0
+
+**A truncated flood is no longer a quiet answer.** "Step 7 terrain for larger clips" now follows the
+terrain source (3DEP, or your LiDAR when a folder is given) instead of *cached clips only*. With
+cached clips only, a flood that reached the edge of the step 2 clip was cut off there and the dam
+screened on what fitted inside it: a 3,937 ac-ft dam screened **Medium with 0 buildings**, and with
+the clip allowed to grow the same dam screened **High with 27 buildings and 86 roads**. **This moves
+results, in the conservative direction only** - a dam whose flood stayed inside its clip is
+unchanged; a dam whose flood was cut off can only gain consequences, so its class stays the same or
+rises. A project that saved *cached clips only* on purpose keeps it, and the preflight now warns
+about it with the reason. The flag itself is on the screen instead of only in `summary.csv`: the
+Simple tab's step line and the Results tab's dam table say *their class is a FLOOR, not an answer*
+in red, with the whole reason on the cell.
+
+**The window tells the truth about the grid.** The resolution preset (Quick 50 m / Standard 20 m /
+Detailed 10 m, or Custom) is passed to step 7 and shown live under the boxes. The "Grid size (ft)"
+box did not decide the run - step 7 took its own default of 50 m whatever it said - and is now
+enabled for the Custom preset only. The cached DEM cell follows the source cell (10 m, 32.8 ft)
+instead of caching a 10 m source at 1 m (9 million cells for nothing).
+
+**Both loading cases in one run.** Sunny-day and flood-day are modelled (step 7 `SCEN_BOTH`) and
+classified, the **worse** class governs under the incremental rule, and `hz_scen` /
+`hz_scen_class` / `hz_scen_why` say which case that was. **This moves results upward only**, and
+only for a dam whose second loading case is worse. On by default for *Run one dam* (a minute of
+model), off by default for a county.
+
+**How much the breach parameters matter, per dam.** `bp_class_lo` / `bp_class_hi` / `bp_stable` /
+`bp_detail`: the ND 5.3 equations' low / mid / high breach width and formation time, each routed,
+with the class under each. A dam whose class depends on the breach parameters is **marked** instead
+of being given one number, and its confidence drops to `review`. The band classes come from the
+modelled flood scaled by the change in peak outflow (d ~ Q^0.6, v ~ Q^0.4), not from a second flood
+model, so they can raise a structure already in the flood but cannot find one outside it: the
+spread is a lower bound on the uncertainty. **The dam's own class is never changed by the band.**
+
+**Warning time.** Arrival-time contours (30 min, 1 h, 2 h) as a layer in `7_flood_polygons.gpkg`,
+and per impacted structure the arrival hour and the warning band (`warn_time`: under 15 min /
+15-60 min / over 60 min, the loss-of-life bands of the suite), with `hz_warn` per dam.
+
+**An interrupted county run picks up where it stopped.** Step 7 writes `run_dams.json` in
+`7_simulations` as each dam finishes and skips the dams that already have a result (`SKIPDONE`, on
+by default; switch it off to force a re-run). The manifest never decides a dam is done on its own:
+its rasters have to still be there, and a FAILED dam is tried again.
+
+**The window.** A time estimate next to the elapsed timer before a run (dams x seconds per dam at
+the cell size that will really be used, the workers, and what an interrupted run has left). A grey
+Run button says **why** it is grey, in its tooltip and the status line. *Run all* is now **Run
+county**, beside *Run one dam...*. A new **Priority** tab ranks every dam of the Dams folder by
+computed class against the class on record, worst disagreement first (ND *Medium* and DWR
+*Significant* are the same tier and count as agreement), with an Excel export of the whole list and
+of the review list. The preflight no longer warns *could not open* for the four `0_suite_data`
+clips that the data step writes when the run starts.
+
+**The hand-off to a detailed run.** The `screened` status this plugin writes to `dam.json` now
+records what the run actually did: `cell_m` (the grid the flood really ran at, in metres),
+`method` (the breach equation and mode as an ND Dam Breach Runner method key) and `scenario` /
+`loading_case` (the case the reported class came from - the governing one when both were run).
+ND Dam Breach Runner 3.20.0 reads them and fills only the inputs the engineer left empty, so a
+20 m screening no longer becomes a 10 m detailed run with the Runner's own breach. Both of this
+plugin's loading cases are handed over as the Runner's `sunny` scenario: neither routes a flood
+inflow, which is what the Runner's `flood` means; `loading_case` keeps the distinction. Tool 5
+records the breach mode in a field of its own (`brch_mode`).
+
+No change to the hazard criterion (the ACER TM 11 charts, shipped signed off) or to the ND 5.2 /
+5.3 rules.
+
+## New in 0.27.0
+
+**Streams and waterbodies are USGS 3DHP.** With ND Dam Hazard 2.29.0 (suite 1.15.0) the offline pack and the
+servers list give 3DHP flowlines and waterbodies instead of NHD (pack layers 3DHP_flowlines and
+3DHP_waterbodies; a pack from before 1.19 with NHD_ layers is still read, and a pack with both is read
+once). Each 3DHP feature has the NHD name and type fields too (gnis_name, ftype), so tools 3, 6, 7 and 16 read
+them as before. The screening method is unchanged.
+
+## New in 0.26.0
+
+- **Tool 3, a dam with no basin in the DEM.** When no mapped water body, no hydro-flattened water and
+  no closed depression is found within the search distance, but the record has an inventory storage
+  (maximum, else normal) and a height, the dam is no longer FAILED: a quadratic stage-storage curve
+  from the ground at the dam point (median of the 5 x 5 cells) to ground + height, holding the
+  inventory volume at the top, is assumed. `stor_method` = `inventory curve`, `stor_src` =
+  `inventory (assumed curve)`, confidence low, `stor_notes` starts with `ASSUMPTION`, and the log
+  carries a warning. Verify the location and the DWR values of such dams. Without a storage or a
+  height the dam still fails as before.
+- **Tool 4, breach direction.** When neither the water-body test nor the terrain side test gives a
+  vote, the steepest drop of the DEM from the dam midpoint (8 compass directions at 200 m, or 40 m
+  when 200 m has no data; at least 0.2 m of fall) is the downstream direction: `dir_method` =
+  `terrain trace`, `dir_conf` = low, with a note to verify.
+- **Tool 7, flood polygons.** One GeoPackage per run, `7_flood_polygons.gpkg` in the output folder,
+  with three layers: `extent` (dam_id, scenario), `velocity_class` (vel_class: `0-2 ft/s`,
+  `2-5 ft/s`, `over 5 ft/s`) and `arrival` (within_hr: 0.5, 1, 2, 4, 8). Wet means a depth of at
+  least the suite's wet depth (0.1 ft), the same as the hazard step, not 1 ft. A dam run again
+  replaces its own polygons. Option `WRITE_POLYGONS` (on by default).
+- **Window.** *Run selected dams...* next to *Run one dam...*: a list of the dams of step 1 with
+  check boxes; the ticked dams run through the whole chain together into one folder under
+  `one_dam/` (the step 1 filter set to their IDs; the window's own settings are not changed). On
+  the Results tab, with a row of the dam table selected, *Open Runner...* and *Open Hazard
+  Helper...* open the other plugin on that dam.
+- **Preflight.** An NSI-only structures layer (`occtype` / `bldgtype`) no longer warns about the
+  missing `occ_cls` / `prim_occ` fields.
+- **Local DEM.** A DEM GeoTIFF written by the download tool carries the tags SOURCE, CRS
+  (EPSG:5070), UNITS (metres) and CELL_M beside its `_dem.txt` sidecar.
+
+## New in 0.22.1
+
+Tool 15 (Run the steps in order) from the command line (`qgis_process run nddam:runchain` with no `--INCLUDE`) no longer runs step 0 (Build offline data package) first. QGIS passed option 0 for an empty optional-steps list, so the chain stopped at step 0 when no data package inputs were given.
+
+When you give tool 1 (or the window) your own DWR layer and the NID comes from the suite data (the offline pack, the nid/ folder or a download), only the NID dams within 0.5 mi of your DWR layer's dams are added, and only inside the chosen counties. Before, every NID dam of the work area was added, which is all of North Dakota when the work folder has no dams yet, so a one-dam run became a run of about 980 dams. Without your own DWR layer the NID still covers the work area.
+
+## New in 0.22.0 (with ND Dam Hazard 2.24.0 and ND Dam Breach Runner 3.14.0; damsuite 1.10.0)
+
+The offline pack is now a folder, ND_Dam_Suite_Pack, with one GeoPackage per layer (structures/, roads/, railroads/, lifelines/, hydro/, dwr/, hifld/, boundaries/, landcover/). Each file opens in QGIS by itself. LAYERS.txt in the folder lists every layer, its file, feature count and source, and what was left out. The DWR inventory files, the HIFLD lifeline layers and NLCD land cover are inside the pack, so the pack alone is enough. An older nd_offline_pack.zip still works, and the dwr/, hifld/ and nlcd/ drop-in folders are still read when the pack lacks a layer.
+
+Data source, shared by the three plugins: Offline pack (choose its folder or zip) or Download from the servers (the pack is not read). Set it in Suite data and servers in any of the plugins; the setting is the same in all three. With Download chosen, the window's suite-data fallback downloads a layer for the work area into `<work>/0_suite_data/` (reused for 7 days) instead of clipping the pack; if a download fails it falls back to the dwr/ and nid/ folders.
+
+## New in 0.21.1 (with ND Dam Hazard 2.23.0 and ND Dam Breach Runner 3.13.0; damsuite unchanged, 1.9.0)
+
+**Tool 1 fills its field boxes in.** When a DWR or NID layer is picked, or the window fills it
+in, each field box is set to the layer's field: the DWR GeoPackage export's `structure_id`,
+`max_dam_height`, `max_pool_vol`, `normal_area`, `hazard_class`, `national_id` ... (the boxes'
+defaults are the shapefile's 10-character names, which the GeoPackage does not have, so they
+stayed blank) and the NID's `NIDID`, `NAME`, `NID_HEIGHT`, `NORMAL_STORAGE`, `MAX_STORAGE`,
+`SURFACE_AREA`, `HAZARD_POTENTIAL`, `DAM_LENGTH`. A field you choose is kept. A box left empty is
+also found at run time, and the log names each field. Before 0.21.1 this was done for DWR layers
+only, so an NID layer with empty boxes added dams with no ID, height or storage.
+
+**NID without the offline pack.** The NID layer comes from the offline pack. Without it, put the
+NID dams file (for example `NID_dams.gpkg`) in a folder `nid/` in the suite data folder; "Fill
+empty layers from the suite data" and tool 1 then use it.
+
+**Tool 1 uses the suite data in the window.** An empty DWR or NID box on the Inputs tab now falls
+back when tool 1 opens, like every other input (the dam folder's data, the suite offline pack,
+`dwr/`, `nid/`), whether or not "Fill empty layers" was pressed. Clear the NID box for a DWR-only
+run.
+
+**Tools 2, 3 and 4 find tool 1's output.** The window fills them from `<work folder>/1_dams.gpkg`
+as before and now says in its log when that file is not there. Opened from the Processing
+Toolbox (which knows no work folder), their dialog starts with the last Standardized dams written
+(tool 4: tool 3's, else tool 1's); a run given no layer still stops. Tool 1 says in its log when
+its output went to a temporary layer.
+
+## New in 0.21.0 (ND dam suite release set: ND Dam Hazard 2.23.0, ND Dam Breach Runner 3.13.0)
+
+Ideas taken from the DamSafety plugins audit (2026-10-08) and rebuilt on this plugin's own rules.
+
+**Tool 7 pre-run check** (`damsuite/solvegate.py`). Before the first dam, LISFLOOD-FP runs
+1 simulated second on a 5 x 5 grid (once per executable; never for the built-in engine;
+`ND_DAM_PRE_RUN_SMOKE=0` skips it). Each dam's hydrograph must have a peak and a volume and
+its terrain must cover the dam point; a dam that fails is FAILED with the reason and the
+other dams still run. A buildings layer whose whole extent misses the dams stops the run and
+says whether it has no CRS or does not overlap.
+
+**Smaller 3DEP tiles.** Without the suite terrain cache, 3DEP terrain is downloaded in
+tiles of at most 1,200 pixels (was 4,000); a 10-mile box at 10 m used to be one tile and
+could time out. Through the suite terrain cache (2,000-pixel tiles), a tile whose request
+fails is asked for again as four quarters and joined (needs GDAL). The cache grid is
+unchanged, so cached tiles stay valid.
+
+**Fill empty layers from the suite data** (a button on the Inputs tab). It shows and sets
+the layers a run would use for the empty slots (DWR dams, NID dams, structures, roads,
+railroads, lifelines, water bodies, dam lines), taken from the dam folder, the offline pack
+or the suite `dwr/` folder by the same rules the run uses. A slot you set is left alone.
+Streams and land cover are not filled because they change the model.
+
+**Ponds: inventory storage check** (tool 16, new optional field `WB_STOR`, ac-ft). When
+the inventory storage and the DEM curve differ by more than 50%, the pond gets a
+`CHECK: inventory storage ...` note and low storage confidence (`stor_conf`), and
+`inv_vs_est` holds the ratio. The DEM curve is still used.
+
+**Fixed: tool 16 gave a different storage on a second run.** The rerun read each pond from
+its dam clip (`dam_<ID>.tif`, written at the coarser clip cell) instead of the terrain at
+the analysis cell; the test pond went from 2,800 m3 to 1,600 m3. The clip is now used only
+when it is as fine as the analysis cell.
 
 ## New in 0.20.0 (ND dam suite release set: ND Dam Hazard 2.22.0, ND Dam Breach Runner 3.12.0)
 
@@ -256,9 +429,9 @@ every item was exercised against the simulated QGIS (three flavours: 3.28, 3.40,
 Not done / not run: nothing here has been run in a real QGIS. The settings grid, the Review tab's
 layer edits (sqlite3 on the GeoPackages) and the 3DEP reachability check were tried only against test
 doubles and files. The `Both` merge copies geometries as they are; both sides are written in the same
-CRS by the tools, so this holds for the work folder's own files only. The ACER TM 11 chart file is
-not digitized in this build, so the chart criterion fails the preflight until ND Dam Hazard's chart
-sign-off has been done - the check says so.
+CRS by the tools, so this holds for the work folder's own files only. The ACER TM 11 chart file
+ships signed off (0.26.1), so the chart criterion passes the preflight; a chart file of your own must
+name the engineer who signed it off - the check says so.
 
 ## New in 0.12.0 (ND dam suite release set: ND Dam Hazard 2.12.2, ND Dam Breach Runner 3.4.4)
 
@@ -385,10 +558,11 @@ QGIS is tool 14.
   the same table ND Dam Hazard 2.11.0 uses). A screenshot trace of the two figures agrees with the
   table within 0.05 ft (house high line), 0.09 ft (house low line) and 0.02 ft (mobile homes) for
   95 % of its points.
-- The file's status stays "not digitized" until it records the person who digitized the curves
-  and a DIFFERENT person who checked them (`digitized_by` / `checked_by`, status "digitized";
-  ND Dam Hazard > Chart sign-off writes it that way). Until then the chart method still refuses
-  and now says that the polygons are there and only the two names are missing.
+- Since suite 1.14.1 the file ships signed off by Nicholas Bendickson (2026-10-12): one
+  engineer's sign-off is enough (`signed_off_by`, status "digitized"; a second engineer in
+  `checked_by` is optional). ND Dam Hazard > Chart sign-off writes a file for another engineer
+  and installs it in both plugins. A chart file without a signing engineer still refuses the chart
+  method and says what is missing.
 - Suite version check: ND Dam Hazard below 2.11.0 is reported (it uses older quartic curves, up to
   0.18 ft from the table).
 - Not run in a real QGIS.
@@ -565,12 +739,11 @@ converts the screening's metres and m/s to feet and ft/s.
   "comparison only, not the ND authority"; everything but the structures follows nd_hazard.
 - New fields: `hz_basis` (method), `hz_border`, `hz_gaps` (truncated to 254 characters),
   `hz_chart` (chart status and the first 12 characters of the chart file's SHA-256).
-- **The charts must be digitized and checked first.** The shipped `acer_tm11_charts.json` is
-  "not digitized", so the default method stops with nd_hazard's message pointing to the
-  conservative method; no chart numbers are invented. Digitize both figures (velocity ft/s,
-  depth ft polygons for the high danger and judgment zones), record who digitized and who
-  checked them (both are required), set the status to "digitized", and give the file as
-  CHART_FILE (or update both plugins' copies together). The SHA-256 in `hz_chart` shows which
+- **The charts are signed off.** The shipped `acer_tm11_charts.json` is signed off by Nicholas
+  Bendickson (2026-10-12), so the default method runs. A chart file of your own (CHART_FILE) must
+  record the engineer who signed it off (`signed_off_by`, status "digitized"; ND Dam Hazard >
+  Chart sign-off writes one and installs it in both plugins), else the tool stops with
+  nd_hazard's message pointing to the conservative method. The SHA-256 in `hz_chart` shows which
   file a result used.
 - Chart points use the maximum depth and maximum velocity at a structure, which may not occur
   together: an upper bound. Tool 8 does not write the chart SVG figures (it has no report
@@ -650,8 +823,8 @@ stream, never through a DWR dam line; optionally only where a road crosses.
 - Triage uses the unattenuated peak, normal depth, a margin (30% of depth, >= 0.15 m) and a
   reach of 2x the released volume. It is a screening shortcut; keep the audit share.
 - The policy gives no numeric depth-velocity lethality; it points to the Reclamation 1988
-  (ACER TM 11) charts, which are NOT digitized in this release: until they are digitized and
-  checked, tool 8 runs only with the ND 1D rule or the conservative method. The FEMA/Feinberg
+  (ACER TM 11) charts, digitized by the engineer and shipped signed off since 0.26.1 (the
+  default method); the ND 1D rule and the conservative method remain as options. The FEMA/Feinberg
   thresholds are practice values from the DSS-WISE Lite Technical Report (comparison only).
 - Tool 7b has been exercised only against test doubles of the runner and of QGIS; run a few
   dams you know through it before a batch.

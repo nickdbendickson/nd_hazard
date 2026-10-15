@@ -499,7 +499,7 @@ def ndhazard_tool_is_defined_registered_and_ids_are_unique():
         assert nh.CLASSES[a.parameterDefinition(k).kwargs["defaultValue"]] == nh.MEDIUM
     assert a.parameterDefinition("WET_FT").kwargs["defaultValue"] == 0.1
     h = a.shortHelpString()
-    assert "READ FIRST" in h and "not digitized" in h and "Department of Water Resources" in h
+    assert "READ FIRST" in h and "signed off" in h and "Department of Water Resources" in h
     # registered once, every algorithm id is unique, and every menu item names a real one
     names = [cls().name() for cls in algs.ALGORITHMS]
     assert len(names) == len(set(names)), sorted(n for n in names if names.count(n) > 1)

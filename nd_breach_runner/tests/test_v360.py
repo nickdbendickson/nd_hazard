@@ -168,7 +168,7 @@ def v360_version():
     from nd_breach_runner.core import workflow
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
-    assert cp.get("general", "version") == workflow.VERSION == "3.12.0"
+    assert cp.get("general", "version") == workflow.VERSION == workflow.metadata_version()
     text = open(os.path.join(PLUGIN, "README.md"), encoding="utf-8").read() if os.path.exists(
         os.path.join(PLUGIN, "README.md")) else open(os.path.join(PLUGIN, "README.txt"), encoding="utf-8").read()
     assert "S_INVERT_TOL_FT" in text or "inventory" in text.lower()

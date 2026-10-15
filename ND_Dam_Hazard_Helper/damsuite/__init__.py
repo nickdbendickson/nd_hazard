@@ -36,6 +36,11 @@ Modules:
               ND Dam Hazard, 1.5.0)
   keepawake   keeps the computer from sleeping while a flood model runs, beside the solver
               (1.8.0)
+  solvegate   checks before a flood solve starts: LISFLOOD-FP starts, the DEM covers the dam,
+              the hydrograph has a peak and a volume, a layer meets the study area (1.9.0)
+  gpkgpack    the offline pack as a folder with one GeoPackage per layer, manifest.json and
+              LAYERS.txt (pack format 2): writer and reader (1.10.0)
+  netproxy    the proxy set in QGIS, for the downloads that go through urllib (1.16.2)
 
 `selfcheck()` compares this package's files with FILES.json and returns a list of problems
 ("missing: x.py", "changed: x.py", "unexpected file: x.py"); [] means the copy is intact.
@@ -51,14 +56,18 @@ import os
 from . import chain, dam_record, gdalsafe, settings, suite_home, tm11_curves, units, versions, xlsx_lite   # noqa: F401,E501  (sub-modules, relative imports only)
 from . import offline_pack, suitegpkg, suitedata, services, terrain_cache, damdata   # noqa: F401,E501  (1.5.0)
 from . import keepawake   # noqa: F401  (1.8.0)
+from . import solvegate   # noqa: F401  (1.9.0)
+from . import gpkgpack   # noqa: F401  (1.10.0)
+from . import hydro3dhp   # noqa: F401  (1.15.0)
+from . import netproxy   # noqa: F401  (1.16.2)
 
-SUITE_VERSION = "1.8.0"
+SUITE_VERSION = "1.18.0"
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",
            "gdalsafe", "settings", "suite_home", "tm11_curves", "units", "versions", "xlsx_lite",
            "offline_pack", "suitegpkg", "suitedata", "services", "terrain_cache", "damdata",
-           "keepawake"]
+           "keepawake", "solvegate", "gpkgpack", "hydro3dhp", "netproxy"]
 
 
 def package_files(folder=None):

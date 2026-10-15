@@ -217,3 +217,79 @@ def describe(structures):
             rows.append("{} ({}, {:.1f} m span): cut through the embankment in both models{}".format(
                 s.name or "?", s.kind, s.width_m, "; " + s.invert_note if s.invert_note else ""))
     return rows
+
+
+# --- 3.13.0: culvert candidates (idea from the DamSafety audit, written here) ----------------
+CANDIDATE_MERGE_M = 30.0      # crossings closer than this to each other or to a given structure are one
+
+
+def _seg_cross(a, b, c, d):
+    """(t, (x, y)) where segment a-b crosses c-d (t along a-b), or None."""
+    rx, ry = b[0] - a[0], b[1] - a[1]
+    sx, sy = d[0] - c[0], d[1] - c[1]
+    den = rx * sy - ry * sx
+    if abs(den) < 1e-12:
+        return None
+    t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den
+    u = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return t, (a[0] + t * rx, a[1] + t * ry)
+    return None
+
+
+def culvert_candidates(roads, path, structures=(), merge_m=CANDIDATE_MERGE_M):
+    """Where a road crosses the flood's flow path there is probably a culvert or a bridge. These
+    are CANDIDATES for the engineer to check, not structures: they are listed in the run report
+    and in the HEC-RAS export, and never put in the model (their size is unknown, and a guessed
+    size can raise or lower the depths).
+
+    roads: polylines [(x, y), ...] in the work CRS; path: the flow trace [(x, y), ...];
+    structures: the run's Structure objects (a crossing near one of them is already covered).
+    Returns [{"name", "x", "y", "along_mi", "road", "angle_deg", "source": "candidate",
+    "surveyed": False}] sorted downstream."""
+    pts = [tuple(map(float, p)) for p in (path or [])]
+    if len(pts) < 2:
+        return []
+    cum = [0.0]
+    for a, b in zip(pts[:-1], pts[1:]):
+        cum.append(cum[-1] + float(np.hypot(b[0] - a[0], b[1] - a[1])))
+    given = []
+    for s in structures or []:
+        ln = np.asarray(getattr(s, "line", []), float)
+        if len(ln):
+            given.append(ln.mean(axis=0))
+    out = []
+    for ri, road in enumerate(roads or []):
+        r = [tuple(map(float, p)) for p in np.asarray(road, float)]
+        for j in range(len(r) - 1):
+            for i in range(len(pts) - 1):
+                hit = _seg_cross(pts[i], pts[i + 1], r[j], r[j + 1])
+                if hit is None:
+                    continue
+                t, (x, y) = hit
+                along = cum[i] + t * (cum[i + 1] - cum[i])
+                if any(np.hypot(x - g[0], y - g[1]) < merge_m for g in given):
+                    continue
+                if any(np.hypot(x - o["x"], y - o["y"]) < merge_m for o in out):
+                    continue
+                rdx, rdy = r[j + 1][0] - r[j][0], r[j + 1][1] - r[j][1]
+                fdx, fdy = pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]
+                cosang = abs(rdx * fdx + rdy * fdy) / max(
+                    1e-9, np.hypot(rdx, rdy) * np.hypot(fdx, fdy))
+                out.append({"x": round(x, 2), "y": round(y, 2), "along_mi": along / 1609.344,
+                            "road": ri + 1,
+                            "angle_deg": round(float(np.degrees(np.arccos(min(1.0, cosang)))), 0),
+                            "source": "candidate", "surveyed": False})
+    out.sort(key=lambda o: o["along_mi"])
+    for k, o in enumerate(out, 1):
+        o["along_mi"] = round(o["along_mi"], 3)
+        o["name"] = "candidate {} (road {} at {:.2f} mi)".format(k, o["road"], o["along_mi"])
+    return out
+
+
+def write_candidates_csv(path, cands):
+    with open(path, "w") as f:
+        f.write("name,x,y,along_mi,road,angle_deg,source,surveyed\n")
+        for c in cands:
+            f.write('"{}",{},{},{},{},{},{},no\n'.format(c["name"], c["x"], c["y"], c["along_mi"],
+                                                         c["road"], c["angle_deg"], c["source"]))

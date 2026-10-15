@@ -221,15 +221,41 @@ def nd_hazard_nan_aadt_unknown_velocity_and_zero_wet_depth():
 
 
 @test
-def nd_hazard_charts_need_who_digitized_and_checked():
+def nd_hazard_charts_need_a_signing_engineer():
     cs = test_charts()
     cs.checked_by = ""
+    assert cs.ready and cs.signer == "test"           # one engineer is enough (suite 1.14.1)
+    cs.digitized_by = ""
     assert not cs.ready
     try:
         nh.classify([nh.Structure("a", 1.0, 1.0)], charts=cs)
         raise AssertionError("expected ChartsNotDigitized")
     except nh.ChartsNotDigitized as e:
-        assert "checked" in str(e) and "1D model" in str(e)
+        assert "signed off" in str(e) and "1D model" in str(e)
+    cs.signed_off_by = "another engineer"
+    assert cs.ready and cs.signer == "another engineer"
+
+
+@test
+def nd_hazard_shipped_charts_are_signed_off():
+    from nd_breach_runner.damsuite import tm11_curves as tm
+    cs = nh.load_charts()                         # the file shipped with the plugin
+    assert cs.ready and cs.status == "digitized" and cs.signer == "Nicholas Bendickson"
+    assert cs.signed_on == "2026-10-12" and cs.info()["signed_off_by"] == "Nicholas Bendickson"
+    names = {tm.LOW: nh.ZONE_LOW, tm.JUDGMENT: nh.ZONE_JUDGMENT, tm.HIGH: nh.ZONE_HIGH}
+    n = 0
+    for kind, key in (("house", nh.CHART_HOUSE), ("mobile", nh.CHART_MOBILE)):
+        vmax, dmax = tm.AXES[kind]
+        for i in range(0, 21):
+            v = vmax * i / 20.0
+            for j in range(1, 21):
+                d = dmax * j / 20.0
+                if min(abs(d - tm.depth_at(kind, tm.HIGH, v)),
+                       abs(d - tm.depth_at(kind, tm.LOW, v))) < 0.03 * dmax:
+                    continue                      # on or next to a line: the tolerance band
+                assert cs.charts[key].zone(d, v)[0] == names[tm.zone(kind, d, v)], (kind, d, v)
+                n += 1
+    assert n > 500
 
 
 @test

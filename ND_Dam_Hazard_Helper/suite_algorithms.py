@@ -264,7 +264,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
             "inventory (Bridge_Inventory_External) and centerline pipes (Center_Line_Pipes).\n"
             "Each structure is placed where a stream crosses a road or rail line within the "
             "search distance of its point (the nearest crossing; rail first for railroad "
-            "bridges). The line follows the stream, upstream end first (NHD flowlines are "
+            "bridges). The line follows the stream, upstream end first (3DHP flowlines are "
             "digitised in the flow direction; tick 'reversed' for streams drawn upstream), and "
             "is (embankment top width + 2 x side margin) long, divided by the sine of the "
             "crossing angle (at least 30 degrees). The top width is the NBI deck / roadway "
@@ -290,7 +290,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
             "record) are listed in the layer 'culverts_not_placed' and a CSV beside the "
             "GeoPackage.\n"
             "Layers left empty are read from the offline data pack (or downloads folder) for "
-            "the area: NBI_bridges, OSM_crossings, NHD_flowlines, ND_roads_NG911 (else HPMS), "
+            "the area: NBI_bridges, OSM_crossings, 3DHP_flowlines, ND_roads_NG911 (else HPMS), "
             "NARN_rail_lines. Search distance, widths and margin are screening parameters "
             "chosen by the engineer (defaults are placeholders, not standards). Output in "
             "EPSG:5070.")
@@ -320,7 +320,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         P(QgsProcessingParameterVectorLayer("NDDOT_PIPES", "NDDOT centerline pipes (points; "
                                             "Center_Line_Pipes - diameter, length and the two "
                                             "end elevations)", [SRC_POINT], optional=True))
-        P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (NHD flowlines or a "
+        P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (3DHP flowlines or a "
                                             "centerline)", [SRC_LINE], optional=True))
         P(QgsProcessingParameterBoolean("STREAM_REVERSED", "Stream lines are digitised "
                                         "UPSTREAM (not NHD): reverse them",
@@ -369,7 +369,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         src = self._source(parameters, context, feedback, required=False) if need else None
         got, sources = {}, {}
         pack_names = {"NBI": ("NBI_bridges",), "OSM": ("OSM_crossings",),
-                      "STREAMS": ("NHD_flowlines",), "ROADS": ("ND_roads_NG911",) + HPMS_SETS,
+                      "STREAMS": ("3DHP_flowlines",), "ROADS": ("ND_roads_NG911",) + HPMS_SETS,
                       "RAIL": ("NARN_rail_lines",)}
         for k, lyr in layers.items():
             if lyr is not None:
@@ -438,10 +438,10 @@ class SuiteExportAlgorithm(_SuiteBase):
             "roads (aadt, road_class, level - AADT joined the way ND Dam Hazard's "
             "classification joins it; unknown AADT stays empty, never 0), railroads "
             "(passenger, trains_day, level), flowlines, lifelines (category) and dams (NID).\n"
-            "Not in the pack, so not exported: NHD waterbodies, the DWR dam lines and any "
+            "Not in the pack, so not exported: 3DHP waterbodies, the DWR dam lines and any "
             "DEM - give those to the Screening tools yourself. The run log lists the counts "
             "and what is missing; the table 'suite_export_info' in the GeoPackage keeps it.\n"
-            "Dam folder (2.17.0, optional): for one dam, also NHD waterbodies (waterbodies), "
+            "Dam folder (2.17.0, optional): for one dam, also 3DHP waterbodies (waterbodies), "
             "DWR dam lines (dam_lines) and DWR dams (dwr_dams) from the dam folder's data "
             "('Get data for this dam'), else from the pack when it has them, and the path of "
             "the dam's DEM (recorded in suite_export_info, not copied).\n"

@@ -25,6 +25,12 @@ graphical models and from the command line (qgis_process).
   ndhazard:getdamdata      Get data for this dam (or all dams): <dam folder>/data/ and
                            dam.json's data section (suite_data_tools, the same tool in the
                            three plugins)
+  2.30.0 (chain_algorithms.py - the suite's main steps, for the Model Designer and
+  qgis_process; a statewide batch is one command per dam folder):
+  ndhazard:buildpack       build / update the offline data pack
+  ndhazard:screendam       screen one dam (runs ND Dam Breach Screening's nddam:triage)
+  ndhazard:runbreach       run the breach model (runs ND Dam Breach Runner's ndbreach:rundam)
+  ndhazard:suitechain      screen -> model -> classify for one dam, headless
 """
 
 import os
@@ -382,6 +388,10 @@ class ClassifyAlgorithm(_Base):
         P(QgsProcessingParameterFile("DV_TEMPLATE", "Depth-velocity spreadsheet template "
                                      "(empty: the one that comes with the plugin)",
                                      behavior=FILE_FILE, extension="xlsx", optional=True))
+        # v2.23.0
+        P(QgsProcessingParameterBoolean("FAST_RUN", "Fast run: skip the EAP map book and the "
+                                        "aerial imagery (results unchanged)",
+                                        defaultValue=False))
         # v2.5
         P(QgsProcessingParameterBoolean("DOWNLOAD_CAMPS", "Download campgrounds / RV parks "
                                         "(OpenStreetMap)", defaultValue=True))
@@ -398,7 +408,7 @@ class ClassifyAlgorithm(_Base):
         P(QgsProcessingParameterBoolean("EAP_TRAVEL", "EAP: travel-time table along the "
                                         "channel", defaultValue=True))
         P(QgsProcessingParameterVectorLayer("CENTERLINE", "EAP: channel centerline (empty: "
-                                            "trace USGS NHD flowlines)", [SRC_LINE],
+                                            "trace USGS 3DHP flowlines)", [SRC_LINE],
                                             optional=True))
         P(QgsProcessingParameterBoolean("COMPARE", "Compare with the last run",
                                         defaultValue=True))
@@ -488,7 +498,8 @@ class ClassifyAlgorithm(_Base):
             centerline_layer=lyr("CENTERLINE"),
             compare_last_run=self.parameterAsBool(parameters, "COMPARE", context),
             dv_spreadsheet=self.parameterAsBool(parameters, "DV_SPREADSHEET", context),
-            dv_template=self.parameterAsFile(parameters, "DV_TEMPLATE", context) or "")
+            dv_template=self.parameterAsFile(parameters, "DV_TEMPLATE", context) or "",
+            fast_run=self.parameterAsBool(parameters, "FAST_RUN", context))
         extra_path = self.parameterAsFile(parameters, "CONFIG_JSON", context)
         result_path = ""
         if extra_path:
@@ -867,6 +878,9 @@ class BatchAlgorithm(_Base):
                                         defaultValue=True))
         P(QgsProcessingParameterBoolean("REPORT", "PDF report per dam", defaultValue=True))
         P(QgsProcessingParameterBoolean("EAP", "EAP outputs per dam", defaultValue=True))
+        # v2.23.0
+        P(QgsProcessingParameterBoolean("FAST_RUN", "Fast run: no EAP map book, no aerial "
+                                        "imagery (results unchanged)", defaultValue=False))
         # v2.9
         P(QgsProcessingParameterNumber("WORKERS", "Parallel worker processes (1 = one dam "
                                        "after another in this session)", type=NUM_INTEGER,
@@ -887,7 +901,8 @@ class BatchAlgorithm(_Base):
             raise QgsProcessingException("Folder not found: {}".format(parent))
         dl = self.parameterAsBool(parameters, "DOWNLOADS", context)
         over = {"report_pdf": self.parameterAsBool(parameters, "REPORT", context),
-                "eap": self.parameterAsBool(parameters, "EAP", context)}
+                "eap": self.parameterAsBool(parameters, "EAP", context),
+                "fast_run": self.parameterAsBool(parameters, "FAST_RUN", context)}
         if not dl:
             over.update({k: False for k in _NO_DOWNLOADS})
         workers = self._int(parameters, "WORKERS", context, 1)
@@ -1348,6 +1363,10 @@ class Provider(QgsProcessingProvider):
         classes += [type(a) for a in review_algorithms()]
         classes += [RunnerCulvertsAlgorithm, SuiteExportAlgorithm, ChartSignOffAlgorithm, RuleCompareAlgorithm,
                     MarkReviewedAlgorithm]
+        # 2.30.0: the suite's four main steps as one chain (build pack / screen / breach /
+        # classify), so a statewide batch can run headless and in the Model Designer
+        from .chain_algorithms import ALGORITHMS as CHAIN_ALGORITHMS
+        classes += list(CHAIN_ALGORITHMS)
         # 2.17.0: "Get data for this dam" in the dam-suite group (suite_algorithms.SUITE_GROUP)
         try:
             from . import suite_data_tools as SDT

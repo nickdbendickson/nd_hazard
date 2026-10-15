@@ -74,7 +74,7 @@ class BuildVrtAlgorithm(_ToolBase):
             r["tiles"], r["crs"], r["cell_sizes"], r["elevation_units"] or "not recorded")
         feedback.pushInfo(msg)
         for n in r["notes"] + ["Could not open: {}".format(p["file"]) for p in r["problems"]]:
-            feedback.reportError("Check: " + n, fatalError=False)
+            feedback.pushWarning("Check: " + n)
         self.load(context, out, "LiDAR DEM mosaic")
         return {"VRT": out, "RESULT": msg}
 

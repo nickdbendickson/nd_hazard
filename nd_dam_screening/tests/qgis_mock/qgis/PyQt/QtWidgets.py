@@ -107,6 +107,12 @@ class QPushButton(QWidget):
         self._text = text
         self.clicked = _Signal()
 
+    def text(self):                              # 0.28.1: the Continue button names its target
+        return self._text
+
+    def setText(self, t):
+        self._text = t
+
     def click(self):
         if self._enabled:
             self.clicked.emit()
@@ -352,7 +358,14 @@ class QRadioButton(QCheckBox):
 
 
 class QAbstractItemView(QWidget):
-    pass
+    """0.26.0 (tests): the selection behaviour and edit triggers the 0.23.0 dam table sets - scoped
+    on Qt6 and 3.40, legacy names on Qt5 only (like Qt: a Qt6 build has no QAbstractItemView.SelectRows)."""
+    if QT6 or FLAVOR != "3.28":
+        SelectionBehavior = enum.IntEnum("SelectionBehavior", {"SelectItems": 0, "SelectRows": 1, "SelectColumns": 2})
+        EditTrigger = enum.IntFlag("EditTrigger", {"NoEditTriggers": 0, "DoubleClicked": 2, "AllEditTriggers": 31})
+    if not QT6:
+        SelectItems, SelectRows, SelectColumns = 0, 1, 2
+        NoEditTriggers, DoubleClicked, AllEditTriggers = 0, 2, 31
 
 
 class QHeaderView(QWidget):
@@ -479,6 +492,13 @@ class QTableWidget(QWidget):
     def cellWidget(self, r, c):
         return self._widgets.get((r, c))
 
+    def insertRow(self, r):
+        """0.28.0 (tests): a real insert. It used to fall through to QWidget's catch-all, so every
+        row a window filled landed on row 0 and rowCount() stayed 0."""
+        self._items = {(rr + (rr >= r), c): v for (rr, c), v in self._items.items()}
+        self._widgets = {(rr + (rr >= r), c): v for (rr, c), v in self._widgets.items()}
+        self._rows += 1
+
     def removeRow(self, r):
         self._items = {(rr - (rr > r), c): v for (rr, c), v in self._items.items() if rr != r}
         self._widgets = {(rr - (rr > r), c): v for (rr, c), v in self._widgets.items()
@@ -507,6 +527,19 @@ class QInputDialog(object):
     @staticmethod
     def getItem(*a, **k):
         return (QInputDialog.NEXT.pop(0), True) if QInputDialog.NEXT else ("", False)
+
+
+class QProgressBar(QWidget):
+    """0.26.0 (tests): the 0.23.0 step progress bar; setValue / setFormat / setRange are no-ops."""
+    def __init__(self, *a):
+        super().__init__()
+        self._value = 0
+
+    def setValue(self, v):
+        self._value = int(v)
+
+    def value(self):
+        return self._value
 
 
 class QGroupBox(QWidget):

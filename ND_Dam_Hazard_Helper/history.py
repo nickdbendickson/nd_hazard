@@ -252,3 +252,166 @@ def write_changes(path, rows):
         for r in rows:
             w.writerow(["" if v is None else v for v in r])
     return path
+
+
+# ---------------------------------------------------------- 2.30.0: every run --
+# The snapshot above is the PREVIOUS run (one file, overwritten); the log below is EVERY run,
+# so "what was this dam classified as before, with which data and which plugin version?" can
+# be answered years later. It is a small append-only JSON file in the dam folder.
+HISTORY_FILE = "Classification_History.json"
+HISTORY_VERSION = 1
+MAX_ENTRIES = 500                # the oldest entries are dropped beyond this
+HISTORY_HEAD = ["Date", "ND class", "TM 11 class", "LIJ", "Governing scenario",
+                "Plugin version", "Data vintage", "Structures inundated", "Note"]
+# the entry keys kept for the table, in order
+_VINTAGE_MAX = 12                # vintage lines kept per entry (the table shows the first few)
+
+
+def history_path(dam_folder):
+    return os.path.join(dam_folder or "", HISTORY_FILE)
+
+
+def make_entry(nd, tm11, dam_name="", governing="", plugin_version="", vintage=(), cfg=None,
+               counts=None, outputs="", note="", when=None):
+    """One run's summary, JSON-ready. `vintage`: the data-vintage lines of the run (the
+    pipeline's QA table), kept as text because that is what a reader needs to judge the row."""
+    nd, tm11 = nd or {}, tm11 or {}
+    cnt = dict(counts or (nd.get("counts") or {}))
+    keep = {}
+    for k in SETTING_KEYS:
+        v = (cfg or {}).get(k)
+        if isinstance(v, (str, int, float, bool)) or v is None:
+            keep[k] = v
+    return {"version": HISTORY_VERSION, "time": when or time.strftime("%Y-%m-%d %H:%M"),
+            "dam": str(dam_name or ""), "nd": nd.get("cls"), "tm11": tm11.get("cls"),
+            "lij": round(float(tm11.get("lij") or 0.0), 1),
+            "provisional": bool(nd.get("provisional")),
+            "incomplete": list(nd.get("incomplete") or ()),
+            "governing": str(governing or ""), "plugin_version": str(plugin_version or ""),
+            "vintage": [str(v) for v in list(vintage or ())[:_VINTAGE_MAX]],
+            "counts": {k: cnt.get(k) for k in sorted(cnt)}, "outputs": str(outputs or ""),
+            "note": str(note or ""), "settings": keep}
+
+
+def read_entries(dam_folder):
+    """The runs recorded for this dam, oldest first ([] when there is no log / it is
+    unreadable - a classification must never fail over its own history)."""
+    path = history_path(dam_folder)
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    runs = data.get("runs") if isinstance(data, dict) else data
+    return [r for r in (runs or []) if isinstance(r, dict)]
+
+
+def append_entry(dam_folder, entry, keep=MAX_ENTRIES):
+    """Add one run to <dam folder>/Classification_History.json and return the path ("" when
+    there is no dam folder). The log lives in the DAM folder, not in outputs/, so that
+    clearing the outputs folder - which every re-run does - cannot throw the history away."""
+    if not dam_folder or not os.path.isdir(dam_folder):
+        return ""
+    runs = read_entries(dam_folder)
+    runs.append(entry)
+    if keep and len(runs) > int(keep):
+        runs = runs[-int(keep):]
+    path = history_path(dam_folder)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"version": HISTORY_VERSION, "file": HISTORY_FILE, "runs": runs}, fh, indent=1)
+    os.replace(tmp, path)
+    return path
+
+
+def class_changes(entries):
+    """[(when, from class, to class)] - every run whose ND class differs from the run before."""
+    out = []
+    prev = None
+    for e in entries or []:
+        cls = e.get("nd")
+        if prev is not None and cls != prev:
+            out.append((e.get("time") or "?", prev, cls))
+        prev = cls
+    return out
+
+
+def history_rows(entries):
+    """[[date, ND, TM 11, LIJ, scenario, plugin, vintage, structures, note]] for a table."""
+    rows = []
+    for e in entries or []:
+        cnt = e.get("counts") or {}
+        rows.append([e.get("time") or "", "{}{}".format(e.get("nd") or "?",
+                                                        " (provisional)"
+                                                        if e.get("provisional") else ""),
+                     e.get("tm11") or "?", e.get("lij"), e.get("governing") or "",
+                     e.get("plugin_version") or "",
+                     "; ".join(e.get("vintage") or [])[:120],
+                     cnt.get("habitable_inundated"), e.get("note") or ""])
+    return rows
+
+
+def history_one_line(entries, current=None):
+    """The card's one-line history ("" when this is the first run of this dam)."""
+    runs = list(entries or [])
+    if current is not None:
+        runs = runs + [current]
+    if len(runs) < 2:
+        return ""
+    first, last = runs[0], runs[-1]
+    changes = class_changes(runs)
+    head = "{} classification run(s) since {}; ND {} then, {} now".format(
+        len(runs), str(first.get("time") or "?").split(" ")[0], first.get("nd") or "?",
+        last.get("nd") or "?")
+    if changes:
+        when, was, now = changes[-1]
+        head += " (last change {} -> {} on {})".format(was, now, str(when).split(" ")[0])
+    else:
+        head += " (unchanged)"
+    return head
+
+
+def history_lines(entries, current=None, limit=10):
+    """The summary / report section: class over time with the vintage and version behind it."""
+    runs = list(entries or [])
+    if current is not None:
+        runs = runs + [current]
+    if not runs:
+        return ["No earlier classification run is recorded for this dam ({} is written from "
+                "this run on).".format(HISTORY_FILE)]
+    out = []
+    shown = runs[-int(max(1, limit)):]
+    if len(runs) > len(shown):
+        out.append("{} earlier run(s) not shown - the full log is {}".format(
+            len(runs) - len(shown), HISTORY_FILE))
+    for e in shown:
+        bits = ["{}: ND {}{}".format(e.get("time") or "?", e.get("nd") or "?",
+                                     " (provisional)" if e.get("provisional") else "")]
+        bits.append("TM 11 {} (LIJ {})".format(e.get("tm11") or "?", e.get("lij")))
+        if e.get("plugin_version"):
+            bits.append("plugin {}".format(e["plugin_version"]))
+        if e.get("governing"):
+            bits.append("scenario '{}'".format(e["governing"]))
+        if e.get("vintage"):
+            bits.append("data: " + "; ".join(e["vintage"][:3]))
+        if e.get("incomplete"):
+            bits.append("INCOMPLETE ({})".format(", ".join(e["incomplete"])))
+        out.append(" | ".join(bits))
+    for when, was, now in class_changes(runs):
+        out.append("CLASS CHANGED on {}: {} -> {} - say in the submittal why (data, model or "
+                   "development)".format(when, was, now))
+    out.append("Every run is recorded in <dam folder>/{} with its data vintage and the plugin "
+               "version that produced it.".format(HISTORY_FILE))
+    return out
+
+
+def write_history_csv(path, entries):
+    """The log as a CSV for a submittal. Returns the path."""
+    with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+        w = csv.writer(fh)
+        w.writerow(HISTORY_HEAD)
+        for row in history_rows(entries):
+            w.writerow(["" if v is None else v for v in row])
+    return path

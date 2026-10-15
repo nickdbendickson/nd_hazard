@@ -4,8 +4,10 @@ import csv
 import math
 import os
 import re
+import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY,
@@ -25,10 +27,12 @@ from .compat import (NUM_DOUBLE, NUM_INT, FILE_FILE, FILE_FOLDER, SOURCE_POINT, 
 from .core import (workflow, breach as brmod, flood as floodmod, impacts as impmod,
                    structures as structmod, conditioning as condmod, nd_data, handoff,
                    sensitivity as sensmod, cascade as cascmod, estimate as estmod,
-                   outlets as outmod, damjson, stoprule, products as prodmod)
+                   outlets as outmod, damjson, stoprule, products as prodmod,
+                   batchqueue)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE
+from .damsuite import solvegate as SG
 
 ALL_FILES = "All files (*)"     # 3.10.0: any file name, with or without an extension
 
@@ -54,6 +58,21 @@ TRIGGERS = [(floodmod.TRIGGER_PEAK, "at the highest pool level"),
             (floodmod.TRIGGER_WSE, "when the pool reaches an elevation (ft)")]
 STRUCT_KINDS = [(structmod.KIND_CULVERT, "Culvert"), (structmod.KIND_BRIDGE, "Bridge"),
                 (structmod.KIND_NOTCH, "Open notch / breached road")]
+# 3.20.0 (feature 14): the crossings layer (NBI bridges and culverts, rail grade crossings,
+# the offline pack's surveyed road-stream crossings). Only a SURVEYED span and rise can be cut
+# as a gap, so the span / rise synonyms deliberately do not include a generic "width".
+CROSSING_FIELD_SYNONYMS = {
+    "X_NAME": ("name", "id", "structure_number", "struct_num", "bridge_id", "crossing_id",
+               "facility", "label"),
+    "X_KIND": ("type", "kind", "structure_type", "structure_kind", "crossing_type"),
+    "X_SPAN": ("span_ft", "span", "max_span_ft", "maxspan", "diameter", "dia", "culv_span_ft"),
+    "X_RISE": ("rise_ft", "rise", "height_ft", "culv_rise_ft", "vert_clearance_ft"),
+    "X_BARRELS": ("barrels", "n_barrels", "num_barrels", "cells", "num_cells"),
+    "X_SHAPE": ("shape", "culvert_shape", "barrel_shape"),
+    "X_INV_UP": ("invert_up", "inv_up", "upstream_invert", "invert_us", "inlet_invert"),
+    "X_INV_DN": ("invert_dn", "inv_dn", "downstream_invert", "invert_ds", "outlet_invert"),
+}
+
 STRUCT_FIELD_SYNONYMS = {
     "S_KIND": ("type", "kind", "structure_type", "structtype"),
     "S_WIDTH": ("width", "span", "width_ft", "diameter", "dia", "span_ft"),
@@ -64,6 +83,16 @@ STRUCT_FIELD_SYNONYMS = {
     "S_INV_DN": ("invert_dn", "inv_dn", "downstream_invert", "invert_ds"),
     "S_NAME": ("name", "id", "structure_id", "label"),
 }
+
+
+def _attr_of(feature, name):
+    """A feature attribute by field name, None when the field is not there (3.20.0)."""
+    if not name:
+        return None
+    try:
+        return feature[name]
+    except (KeyError, IndexError):
+        return None
 
 
 def _setting(key, default=""):
@@ -100,6 +129,81 @@ def _point_along_nearest(lines, xy, frac):
     return (float(q[0]), float(q[1]))
 
 
+CREST_SNAP_M = 500.0      # 3.13.0: a crest line farther than this from the dam point is not its line
+
+
+def _nearest_on_line(line, xy):
+    """(distance, (x, y)) of the point of polyline `line` nearest `xy` (segments, not vertices)."""
+    p = np.asarray(line, float)
+    best = None
+    for a, b in zip(p[:-1], p[1:]):
+        ab = b - a
+        L2 = float(ab @ ab)
+        t = 0.0 if L2 <= 0 else min(max(float((np.asarray(xy) - a) @ ab) / L2, 0.0), 1.0)
+        q = a + t * ab
+        d = float(math.hypot(q[0] - xy[0], q[1] - xy[1]))
+        if best is None or d < best[0]:
+            best = (d, (float(q[0]), float(q[1])))
+    return best
+
+
+def _dwr_ids(dam_id, rec):
+    """3.13.0: the DWR structure numbers a dam may carry: dam.json's dwr_structure_id and the
+    digits of a 'DWR-2801' style dam ID. Strings without leading zeros."""
+    out = set()
+    v = getattr(rec, "get", lambda _k: None)("dwr_structure_id") if rec is not None else None
+    for x in (v, ):
+        if x not in (None, ""):
+            out.add(str(x).strip().split(".")[0].lstrip("0") or "0")
+    m = re.match(r"^\s*DWR[-_ ]?0*(\d+)\s*$", str(dam_id or ""), re.I)
+    if m:
+        out.add(m.group(1).lstrip("0") or "0")
+    return out
+
+
+def _pick_crest_line(lines_attrs, center_xy, ids, id_field):
+    """3.13.0: (line, distance, how) of the crest line for this dam, or (None, d, reason).
+    The line whose structure id matches the dam's DWR number wins; otherwise the line nearest
+    the dam point, and only within CREST_SNAP_M."""
+    if not lines_attrs:
+        return None, None, "no crest line near the dam"
+    if ids and id_field:
+        hit = [(ln, at) for ln, at in lines_attrs
+               if str(at.get(id_field) if at.get(id_field) is not None else "").strip()
+               .split(".")[0].lstrip("0") in ids]
+        if hit:
+            ln = min((h[0] for h in hit), key=lambda l: _nearest_on_line(l, center_xy)[0])
+            return ln, _nearest_on_line(ln, center_xy)[0], "DWR structure {}".format(
+                sorted(ids)[0])
+    ln = min((x[0] for x in lines_attrs), key=lambda l: _nearest_on_line(l, center_xy)[0])
+    d = _nearest_on_line(ln, center_xy)[0]
+    if d > CREST_SNAP_M:
+        return None, d, "the nearest crest line is {:.0f} m from the dam point".format(d)
+    return ln, d, "nearest line"
+
+
+def _layer_overlap(src, title, work, box, context):
+    """3.13.0: damsuite.solvegate.layer_overlap for a Processing feature source."""
+    try:
+        n = int(src.featureCount())
+    except Exception:                                            # noqa
+        n = None
+    try:
+        crs = src.sourceCrs()
+        valid = crs is not None and crs.isValid()
+    except Exception:                                            # noqa - not known: not blamed
+        crs, valid = None, True
+    ext = None
+    if valid and crs is not None:
+        try:
+            r = QgsCoordinateTransform(crs, work, context.transformContext()).transformBoundingBox(
+                src.sourceExtent())
+            ext = (r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum())
+        except Exception:                                        # noqa - reported as unknown
+            ext = None
+    return SG.layer_overlap(title, valid, ext, box, n if n is not None and n >= 0 else None)
+
+
 def _floats(text, default=()):
     """'0.7, 1.4' -> (0.7, 1.4)"""
     out = []
@@ -132,6 +236,30 @@ class _Feedback:
 
     def cancel(self):
         return self.fb.isCanceled()
+
+    # 3.21.0: QgsProcessingFeedback pass-throughs, so code written against a real feedback
+    # (RunDamAlgorithm.prepare calls pushInfo / pushWarning) does not raise when it is handed
+    # this adapter. The queue's per-dam set-up used to crash here on the first dam.
+    def pushInfo(self, msg):
+        self.log(msg)
+
+    def pushWarning(self, msg):
+        self.fb.pushWarning(msg)
+
+    def pushDebugInfo(self, msg):
+        self.fb.pushDebugInfo(msg)
+
+    def reportError(self, msg, fatalError=False):
+        self.fb.reportError(msg, fatalError)
+
+    def setProgress(self, p):
+        self.progress(p)
+
+    def setProgressText(self, msg):
+        self.fb.setProgressText(msg)
+
+    def isCanceled(self):
+        return self.cancel()
 
 
 def _srs_text(crs):
@@ -323,6 +451,26 @@ class _Base(QgsProcessingAlgorithm):
                   "this of the LiDAR bed at each end (ft; YOUR value). Both ends off by the same amount = "
                   "a datum shift, moved to the LiDAR; farther off = the LiDAR inverts are used and the run "
                   "report says so", 3.0, minimum=0.0, advanced=True)
+        # 3.20.0 (feature 14): inventory crossings measured against the model's embankments
+        # (core/gaps.py). Reported always; cut only with CROSSING_GAPS, because opening an
+        # embankment lowers the water behind it.
+        self._layer("CROSSINGS", "Crossings (points): NBI bridges and culverts, rail grade "
+                    "crossings, surveyed road-stream crossings. Each one is measured against "
+                    "the embankment the bare-earth DEM leaves across it and reported in the "
+                    "run report", SOURCE_POINT, advanced=True)
+        for key, desc in (("X_NAME", "  name field"),
+                          ("X_KIND", "  kind field (bridge / culvert)"),
+                          ("X_SPAN", "  surveyed span or diameter field (ft)"),
+                          ("X_RISE", "  surveyed rise field (ft)"),
+                          ("X_BARRELS", "  barrels field"),
+                          ("X_SHAPE", "  shape field (box / pipe)"),
+                          ("X_INV_UP", "  upstream invert elevation field (ft)"),
+                          ("X_INV_DN", "  downstream invert elevation field (ft)")):
+            self._field(key, "Crossings:" + desc, "CROSSINGS", numeric=False, advanced=True)
+        self._bool("CROSSING_GAPS", "Crossings: cut the ones whose opening is surveyed as gaps "
+                   "in the embankment (off by default: a gap LOWERS the water behind the road, "
+                   "so the result upstream of it is less conservative than the default; a "
+                   "crossing without a surveyed opening is never cut)", False, advanced=True)
         # v3.4.0: building footprints as obstructions (polygons in the structures layer)
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "BUILDINGS", "Buildings: how polygon footprints in the structures layer enter the "
@@ -365,7 +513,8 @@ class _Base(QgsProcessingAlgorithm):
                    "basin (needs the top of dam; the source DEM is not changed; on by default)",
                    True, advanced=True)
         self._num("BREACH_POSITION", "Breach position along the crest line (0 = first vertex, "
-                  "1 = last)", 0.5, minimum=0.0, maximum=1.0, advanced=True)
+                  "1 = last; leave empty to breach where the dam point meets the crest line)",
+                  None, optional=True, minimum=0.0, maximum=1.0, advanced=True)
         self._layer("REFINE_LINES", "ANUGA: lines the mesh follows (levees, road embankments, "
                     "channel banks)", SOURCE_LINE, advanced=True)
         self._layer("GAUGE_POINTS", "Discharge gauges: hydrograph past these points "
@@ -683,6 +832,61 @@ class _Base(QgsProcessingAlgorithm):
         to_work = QgsCoordinateTransform(sample_point_crs, work, context.transformContext())
         return src, writer, to_work, work
 
+    def apply_crossings(self, st, parameters, context, tf, center_xy, radius):
+        """3.20.0 (feature 14): the crossings layer as plain dicts for core/gaps.py, in the work
+        CRS. Never raises: a crossing that cannot be read is simply not in the list, and the
+        run report says how many were read. Returns notes."""
+        st.crossings = []
+        st.crossing_gaps = bool(self.parameterAsBool(parameters, "CROSSING_GAPS", context)) \
+            if self.parameterDefinition("CROSSING_GAPS") is not None else False
+        if self.parameterDefinition("CROSSINGS") is None:
+            return []
+        src = self.parameterAsSource(parameters, "CROSSINGS", context)
+        if src is None:
+            return []
+        names = qio.field_names(src)
+        low = {n.lower(): n for n in names}
+        fld = {}
+        for key, syns in CROSSING_FIELD_SYNONYMS.items():
+            chosen = self._str(parameters, key, context)
+            fld[key] = chosen or next((low[s] for s in syns if s in low), "")
+        a, b = tf(src)
+        surveyed = 0
+        for i, f in enumerate(qio._features(src, center_xy, radius, b)):
+            g = f.geometry()
+            if g is None or g.isEmpty():
+                continue
+            try:
+                p = a.transform(g.centroid().asPoint())
+            except Exception:                                    # noqa - one crossing
+                continue
+            at = lambda key: _attr_of(f, fld[key])
+            ktxt = str(at("X_KIND") or "").lower()
+            kind = (structmod.KIND_BRIDGE if "bridge" in ktxt else
+                    structmod.KIND_CULVERT if ktxt else structmod.KIND_BRIDGE)
+            shape_txt = str(at("X_SHAPE") or "").lower()
+            span, rise = qio.num(at("X_SPAN")), qio.num(at("X_RISE"))
+            if span and rise:
+                surveyed += 1
+            st.crossings.append({
+                "name": str(at("X_NAME") or "crossing {}".format(i + 1)), "kind": kind,
+                "x": p.x(), "y": p.y(), "span_ft": span, "rise_ft": rise,
+                "barrels": int(qio.num(at("X_BARRELS"), 1) or 1),
+                "shape": "pipe" if any(w in shape_txt for w in ("pipe", "round", "circ", "cmp"))
+                else "box",
+                "invert_up_ft": qio.num(at("X_INV_UP")), "invert_dn_ft": qio.num(at("X_INV_DN")),
+                "source": "crossings layer"})
+        if not st.crossings:
+            return []
+        used = ", ".join("{} = {}".format(k[2:].lower(), v) for k, v in sorted(fld.items()) if v)
+        return ["Crossings within {:.0f} mi of the dam: {} ({} with a surveyed span and rise, "
+                "so {} can be cut as gaps){}{}".format(
+                    radius / MILE, len(st.crossings), surveyed,
+                    surveyed if st.crossing_gaps else "none",
+                    "" if st.crossing_gaps else "; 'cut the surveyed ones as gaps' is off, so "
+                    "every crossing is only reported",
+                    "; fields: " + used if used else "")]
+
     def apply_features(self, st, parameters, context, work, center_xy):
         """Read the flow-path layers around the dam into `st`. Returns notes."""
         if self.parameterDefinition("STRUCTURES") is None:
@@ -711,10 +915,26 @@ class _Base(QgsProcessingAlgorithm):
             else:
                 ln = qio.lines(src, a, b, center_xy, radius)
                 rec.add_lines([x[0] for x in ln], kind)
+                if kind == impmod.KIND_ROAD:                 # 3.13.0: culvert candidates
+                    st.road_lines = [x[0] for x in ln]
         for name in ("RECEPTOR_POINTS", "RECEPTOR_ROADS", "RECEPTOR_RAIL", "STRUCTURES",
-                     "CHANNEL_LINES", "PONDS", "TAILWATER", "CREST_LINE", "REFINE_LINES",
-                     "GAUGE_POINTS"):
+                     "CROSSINGS", "CHANNEL_LINES", "PONDS", "TAILWATER", "CREST_LINE",
+                     "REFINE_LINES", "GAUGE_POINTS"):
             self._record("Layer " + name, self._vector_path(parameters, name, context))
+        # 3.13.0: a structures / culverts layer that misses the study area stops the run here,
+        # and says whether the layer has no CRS or simply covers somewhere else
+        box = (center_xy[0] - radius, center_xy[1] - radius, center_xy[0] + radius,
+               center_xy[1] + radius)
+        gate = []
+        for name, title in (("RECEPTOR_POINTS", "Structures layer"),
+                            ("STRUCTURES", "Culverts, bridges and notches layer")):
+            src = self.parameterAsSource(parameters, name, context)
+            if src is not None:
+                gate.append(_layer_overlap(src, title, work, box, context))
+        for line in SG.lines(gate):
+            notes.append("Pre-run check: " + line)
+        if SG.failures(gate):
+            raise QgsProcessingException(SG.message(gate))
         st.receptors = rec if len(rec) else None
         if st.receptors is not None:
             notes.append("Receptors within {:.0f} mi of the dam: {}".format(
@@ -755,6 +975,7 @@ class _Base(QgsProcessingAlgorithm):
                     inv_d * FT if inv_d is not None else None,
                     name=str(at.get(fld["S_NAME"]) or "{} {}".format(kind, i + 1))))
         st.structures = structs
+        notes += self.apply_crossings(st, parameters, context, tf, center_xy, radius)
         try:
             st.invert_tol_m = float(self.parameterAsDouble(parameters, "S_INVERT_TOL_FT", context)) * FT
         except Exception:                                        # noqa
@@ -811,21 +1032,39 @@ class _Base(QgsProcessingAlgorithm):
         src = self.parameterAsSource(parameters, "CREST_LINE", context)
         if src is not None:                       # v3.11.0: the line that is raised
             a, b = tf(src)
-            clines = [x[0] for x in qio.lines(src, a, b, center_xy, radius)]
-            if clines:
-                best = min(clines, key=lambda ln: float(np.min(np.hypot(
-                    np.asarray(ln, float)[:, 0] - center_xy[0],
-                    np.asarray(ln, float)[:, 1] - center_xy[1]))))
+            # 3.13.0: the DWR dam line of this dam (structure id), else the nearest within
+            # CREST_SNAP_M; the dam point is moved onto it (the line is the crest, an
+            # inventory point often is not). The DWR dam lines layer fills CREST_LINE from the
+            # dam folder ("Get data for this dam") when it is left empty.
+            id_field = next((n for n in qio.field_names(src)
+                             if n.lower() in ("structure_id", "structure_", "structure")), "")
+            ids = getattr(self, "_crest_ids", None) or set()
+            self._crest_ids = None
+            clines = qio.lines(src, a, b, center_xy, radius, fields=[id_field] if id_field else ())
+            best, dist, how = _pick_crest_line(clines, center_xy, ids, id_field)
+            # 3.21.0: the breach position, when given, is measured along the line _pick_crest_line
+            # chose (the DWR-matched line, or the nearest within CREST_SNAP_M), never along the
+            # nearest line in the whole search box. BREACH_POSITION is now optional with no
+            # default: empty means put the breach where the dam point meets that line. Before,
+            # a 0.5 default made the position path always run and place the breach half way along
+            # the nearest line of ANY dam in the 45 mi box, ignoring the match and the 500 m cap.
+            pos = self._opt(parameters, "BREACH_POSITION", context)
+            if best is not None:
                 st.crest_line_xy = [(float(x), float(y)) for x, y in best]
-        if src is not None and parameters.get("BREACH_POSITION") not in (None, ""):
-            a, b = tf(src)
-            lines = [x[0] for x in qio.lines(src, a, b, center_xy, radius)]
-            if lines:
-                st.breach_xy = _point_along_nearest(lines, center_xy,
-                                                    self.parameterAsDouble(
-                                                        parameters, "BREACH_POSITION", context))
-                notes.append("Breach starts at {:.0f}% along the crest line".format(
-                    100 * self.parameterAsDouble(parameters, "BREACH_POSITION", context)))
+                if pos is not None:
+                    st.breach_xy = _point_along_nearest([best], center_xy, pos)
+                    notes.append("Breach starts at {:.0f}% along the dam crest line ({}).".format(
+                        100 * pos, how))
+                elif dist > 1.0:
+                    d, q = _nearest_on_line(best, center_xy)
+                    st.breach_xy = q
+                    notes.append("Dam point moved {:.0f} m onto the dam crest line ({}).".format(
+                        d, how))
+                else:
+                    notes.append("Dam crest line: {} ({:.0f} m from the dam point).".format(
+                        how, dist))
+            elif clines:
+                notes.append("Dam crest line not used: {}.".format(how))
         src = self.parameterAsSource(parameters, "REFINE_LINES", context)
         st.refine_lines = []
         if src is not None:
@@ -947,7 +1186,7 @@ class RunDamAlgorithm(_Base):
         self._num("STORAGE_ACFT", "Storage at the top of dam (ac-ft; empty = from dam.json)",
                   optional=True, minimum=0.01)
         self._num("TOP_FT", "Top of dam elevation (ft, DEM datum; empty = from dam.json, else "
-                  "the highest DEM point within 30 m)", optional=True)
+                  "read from the DEM near the dam point)", optional=True)
         self._num("AREA_AC", "Surface area at the top of dam (ac; empty = from dam.json)",
                   optional=True, minimum=0)
         self._num("PMF_FT", "Maximum reservoir level in the PMF (ft; used if lower than the "
@@ -1049,6 +1288,7 @@ class RunDamAlgorithm(_Base):
         folder = os.path.join(self.parameterAsFile(parameters, "DAMS_FOLDER", context),
                               _safe_name(dam.dam_id))
         feedback.pushInfo("Model CRS {}; DEM elevations in {}".format(work.authid(), src.z_note))
+        self._crest_ids = _dwr_ids(dam.dam_id, getattr(self, "_dam_rec", None))   # 3.13.0
         for n in self.apply_features(st, parameters, context, work, (dam_xy.x(), dam_xy.y())):
             feedback.pushInfo(n)
         try:
@@ -1071,10 +1311,12 @@ class RunDamAlgorithm(_Base):
             raise QgsProcessingException("Cancelled")
         except (ModelError, brmod.BreachInputError) as e:
             raise QgsProcessingException(str(e))
-        for w in res.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
         for k, v in res.summary.items():
             feedback.pushInfo("{}: {}".format(k, v))
+        if res.warnings:
+            feedback.pushInfo("--- Things to check ---")
+            for w in res.warnings:
+                feedback.pushWarning("Check: " + w)
         self.load_results(context, res, dam.dam_id)
         return {"DEPTH": res.final.get("depth"), "VELOCITY": res.final.get("velocity"),
                 "ARRIVAL": res.final.get("arrival"), "WSE": res.final.get("wse"),
@@ -1167,7 +1409,7 @@ class SensitivityAlgorithm(RunDamAlgorithm):
         except (ModelError, brmod.BreachInputError) as e:
             raise QgsProcessingException(str(e))
         for w in out.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         for f in out.flags:
             feedback.pushInfo(f)
         for n, p in out.envelope.items():
@@ -1197,6 +1439,30 @@ BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field"
                     ("F_DS", "Downstream slope field (H)", True),
                     ("F_LENGTH", "Crest length field (ft)", True),
                     ("F_POOL", "Normal pool elevation field (ft), flood scenario", True))
+
+
+def _apply_run_result(row, res, dam_id, feedback):
+    """Update a batch row dict from a workflow.RunResult (thread-safe: pure dict ops)."""
+    s = res.summary
+    if not s.get("breach_occurs", True):
+        row.update({"Status": "no breach", "Message": "the dam does not fail in this flood"})
+    else:
+        row.update({"Status": "done", "Final_Model": s["final_model"],
+                    "Peak_Breach_cfs": s["peak_breach_cfs"],
+                    "Storage_At_Failure_acft": s["storage_at_failure_acft"],
+                    "Flooded_ac": s["flooded_acres"],
+                    "Max_Depth_ft": s["max_depth_ft"],
+                    "Max_Velocity_fps": s["max_velocity_fps"],
+                    "Latest_Arrival_hr": s["latest_arrival_hr"],
+                    "Receptors_Flooded": s.get("receptors_flooded", ""),
+                    "Runs": s["lisflood_runs"],
+                    "Domain_mi": "{} x {}".format(*s["domain_mi"]),
+                    "Warnings": " | ".join(res.warnings)})
+    if res.warnings:
+        feedback.pushInfo("{}: --- Things to check ---".format(dam_id))
+        for w in res.warnings:
+            feedback.pushWarning("{}: {}".format(dam_id, w))
+    return row
 
 
 class BatchAlgorithm(_Base):
@@ -1243,8 +1509,21 @@ class BatchAlgorithm(_Base):
         self._text("INCR_FT", "Incremental depth thresholds (ft; starting values 1, 2, 3 are "
                    "the engineer's)", "1, 2, 3", advanced=True)
         self.add_feature_params()
+        # item 7: preset; when not Custom, overrides cell size and sim times from add_model_params
+        self.addParameter(QgsProcessingParameterEnum(
+            "PRESET", "Resolution preset",
+            ["Quick screen (50 m grid, ~12 s/dam)", "Standard (20 m, ~2 min/dam)",
+             "Detailed (10 m, ~15 min/dam)", "Custom (use cell and time settings below)"],
+            defaultValue=0))
         self.add_model_params()
-        self._bool("SKIP_DONE", "Skip dams whose folder already has 'Depth (Max).tif'", True)
+        self._bool("SKIP_DONE", "Skip dams whose folder already holds a finished run", True)
+        # 3.20.0 (feature 16): two dams side by side at one thread each is the default. It
+        # measured 1.76x faster than one dam at two threads, and it cannot oversubscribe the
+        # machine the way "one per core" did on a small one. Nothing about a result changes.
+        self._num("WORKERS", "Dams to run at the same time (0 = one per CPU core; the starting "
+                  "value 2, one thread each, measured 1.76x faster than one dam on two "
+                  "threads)", batchqueue.DEFAULT_WORKERS, minimum=0, integer=True,
+                  advanced=True)
         self._bool("CLASSIFY", "Classify afterwards with the ND hazard plugin's batch tool "
                    "and merge the result", False)
         self._text("CLASS_ALG", "Classification batch algorithm ID (empty = ndhazard:batch)",
@@ -1279,6 +1558,17 @@ class BatchAlgorithm(_Base):
         base_st = self.run_settings(parameters, context,
                                     METHODS[self.parameterAsEnum(parameters, "METHOD",
                                                                  context)][0])
+        # item 7: preset overrides cell size and sim time
+        _preset_vals = [(50.0, 12.0, 96.0), (20.0, 24.0, 96.0), (10.0, 36.0, 144.0)]
+        _pi = self.parameterAsEnum(parameters, "PRESET", context) if self.parameterDefinition("PRESET") is not None else 3
+        if _pi < len(_preset_vals):
+            _cell_m, _sim_time_hr, _sim_max_hr = _preset_vals[_pi]
+            base_st.cell_size_m = _cell_m
+            base_st.planning_cell_m = max(30.0, _cell_m)
+            base_st.sim_time_hr = None  # automatic; sim_max_hr caps it
+            base_st.sim_max_hr = _sim_max_hr
+            feedback.pushInfo("preset: {} (cell {:.0f} m, sim_max {:.0f} h)".format(
+                ["Quick", "Standard", "Detailed"][_pi], _cell_m, _sim_max_hr))
         scen_i = self.parameterAsEnum(parameters, "SCENARIO", context)
         fld = self._mapping(parameters, context, src_layer, feedback)
         if not fld.get("F_ID"):
@@ -1300,108 +1590,165 @@ class BatchAlgorithm(_Base):
         n = max(1, len(feats))
         rows = []
 
+        # item 13: run dams in parallel, one thread each (oversubscription guard)
+        raw_workers = self.parameterAsInt(parameters, "WORKERS", context)
+        workers = raw_workers if raw_workers > 0 else max((os.cpu_count() or 2) - 1, 1)
+        if workers > 1 and not base_st.threads:
+            base_st.threads = 1   # one thread per dam prevents oversubscription
+        feedback.pushInfo(batchqueue.worker_note(workers, base_st.threads or 1))
+
+        _log_lock = threading.Lock()
+
+        def _make_fb(parallel=False):
+            fb = _Feedback(feedback)
+            if parallel:
+                _orig_log = fb.log
+                def _safe_log(msg):
+                    with _log_lock:
+                        _orig_log(msg)
+                fb.log = _safe_log
+                fb.progress = lambda p, msg="": None   # no per-dam progress bar in parallel
+            return fb
+
         def val(feat, key):
             name = fld.get(key)
             return qio.num(feat[name]) if name else None
 
-        for i, feat in enumerate(feats):
-            if feedback.isCanceled():
-                break
-            dam_id = str(feat[fld["F_ID"]]).strip() if fld["F_ID"] else str(feat.id())
-            folder = os.path.join(parent, _safe_name(dam_id))
-            row = dict.fromkeys(BATCH_FIELDS, "")
-            row.update({"Dam": dam_id, "Folder": folder})
-            fb = _Feedback(feedback, 100.0 * i / n, 100.0 * (i + 1) / n)
-            if skip and os.path.exists(os.path.join(folder, workflow.FINAL_NAMES["depth"])):
-                row.update({"Status": "skipped", "Message": "already has Depth (Max).tif"})
-                rows.append(row)
-                continue
-            feedback.pushInfo("=== {} ({}/{})".format(dam_id, i + 1, len(feats)))
-            t0 = time.time()
-            try:
-                g = feat.geometry()
-                if g is None or g.isEmpty():
-                    raise brmod.BreachInputError("no geometry")
-                p = to_dem.transform(g.centroid().asPoint())
-                # v3.2.0: values the layer leaves empty come from the dam's dam.json
-                rec, problem = damjson.load(folder)
-                name = str(feat[fld["F_NAME"]]) if fld.get("F_NAME") else ""
-                vals, notes, used = damjson.fill(
-                    {"HEIGHT_FT": val(feat, "F_HEIGHT"), "STORAGE_ACFT": val(feat, "F_STORAGE"),
-                     "AREA_AC": val(feat, "F_AREA"), "TOP_FT": val(feat, "F_TOP"),
-                     "DAM_NAME": name if name.strip() and name.upper() != "NULL" else None},
-                    rec)
-                if problem:
-                    notes.insert(0, problem)
-                for n_ in notes:
-                    feedback.pushInfo("{}: {}".format(dam_id, n_))
-                for key, label in (("HEIGHT_FT", "height"), ("STORAGE_ACFT", "storage")):
-                    if vals.get(key) is None:
+        # futures_info (parallel mode only): (future, row, dam_id, t0)
+        futures_info = []
+        ex = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
+
+        try:
+            for i, feat in enumerate(feats):
+                if feedback.isCanceled():
+                    break
+                dam_id = str(feat[fld["F_ID"]]).strip() if fld["F_ID"] else str(feat.id())
+                folder = os.path.join(parent, _safe_name(dam_id))
+                row = dict.fromkeys(BATCH_FIELDS, "")
+                row.update({"Dam": dam_id, "Folder": folder})
+                t0 = time.time()
+                if skip and workflow.run_finished(folder):   # 3.21.0: a finished run, not just a
+                    # cancelled pass's Depth (Max).tif
+                    row.update({"Status": "skipped", "Message": "already run (finished)"})
+                    if ex is None:
+                        rows.append(row)
+                    else:
+                        row["Minutes"] = round((time.time() - t0) / 60.0, 1)
+                        futures_info.append((None, row, dam_id, t0))
+                    continue
+                feedback.pushInfo("=== {} ({}/{})".format(dam_id, i + 1, len(feats)))
+                try:
+                    g = feat.geometry()
+                    if g is None or g.isEmpty():
+                        raise brmod.BreachInputError("no geometry")
+                    p = to_dem.transform(g.centroid().asPoint())
+                    # v3.2.0: values the layer leaves empty come from the dam's dam.json
+                    rec, problem = damjson.load(folder)
+                    name = str(feat[fld["F_NAME"]]) if fld.get("F_NAME") else ""
+                    vals, notes, used = damjson.fill(
+                        {"HEIGHT_FT": val(feat, "F_HEIGHT"), "STORAGE_ACFT": val(feat, "F_STORAGE"),
+                         "AREA_AC": val(feat, "F_AREA"), "TOP_FT": val(feat, "F_TOP"),
+                         "DAM_NAME": name if name.strip() and name.upper() != "NULL" else None},
+                        rec)
+                    if problem:
+                        notes.insert(0, problem)
+                    for n_ in notes:
+                        feedback.pushInfo("{}: {}".format(dam_id, n_))
+                    for key, label in (("HEIGHT_FT", "height"), ("STORAGE_ACFT", "storage")):
+                        if vals.get(key) is None:
+                            raise brmod.BreachInputError(
+                                "no dam {}: the layer has no value and dam.json {}".format(
+                                    label, "has none" if rec is not None else "does not exist"))
+                    dam = brmod.DamData(
+                        dam_id=dam_id, dam_height_ft=vals["HEIGHT_FT"],
+                        storage_top_acft=vals["STORAGE_ACFT"], top_of_dam_ft=vals["TOP_FT"],
+                        surface_area_top_ac=vals["AREA_AC"], pmf_max_wse_ft=val(feat, "F_PMF"),
+                        breach_bottom_ft=val(feat, "F_BOTTOM"), crest_width_ft=val(feat, "F_CREST"),
+                        us_slope_h=val(feat, "F_US"), ds_slope_h=val(feat, "F_DS"),
+                        crest_length_ft=val(feat, "F_LENGTH"), name=vals.get("DAM_NAME") or "")
+                    files = nd_data.dam_input_files(folder)
+                    st = copy.copy(base_st)
+                    self._inputs = {}            # fresh input-file dict per dam
+                    st.input_files = self._inputs
+                    flood = scen_i == 1 or (scen_i == 2 and "pmf_inflow" in files)
+                    st.scenario = workflow.SCENARIO_FLOOD if flood else workflow.SCENARIO_SUNNY
+                    if files.get("breach"):
+                        st.user_hydrograph = files["breach"]
+                    if st.breach_method == brmod.METHOD_USER and not st.user_hydrograph:
                         raise brmod.BreachInputError(
-                            "no dam {}: the layer has no value and dam.json {}".format(
-                                label, "has none" if rec is not None else "does not exist"))
-                dam = brmod.DamData(
-                    dam_id=dam_id, dam_height_ft=vals["HEIGHT_FT"],
-                    storage_top_acft=vals["STORAGE_ACFT"], top_of_dam_ft=vals["TOP_FT"],
-                    surface_area_top_ac=vals["AREA_AC"], pmf_max_wse_ft=val(feat, "F_PMF"),
-                    breach_bottom_ft=val(feat, "F_BOTTOM"), crest_width_ft=val(feat, "F_CREST"),
-                    us_slope_h=val(feat, "F_US"), ds_slope_h=val(feat, "F_DS"),
-                    crest_length_ft=val(feat, "F_LENGTH"), name=vals.get("DAM_NAME") or "")
-                files = nd_data.dam_input_files(folder)
-                st = copy.copy(base_st)
-                flood = scen_i == 1 or (scen_i == 2 and "pmf_inflow" in files)
-                st.scenario = workflow.SCENARIO_FLOOD if flood else workflow.SCENARIO_SUNNY
-                if files.get("breach"):
-                    st.user_hydrograph = files["breach"]
-                if st.breach_method == brmod.METHOD_USER and not st.user_hydrograph:
-                    raise brmod.BreachInputError(
-                        "own-hydrograph method: no inputs/breach_hydrograph.csv in the dam "
-                        "folder")
-                src, writer, to_work, work = self.gis(parameters, context, dem.crs(), p)
-                xy = to_work.transform(QgsPointXY(p))
-                self._dam_rec = rec
-                st.dam_record = {"read": notes, "top_source": "record" if "TOP_FT" in used
-                                 else "parameter",
-                                 "point": self.point_info(p, dem.crs(), work, (xy.x(), xy.y()),
-                                                          context)}
-                self.apply_features(st, parameters, context, work, (xy.x(), xy.y()))
-                if flood:
-                    st.flood = self.flood_inputs(parameters, context, dam, files,
-                                                 pool_ft=val(feat, "F_POOL"))
-                row["Scenario"] = st.scenario
-                res = workflow.run_dam(dam, (xy.x(), xy.y()), st, src, writer, folder, None,
-                                       fb.progress, fb.log, fb.cancel)
-                s = res.summary
-                if not s.get("breach_occurs", True):
-                    row.update({"Status": "no breach", "Message": "the dam does not fail in "
-                                                                  "this flood"})
-                else:
-                    row.update({"Status": "done", "Final_Model": s["final_model"],
-                                "Peak_Breach_cfs": s["peak_breach_cfs"],
-                                "Storage_At_Failure_acft": s["storage_at_failure_acft"],
-                                "Flooded_ac": s["flooded_acres"],
-                                "Max_Depth_ft": s["max_depth_ft"],
-                                "Max_Velocity_fps": s["max_velocity_fps"],
-                                "Latest_Arrival_hr": s["latest_arrival_hr"],
-                                "Receptors_Flooded": s.get("receptors_flooded", ""),
-                                "Runs": s["lisflood_runs"],
-                                "Domain_mi": "{} x {}".format(*s["domain_mi"]),
-                                "Warnings": " | ".join(res.warnings)})
-                for w in res.warnings:
-                    feedback.reportError("{}: {}".format(dam_id, w), fatalError=False)
-            except Cancelled:
-                row.update({"Status": "cancelled"})
+                            "own-hydrograph method: no inputs/breach_hydrograph.csv in the dam "
+                            "folder")
+                    src, writer, to_work, work = self.gis(parameters, context, dem.crs(), p)
+                    xy = to_work.transform(QgsPointXY(p))
+                    self._dam_rec = rec
+                    st.dam_record = {"read": notes, "top_source": "record" if "TOP_FT" in used
+                                     else "parameter",
+                                     "point": self.point_info(p, dem.crs(), work, (xy.x(), xy.y()),
+                                                              context)}
+                    self.apply_features(st, parameters, context, work, (xy.x(), xy.y()))
+                    if flood:
+                        st.flood = self.flood_inputs(parameters, context, dam, files,
+                                                     pool_ft=val(feat, "F_POOL"))
+                    st.input_files = dict(st.input_files)  # snapshot before threading
+                    row["Scenario"] = st.scenario
+                    fb = _make_fb(parallel=ex is not None)
+                    if ex is not None:
+                        fut = ex.submit(workflow.run_dam, dam, (xy.x(), xy.y()), st, src, writer,
+                                        folder, None, fb.progress, fb.log, fb.cancel)
+                        futures_info.append((fut, row, dam_id, t0))
+                    else:
+                        res = workflow.run_dam(dam, (xy.x(), xy.y()), st, src, writer, folder, None,
+                                               fb.progress, fb.log, fb.cancel)
+                        row = _apply_run_result(row, res, dam_id, feedback)
+                        row["Minutes"] = round((time.time() - t0) / 60.0, 1)
+                        rows.append(row)
+                except Cancelled:
+                    row.update({"Status": "cancelled"})
+                    row["Minutes"] = round((time.time() - t0) / 60.0, 1)
+                    rows.append(row)
+                    break
+                except (ModelError, brmod.BreachInputError, QgsProcessingException) as e:
+                    row.update({"Status": "failed", "Message": str(e)[:500]})
+                    feedback.reportError("{}: {}".format(dam_id, e), fatalError=False)
+                    row["Minutes"] = round((time.time() - t0) / 60.0, 1)
+                    if ex is None:
+                        rows.append(row)
+                    else:
+                        futures_info.append((None, row, dam_id, t0))
+                except Exception as e:
+                    row.update({"Status": "failed",
+                                "Message": "{}: {}".format(type(e).__name__, e)})
+                    feedback.reportError("{}: {}".format(dam_id, traceback.format_exc()),
+                                        fatalError=False)
+                    row["Minutes"] = round((time.time() - t0) / 60.0, 1)
+                    if ex is None:
+                        rows.append(row)
+                    else:
+                        futures_info.append((None, row, dam_id, t0))
+
+            # collect parallel results in submission order
+            for fut, row, dam_id, t0 in futures_info:
+                if fut is None:
+                    rows.append(row)
+                    continue
+                try:
+                    res = fut.result()
+                    row = _apply_run_result(row, res, dam_id, feedback)
+                except Cancelled:
+                    row.update({"Status": "cancelled"})
+                except (ModelError, brmod.BreachInputError, QgsProcessingException) as e:
+                    row.update({"Status": "failed", "Message": str(e)[:500]})
+                    feedback.reportError("{}: {}".format(dam_id, e), fatalError=False)
+                except Exception as e:
+                    row.update({"Status": "failed",
+                                "Message": "{}: {}".format(type(e).__name__, e)})
+                    feedback.reportError("{}: {}".format(dam_id, traceback.format_exc()),
+                                        fatalError=False)
+                row["Minutes"] = round((time.time() - t0) / 60.0, 1)
                 rows.append(row)
-                break
-            except (ModelError, brmod.BreachInputError, QgsProcessingException) as e:
-                row.update({"Status": "failed", "Message": str(e)[:500]})
-                feedback.reportError("{}: {}".format(dam_id, e), fatalError=False)
-            except Exception as e:
-                row.update({"Status": "failed", "Message": "{}: {}".format(type(e).__name__, e)})
-                feedback.reportError("{}: {}".format(dam_id, traceback.format_exc()),
-                                     fatalError=False)
-            row["Minutes"] = round((time.time() - t0) / 60.0, 1)
-            rows.append(row)
+        finally:
+            if ex is not None:
+                ex.shutdown(wait=True, cancel_futures=True)
         path = os.path.join(parent, "Batch_Breach_Runs.csv")
         with open(path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=BATCH_FIELDS)
@@ -1412,6 +1759,13 @@ class BatchAlgorithm(_Base):
         msg = "{done} run, {failed} failed, {skipped} skipped, {no breach} with no breach".format(
             **counts)
         feedback.pushInfo(msg)
+        # item 4: aggregate "Things to check" across all dams at the end of the batch
+        all_warnings = [(r["Dam"], w) for r in rows
+                        for w in (r.get("Warnings") or "").split(" | ") if w]
+        if all_warnings:
+            feedback.pushInfo("--- Things to check ---")
+            for dam_id, w in all_warnings:
+                feedback.pushWarning("{}: {}".format(dam_id, w))
         if self.parameterAsBool(parameters, "CLASSIFY", context) and counts["done"] \
                 and not counts["cancelled"] and not feedback.isCanceled():
             try:
@@ -1535,7 +1889,7 @@ class CascadeAlgorithm(_Base):
         except (ModelError, brmod.BreachInputError) as e:
             raise QgsProcessingException(str(e))
         for w in out.warnings:
-            feedback.reportError("Check: " + w, fatalError=False)
+            feedback.pushWarning("Check: " + w)
         for d in out.decisions:
             feedback.pushInfo("{}: {} ({})".format(d["dam"], "fails" if d["fails"] else "holds",
                                                    d["reason"]))
@@ -1606,7 +1960,7 @@ class HydrographAlgorithm(_Base):
         for k, v in hy.summary().items():
             feedback.pushInfo("{}: {}".format(k, v))
         for n in hy.notes:
-            feedback.reportError("Check: " + n, fatalError=False)
+            feedback.pushWarning("Check: " + n)
         return {"OUTPUT": out}
 
 
@@ -1721,7 +2075,9 @@ from .algorithms_provenance import PROVENANCE_ALGORITHMS        # noqa: E402
 from .algorithms_selftest import SELFTEST_ALGORITHMS            # noqa: E402
 from .algorithms_anugasetup import SETUPANUGA_ALGORITHMS        # noqa: E402
 from .algorithms_nested import NESTED_ALGORITHMS                # noqa: E402
+from .algorithms_release320 import RELEASE320_ALGORITHMS        # noqa: E402
+from .algorithms_adequacy import ADEQUACY_ALGORITHMS            # noqa: E402
 ALGORITHMS = (CORE_ALGORITHMS + NESTED_ALGORITHMS + PROBABILISTIC_ALGORITHMS + TOOL_ALGORITHMS + HYDROLOGY_ALGORITHMS
               + CONSEQUENCE_ALGORITHMS + NDHAZARD_ALGORITHMS + ANIMATION_ALGORITHMS + REPORT_ALGORITHMS
               + HECRAS_ALGORITHMS + PROVENANCE_ALGORITHMS + VERIFICATION_ALGORITHMS
-              + SELFTEST_ALGORITHMS + SETUPANUGA_ALGORITHMS)
+              + SELFTEST_ALGORITHMS + SETUPANUGA_ALGORITHMS + RELEASE320_ALGORITHMS + ADEQUACY_ALGORITHMS)

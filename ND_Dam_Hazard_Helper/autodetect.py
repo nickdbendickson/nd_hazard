@@ -239,4 +239,37 @@ def describe(found, root):
                        ("dv", "D x V"), ("base_depth", "no-breach depth")):
         if found.get(key):
             parts.append("{} = {}".format(label, os.path.relpath(found[key], root)))
-    return "; ".join(parts) if parts else "no rasters recognised"
+    return "; ".join(parts) if parts else NO_RASTERS
+
+
+# 2.30.0: before a breach model has been run there is nothing to recognise, and "no rasters
+# recognised" reads like a failure of the search. These two say what to do instead.
+NO_RASTERS = ("no depth / velocity / arrival raster in the dam folder yet - run the breach "
+              "model first (step 3 of the suite: ND Dam Breach Runner)")
+MODEL_FOLDERS = ("_breach_model", "_screening_model")
+
+
+def no_rasters_text(root=""):
+    """Why there are no rasters and what to do, in one sentence. A dam folder that already
+    holds a model folder gets the more exact version (the run was started but has no final
+    rasters), because "run the breach model first" would be wrong there."""
+    started = []
+    for name in MODEL_FOLDERS:
+        try:
+            if root and os.path.isdir(os.path.join(root, name)):
+                started.append(name)
+        except Exception:                                        # noqa - an unreadable folder
+            continue
+    if started:
+        return ("no final depth / velocity / arrival raster in the dam folder, although {} is "
+                "there - finish or re-run the breach model (step 3 of the suite: ND Dam Breach "
+                "Runner), then press 'Find rasters'".format(" and ".join(started)))
+    return NO_RASTERS
+
+
+def found_text(found, root=""):
+    """The log sentence after a search of the dam folder."""
+    text = describe(found, root)
+    if text == NO_RASTERS:
+        return no_rasters_text(root)
+    return "Rasters found in the dam folder: {}".format(text)

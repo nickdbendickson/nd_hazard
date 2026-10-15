@@ -206,13 +206,35 @@ def polygon_area_m2(poly):
 # --------------------------------------------------------------------------------------
 # GeoJSON / GeoPackage
 # --------------------------------------------------------------------------------------
-def _crs_member(crs):
+def crs_name(crs):
+    """'EPSG:26914' for a CRS given as a code, a URN or WKT; "" when it has no code.
+
+    3.20.3: the working CRS reaches here as WKT whenever it is not a plain EPSG code (a custom
+    or an ESRI CRS). Before, such a CRS was dropped and every GeoJSON of the run went out with
+    no CRS at all, which QGIS and ArcGIS then read as longitude / latitude - metres read as
+    degrees, so the layer landed off the coast of Africa."""
     if not crs:
-        return {}
-    name = crs if str(crs).upper().startswith(("EPSG", "URN")) else None
-    if name is None:
+        return ""
+    s = str(crs).strip()
+    if s.upper().startswith(("EPSG", "URN")):
+        return s
+    try:
+        from . import gdal_io
+        return gdal_io.epsg_of(s) or ""
+    except Exception:                        # noqa: BLE001 - no GDAL: the .prj sidecar remains
+        return ""
+
+
+def _crs_member(crs):
+    name = crs_name(crs)
+    if not name:
         return {}
     return {"crs": {"type": "name", "properties": {"name": name}}}
+
+
+def _is_wkt(crs):
+    return str(crs or "").strip().upper().startswith(("PROJCS", "PROJCRS", "GEOGCS", "GEOGCRS",
+                                                      "COMPD_CS", "LOCAL_CS"))
 
 
 def _ring_json(r):
@@ -229,9 +251,18 @@ def geojson_polygons(polys, props):
 
 def write_geojson(path, features, crs=None):
     fc = {"type": "FeatureCollection", "features": features}
-    fc.update(_crs_member(crs))
+    member = _crs_member(crs)
+    fc.update(member)
     with open(path, "w") as f:
         json.dump(fc, f)
+    # 3.20.3: a CRS with no EPSG code goes beside the file as a .prj, which QGIS, ArcGIS and
+    # GDAL read for a .geojson, so the layer still lands in the right place
+    if not member and _is_wkt(crs):
+        try:
+            with open(os.path.splitext(path)[0] + ".prj", "w") as f:
+                f.write(str(crs).strip())
+        except OSError:
+            pass
     return path
 
 

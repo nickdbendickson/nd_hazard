@@ -594,11 +594,12 @@ def _charts_for(nh, method, chart_file=None):
     if chart_file:
         cs = nh.load_charts(chart_file)
         if not cs.ready:
-            raise ValueError("chart file {} is not digitized and checked (status '{}') - use "
+            raise ValueError("chart file {} is not signed off (status '{}') - use "
                              "the default comparison with ND Dam Hazard's curves".format(
                                  chart_file, cs.status))
         return cs, "nd_hazard chart method with the chart file {} (status {}, digitized by {}, " \
-                   "checked by {})".format(chart_file, cs.status, cs.digitized_by, cs.checked_by)
+                   "signed off by {})".format(chart_file, cs.status, cs.digitized_by,
+                                              getattr(cs, "signer", None) or cs.checked_by)
     if method == METHOD_CONSERVATIVE:
         return None, METHOD_LABELS[method]
     return _CurveCharts(nh, CS.charts_from_curves()), METHOD_LABELS[METHOD_CURVES]

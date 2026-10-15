@@ -8,64 +8,29 @@ import os
 from osgeo import gdal, osr
 
 from . import terrain
+from . import nd_counties
+from ..damsuite import netproxy       # QGIS's proxy setting applies (0.28.2)
 
-# west, south, east, north in degrees. Padded so a dam on the county line is inside.
-COUNTIES = {
-    "Adams": (-103.00, 45.93, -102.05, 46.45),
-    "Barnes": (-98.35, 46.60, -97.45, 47.35),
-    "Benson": (-99.70, 47.75, -98.70, 48.35),
-    "Billings": (-103.70, 46.65, -102.90, 47.30),
-    "Bottineau": (-101.40, 48.45, -100.15, 49.01),
-    "Bowman": (-104.05, 45.93, -102.95, 46.45),
-    "Burke": (-102.95, 48.45, -102.05, 49.01),
-    "Burleigh": (-101.05, 46.55, -100.05, 47.30),
-    "Cass": (-97.45, 46.60, -96.55, 47.35),
-    "Cavalier": (-98.95, 48.55, -97.85, 49.01),
-    "Dickey": (-98.95, 45.93, -98.05, 46.45),
-    "Divide": (-104.05, 48.50, -103.05, 49.01),
-    "Dunn": (-103.25, 47.15, -102.15, 47.85),
-    "Eddy": (-99.15, 47.45, -98.45, 47.95),
-    "Emmons": (-100.55, 45.95, -99.55, 46.65),
-    "Foster": (-99.35, 47.15, -98.55, 47.75),
-    "Golden Valley": (-104.05, 46.55, -103.45, 47.25),
-    "Grand Forks": (-97.65, 47.55, -96.75, 48.15),
-    "Grant": (-102.05, 46.05, -101.00, 46.65),
-    "Griggs": (-98.55, 47.25, -97.85, 47.75),
-    "Hettinger": (-102.85, 46.05, -101.95, 46.70),
-    "Kidder": (-100.25, 46.55, -99.25, 47.35),
-    "LaMoure": (-98.95, 46.15, -98.05, 46.75),
-    "Logan": (-99.65, 46.15, -98.85, 46.75),
-    "McHenry": (-100.95, 47.85, -99.95, 48.55),
-    "McIntosh": (-99.75, 45.93, -98.95, 46.45),
-    "McKenzie": (-104.05, 47.35, -102.65, 48.15),
-    "McLean": (-101.65, 47.25, -100.35, 48.05),
-    "Mercer": (-102.35, 47.05, -101.35, 47.65),
-    "Morton": (-101.65, 46.35, -100.35, 47.05),
-    "Mountrail": (-102.85, 47.75, -101.55, 48.55),
-    "Nelson": (-98.45, 47.65, -97.75, 48.25),
-    "Oliver": (-101.65, 46.95, -100.85, 47.45),
-    "Pembina": (-97.75, 48.55, -96.75, 49.01),
-    "Pierce": (-100.35, 47.85, -99.45, 48.55),
-    "Ramsey": (-99.05, 47.95, -98.25, 48.55),
-    "Ransom": (-97.95, 46.25, -97.15, 46.85),
-    "Renville": (-102.05, 48.45, -101.15, 49.01),
-    "Richland": (-97.35, 45.93, -96.55, 46.55),
-    "Rolette": (-100.25, 48.45, -99.45, 49.01),
-    "Sargent": (-97.85, 45.93, -97.05, 46.45),
-    "Sheridan": (-100.55, 47.25, -99.55, 47.95),
-    "Sioux": (-101.65, 45.95, -100.45, 46.55),
-    "Slope": (-104.05, 46.15, -103.15, 46.75),
-    "Stark": (-103.25, 46.45, -101.95, 47.25),
-    "Steele": (-98.05, 47.15, -97.35, 47.65),
-    "Stutsman": (-99.35, 46.55, -98.25, 47.35),
-    "Towner": (-99.55, 48.35, -98.75, 48.95),
-    "Traill": (-97.55, 47.15, -96.65, 47.65),
-    "Walsh": (-98.15, 48.15, -97.05, 48.65),
-    "Ward": (-102.05, 47.85, -100.75, 48.65),
-    "Wells": (-100.05, 47.25, -99.15, 47.95),
-    "Williams": (-104.05, 47.95, -102.65, 48.65),
-}
-STATE = (-104.06, 45.93, -96.54, 49.01)
+
+def safe_extract(zf, dest):
+    """Unzip `zf` into `dest`, refusing the whole archive when any entry would land outside
+    `dest` (an absolute path or "..": the zip-slip problem). 0.28.1."""
+    root = os.path.realpath(dest)
+    for member in zf.infolist():
+        target = os.path.realpath(os.path.join(dest, member.filename))
+        if target != root and not target.startswith(root + os.sep):
+            raise ValueError("archive entry outside the destination: " + member.filename)
+    zf.extractall(dest)
+
+
+# (west, south, east, north) in degrees, padded so a dam on the county line is inside.
+# 0.29.0: the county download extents are derived from the county outlines the suite ships
+# (nd_counties.geojson, the same file prepare_dams and the DEM-tab map use), not hand-typed.
+# The hand-typed table ended INSIDE 48 of the 53 counties (McLean by ~34 mi on the west), so a
+# county DEM download quietly stopped short and dams in the missing strip had no terrain.
+COUNTY_PAD_DEG = 0.03          # ~3 km outward, so a dam on the county line is inside the download
+COUNTIES = {name: nd_counties.box([name], COUNTY_PAD_DEG) for name in nd_counties.names()}
+STATE = nd_counties.box(nd_counties.names(), COUNTY_PAD_DEG)
 MI = 1609.344
 
 
@@ -271,7 +236,7 @@ def fetch_dwr(package, out_dir, products, feedback=None):
             dest = os.path.splitext(local)[0]
             os.makedirs(dest, exist_ok=True)
             with zipfile.ZipFile(local) as z:
-                z.extractall(dest)
+                safe_extract(z, dest)
             rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
                         for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
         else:
@@ -332,6 +297,9 @@ def _open_index(cache_dir, feedback=None):
     shp = os.path.join(cache_dir, INDEX_NAME + ".shp") if cache_dir else ""
     if shp and os.path.isfile(shp) and os.path.isfile(shp.replace(".shp", ".dbf")):
         return ogr.Open(shp)
+    opts = netproxy.gdal_options(INDEX_URL)                    # 0.28.2: QGIS's proxy
+    for k in ("GDAL_HTTP_PROXY", "GDAL_HTTP_PROXYUSERPWD"):   # this thread only, kept for the reads
+        gdal.SetThreadLocalConfigOption(k, opts.get(k))
     ds = ogr.Open("/vsicurl/" + INDEX_URL)
     if ds is not None:
         if feedback is not None:
@@ -403,7 +371,7 @@ def _https_get(url, local, retries=3, timeout=120):
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "nd_dam_screening"})
-            with urllib.request.urlopen(req, timeout=timeout) as r, open(part, "wb") as f:
+            with netproxy.urlopen(req, timeout=timeout) as r, open(part, "wb") as f:
                 shutil.copyfileobj(r, f, 1 << 20)
             os.replace(part, local)
             return
@@ -462,9 +430,12 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                 os.makedirs(dest, exist_ok=True)
                 try:
                     with zipfile.ZipFile(local) as z:
-                        z.extractall(dest)
+                        safe_extract(z, dest)
                 except zipfile.BadZipFile:
                     failed.append("{} (damaged zip)".format(remote))
+                    continue
+                except ValueError as e:
+                    failed.append("{} (unsafe zip: {})".format(remote, e))
                     continue
                 rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
                             for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
@@ -512,3 +483,86 @@ def warp_to(src, dest, epsg):
     ds.GetRasterBand(1).SetUnitType("m")
     ds = None
     return dest
+
+
+# 0.24.0: standardised local DEM: GeoTIFF float32, tiled, DEFLATE, EPSG:5070, metres.
+# Named <stem>_10m_5070.tif or <stem>_1m_5070.tif; sidecar <stem>_10m_5070_dem.txt.
+
+def local_tif_stem(scope, cell_m, dam_id="", county="", point=None):
+    """Stem for the standardised local GeoTIFF: <name>_10m_5070 or <name>_1m_5070."""
+    cell_int = int(round(float(cell_m)))
+    tag = "_{}m_5070".format(cell_int)
+    if scope == 0:
+        name = "".join(c if c.isalnum() or c in "-_" else "_"
+                       for c in str(dam_id or "").strip())
+        if not name.strip("_") and point is not None:
+            name = "dam_{:.4f}_{:.4f}".format(point[0], point[1]).replace(
+                "-", "m").replace(".", "p")
+        return (name.strip("_") or "dam") + tag
+    if scope == 1:
+        return (str(county or "").strip().replace(" ", "_") or "county") + tag
+    return "north_dakota" + tag
+
+
+def warp_to_local(src, dest, cell_m, feedback=None):
+    """Warp to the standardised format: EPSG:5070, float32, tiled, DEFLATE at cell_m metres."""
+    if feedback is not None:
+        feedback.pushInfo("warping to EPSG:5070 at {} m (float32 GeoTIFF)".format(cell_m))
+    xres = yres = float(cell_m)
+    ds = gdal.Warp(dest, src, dstSRS="EPSG:5070", format="GTiff",
+                   resampleAlg="bilinear", outputType=gdal.GDT_Float32,
+                   xRes=xres, yRes=yres,
+                   creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
+    if ds is None:
+        raise IOError("GDAL could not warp {} to EPSG:5070".format(src))
+    ds.GetRasterBand(1).SetUnitType("m")
+    ds = None
+    return dest
+
+
+_NATIVE = {
+    "3dep":  "EPSG:5070, metres, GeoTIFF",
+    "dwr":   "feet, EPSG:3721 / EPSG:2266, Erdas Imagine .img at 1 m",
+}
+
+
+def write_sidecar(tif_path, source_label, cell_m, source_key="3dep"):
+    """Write <tif_path without .tif>_dem.txt listing source, CRS, units, file type, cell,
+    and native source facts."""
+    cell_int = int(round(float(cell_m)))
+    txt = tif_path[:-4] + "_dem.txt" if tif_path.lower().endswith(".tif") else tif_path + "_dem.txt"
+    native = _NATIVE.get(source_key, source_key)
+    with open(txt, "w", encoding="utf-8") as f:
+        f.write("Source: {}\n".format(source_label))
+        f.write("CRS: EPSG:5070\n")
+        f.write("Units: metres\n")
+        f.write("File type: GeoTIFF float32\n")
+        f.write("Cell: {} m\n".format(cell_int))
+        f.write("Native: {}\n".format(native))
+    tag_local_tif(tif_path, source_label, cell_m)          # 0.26.0: the same facts on the raster
+    return txt
+
+
+def tag_local_tif(tif_path, source_label, cell_m):
+    """0.26.0: the sidecar's facts as GeoTIFF metadata items on the raster itself (SOURCE, CRS,
+    UNITS, CELL_M), so a file that travels without its _dem.txt still says what it is. Opens the
+    file in update mode, sets the items and closes it. Returns True when written; False (never
+    raises) when the file is not a raster GDAL can update."""
+    ds = None
+    try:
+        ds = gdal.Open(tif_path, getattr(gdal, "GA_Update", 1))
+    except Exception:                                            # noqa - GDAL with exceptions on
+        ds = None
+    if ds is None:
+        return False
+    try:
+        ds.SetMetadataItem("SOURCE", str(source_label))
+        ds.SetMetadataItem("CRS", "EPSG:5070")
+        ds.SetMetadataItem("UNITS", "metres")
+        ds.SetMetadataItem("CELL_M", "{:g}".format(float(cell_m)))
+        ds.FlushCache()
+        return True
+    except Exception:                                            # noqa
+        return False
+    finally:
+        ds = None
