@@ -611,6 +611,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
               "settings": st.as_dict(), "scenario": st.scenario,
               "policy": "North Dakota Dam Safety Standards Policy REG_05.2026, Section 5.1 "
                         "(breach analysis) and 5.4 (outputs)"}
+    rs = _dem_resample_of(terrain_src)
+    if rs is not None:
+        report["dem_resample"] = rs
     arrival_m = st.arrival_depth_ft * FT
     tol_m = st.edge_tolerance_ft * FT
     cs = st.cell_size_m
@@ -1787,6 +1790,18 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
     return info
 
 
+def _dem_resample_of(terrain_src):
+    """{"method", "source"} of the DEM warp (GdalTerrain, also inside a ConditionedTerrain)."""
+    t = terrain_src
+    for _i in range(4):
+        if t is None:
+            return None
+        if getattr(t, "resample", None):
+            return {"method": t.resample, "source": getattr(t, "resample_source", "parameter")}
+        t = getattr(t, "base", None)
+    return None
+
+
 def _manifest_extra(report, summary, warnings):
     """The manifest's "extra" block. v3.4.0 adds the near-dam refine and the DEM conditioning
     (buildings) so the manifest says what the rasters were made with."""
@@ -1799,6 +1814,8 @@ def _manifest_extra(report, summary, warnings):
             "dist_mi": r.get("dist_mi"), "fine_cell_m": r.get("fine_cell_m"),
             "solver": r.get("solver"), "cells_replaced": r.get("cells_replaced"),
             "receptors_inside": (r.get("counts") or {}).get("total")}
+    if report.get("dem_resample"):
+        extra["dem_resample"] = dict(report["dem_resample"])
     c = report.get("dem_conditioning")
     if c is not None:
         extra["dem_conditioning"] = {"buildings": c["buildings"], "edits": c["edits"],
