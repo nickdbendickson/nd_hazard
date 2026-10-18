@@ -116,6 +116,12 @@ class SelfTest(QgsProcessingAlgorithm):
         report = self.parameterAsFileOutput(params, "REPORT", context)
         if not work or work.upper() == "TEMPORARY_OUTPUT":
             work = tempfile.mkdtemp(prefix="nddam_selftest_")
+            created_work = True                      # a temp folder the self-test owns outright
+        else:
+            created_work = not os.path.isdir(work)   # a user path we make fresh, else their own folder
+        # Never delete the user's WORK root or anything it already held: snapshot the entries of a
+        # folder we did not create so cleanup removes only what the self-test itself writes below.
+        preexisting = set() if created_work else set(os.listdir(work))
         os.makedirs(work, exist_ok=True)
         dem_folder, _path = st.write_dem(os.path.join(work, "dem"))
         layers = self.make_layers(st.layer_specs())
@@ -138,7 +144,20 @@ class SelfTest(QgsProcessingAlgorithm):
         if not keep:
             try:
                 import shutil
-                shutil.rmtree(work, ignore_errors=True)
+                if created_work:
+                    shutil.rmtree(work, ignore_errors=True)      # a folder the self-test created
+                else:
+                    for name in os.listdir(work):                # user's WORK: remove only what we added
+                        if name in preexisting:
+                            continue
+                        p = os.path.join(work, name)
+                        if os.path.isdir(p) and not os.path.islink(p):
+                            shutil.rmtree(p, ignore_errors=True)
+                        else:
+                            try:
+                                os.remove(p)
+                            except OSError:
+                                pass
             except Exception:                                    # noqa
                 pass
         return {"REPORT": report, "OK": result["ok"], "FAILED_STEP": next(
