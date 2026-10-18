@@ -923,6 +923,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     def _classify_simple(self, *args):
         """Find the Runner rasters if the boxes are empty, then check and classify."""
+        if getattr(self, "_busy", False):
+            return                      # a run is in progress: do not mutate raster boxes
         if not self.depth_edit.text().strip():
             self._auto_fill_rasters(force=True)
         self._on_run_all()
