@@ -287,6 +287,10 @@ class HecRasModelAlgorithm(_ToolBase):
         self.addParameter(QgsProcessingParameterBoolean(
             "STRUCTURES", "Put the run's culverts, bridges and notches in the 2D area "
             "(connections inside it; not checked in HEC-RAS, see the README)", True))
+        # v3.23.0: breaklines along the dam crest and road embankments
+        self.addParameter(QgsProcessingParameterBoolean(
+            "BREAKLINES", "Add breaklines along the dam crest and road embankments so the "
+            "mesh faces line up on them when the computation points are regenerated", True))
         self._file("OUT_FOLDER", "Output folder (empty = <dam folder>/_hecras/model)",
                    folder=True)
         self.addOutput(QgsProcessingOutputFolder("FOLDER", "HEC-RAS project folder"))
@@ -309,7 +313,8 @@ class HecRasModelAlgorithm(_ToolBase):
                 "target_cells": self.parameterAsInt(parameters, "TARGET_CELLS", context),
                 "equation": EQUATIONS[self.parameterAsEnum(parameters, "EQUATION", context)],
                 "base_flow_cfs": self.parameterAsDouble(parameters, "BASE_FLOW_CFS", context),
-                "structures": self.parameterAsBool(parameters, "STRUCTURES", context)}   # v3.12.0
+                "structures": self.parameterAsBool(parameters, "STRUCTURES", context),  # v3.12.0
+                "breaklines": self.parameterAsBool(parameters, "BREAKLINES", context)}  # v3.23.0
         out = self._fileparam(parameters, "OUT_FOLDER", context) or None
         try:
             r = hecras_model.build_model(
@@ -330,6 +335,9 @@ class HecRasModelAlgorithm(_ToolBase):
         if si.get("exported"):
             msg += "; {} culvert / bridge connection(s) in the 2D area".format(
                 len(si["exported"]))
+        bls = i.get("breaklines") or []                 # v3.23.0: breaklines
+        if bls:
+            msg += "; {} breakline(s)".format(len(bls))
         feedback.pushInfo(msg)
         for n in r["notes"]:
             feedback.pushWarning("Check: " + n)
@@ -344,6 +352,8 @@ class HecRasModelAlgorithm(_ToolBase):
                 sk["name"], sk["kind"], sk["why"]), fatalError=False)
         if si.get("exported") or si.get("skipped"):
             layers.append("Structures from the run")
+        if bls:
+            layers.append("Breaklines")
         feedback.pushInfo("Steps left in HEC-RAS: make the RAS terrain from Terrain/*.tif, "
                           "associate it with the geometry, compute. See README_HECRAS.md.")
         lay = r["paths"]["layout"]
