@@ -57,6 +57,20 @@ RUN_COUNTY_TIP = ("Runs every step that is not done, in order, in the background
                   "and the settings file. Stops at the first problem. An interrupted run carries on "
                   "where it stopped. One dam instead: 'Run one dam...' beside this.")
 
+# GUI port (stage 2a, from DamSafety Screening): the pipeline strip Data -> DEM -> Screen ->
+# Report. Each stage is a flat button that shows the LIVE state of one nd_ step - derived from the
+# SAME wf.statuses the Simple tab's step list already uses - and jumps to the tab that owns it.
+# (key, label, the step whose state it shows, the tab-key it jumps to).
+PIPELINE = (("data", "Data", "1", "simple"), ("dem", "DEM", "2", "simple"),
+            ("screen", "Screen", "7", "simple"), ("report", "Report", None, "results"))
+PIPE_MARK = {"done": "✓", "ready": "●", "running": "◐", "problem": "!",
+             "stale": "↻", "waiting": "○", "optional": "○"}
+PIPE_COLOR = {"done": "#2e7d32", "ready": "#1a73e8", "running": "#1a73e8", "problem": "#c62828",
+              "stale": "#b26a00"}
+# a pipeline tab-key -> the tab TITLE it jumps to (resolved to a live index at click time, so nd_'s
+# tab order can change without touching this)
+PIPE_TAB = {"simple": "Simple", "inputs": "Inputs", "review": "Review", "results": "Results"}
+
 
 def _escape_tab_mnemonics(widget):
     """0.26.0: a single '&' in a tab title is Qt's keyboard-shortcut marker and is not shown
@@ -243,6 +257,10 @@ class NDDamScreeningDialog(QDialog):
         info.setWordWrap(True)
         lay.addWidget(info)
 
+        # GUI port (stage 2a): nd_'s existing header row (work folder + county) folded into a
+        # Workspace group hoisted above the tabs. Every widget and its wiring are nd_'s own - the
+        # county_combo is kept intact; only the container changed.
+        ws = QGroupBox("Workspace")
         row = QHBoxLayout()
         row.addWidget(QLabel("Work folder:"))
         self.work_edit = QLineEdit()
@@ -259,6 +277,12 @@ class NDDamScreeningDialog(QDialog):
         self.help_btn.setToolTip("Pictures of the rules: the rim / toe of a pond, the triage envelope, the "
                                  "ND 5.2 / 5.3 decision tree, and what every threshold does.")
         self.help_btn.clicked.connect(lambda _c=False: self._open_help())
+        # GUI port (stage 2a): a gear SHORTCUT that only SELECTS the Settings tab (no separate
+        # window - the Settings-window move is deferred to a later stage; nd_'s Settings tab stays).
+        self.settings_shortcut_btn = QPushButton("⚙ Settings")
+        self.settings_shortcut_btn.setToolTip("Jump to the Settings tab: every engineer-chosen value, "
+                                              "the settings file and the run options.")
+        self.settings_shortcut_btn.clicked.connect(lambda _c=False: self._select_tab("Settings"))
         row.addWidget(self.work_edit, 1)
         row.addWidget(self.work_browse)
         row.addWidget(self.work_open)
@@ -276,7 +300,11 @@ class NDDamScreeningDialog(QDialog):
         self.county_combo.currentIndexChanged.connect(lambda *_a: self._changed())
         row.addWidget(self.county_combo)
         row.addWidget(self.help_btn)
-        lay.addLayout(row)
+        row.addWidget(self.settings_shortcut_btn)
+        ws.setLayout(row)
+        lay.addWidget(ws)
+        # GUI port (stage 2a): the pipeline strip sits between the workspace header and the tabs
+        lay.addWidget(self._build_pipeline())
 
         self.tabs = QTabWidget()
         self.tabs.addTab(_scroll_tab(self._build_simple_tab()), "Simple")
@@ -292,18 +320,91 @@ class NDDamScreeningDialog(QDialog):
         self._run_tips = dict((id(b), b.toolTip()) for b in
                               (self.chain_btn, self.one_dam_btn, self.sel_dams_btn))
 
-        lay.addWidget(QLabel("Log"))
+        # GUI port (stage 2a): the log folded to a one-line 'Log: <last line>' with a 'Show log'
+        # toggle, replacing nd_'s always-open box. The full box is hidden until asked for; the
+        # Simple tab's step_progress bar is left where it is (preserved).
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
+        self.log_edit.setVisible(False)
         lay.addWidget(self.log_edit)
         row = QHBoxLayout()
+        self.log_line = QLabel("Log: -")
+        self.log_line.setStyleSheet("color: #4a5560;")
+        self.log_toggle = QPushButton("Show log")
+        self.log_toggle.setToolTip("Show or hide the whole log.")
+        self.log_toggle.clicked.connect(lambda _c=False: self._toggle_log())
         self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.close)
-        row.addStretch(1)
+        row.addWidget(self.log_line, 1)
+        row.addWidget(self.log_toggle)
+        row.addStretch(0)
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+
+    # -- GUI port (stage 2a): the pipeline strip, the tab shortcuts and the folded log
+    def _build_pipeline(self):
+        """Data -> DEM -> Screen -> Report; each a flat button that jumps to its owning tab."""
+        bar = QGroupBox("")
+        row = QHBoxLayout()
+        self.pipe_btn = {}
+        for i, (key, label, _step, _tab) in enumerate(PIPELINE):
+            if i:
+                row.addWidget(QLabel("→"))
+            b = QPushButton("{} ○".format(label))
+            b.setFlat(True)
+            b.clicked.connect(lambda _c=False, k=key: self._goto_stage(k))
+            self.pipe_btn[key] = b
+            row.addWidget(b)
+        row.addStretch(1)
+        bar.setLayout(row)
+        self.pipeline_bar = bar
+        return bar
+
+    def _select_tab(self, title):
+        """Select the tab with this title (robust to nd_'s tab order and the '&&' mnemonic escape)."""
+        try:
+            for i in range(self.tabs.count()):
+                if self.tabs.tabText(i).replace("&&", "&") == title:
+                    self.tabs.setCurrentIndex(i)
+                    return True
+        except Exception:                                        # noqa
+            pass
+        return False
+
+    def _goto_stage(self, key):
+        """A pipeline button: jump to the tab that owns the stage (adapted to nd_'s tab order)."""
+        tab = dict((k, t) for k, _l, _s, t in PIPELINE).get(key, "simple")
+        self._select_tab(PIPE_TAB.get(tab, "Simple"))
+
+    def _refresh_pipeline(self, by, busy, have, work):
+        """Fill the strip from nd_'s OWN wf.statuses (the `by` dict the Simple tab's step list is
+        built from) plus the report file. Each stage shows a live glyph + colour and a 'why'
+        tooltip. Never the cause of a crash in refresh()."""
+        self.pipe_state = {}
+        cur = getattr(self.chain, "current", None) if busy else None
+        for key, label, step, _tab in PIPELINE:
+            if step is None:
+                st = "done" if have and os.path.isfile(os.path.join(work, wf.REPORT_INDEX)) else "waiting"
+                why = ("Report: index.html written by step 10" if st == "done"
+                       else "Report: no report yet")
+            else:
+                st = by.get(step) or "waiting"
+                if busy and (cur == step or (step == "7" and cur in ("5", "6", "7", "8"))):
+                    st = "running"
+                why = "{}: step {} - {} ({})".format(label, step, wf.TITLE.get(step, ""), st)
+            self.pipe_state[key] = st
+            b = self.pipe_btn[key]
+            b.setText("{} {}".format(label, PIPE_MARK.get(st, "○")))
+            b.setToolTip(why + ". Click to go to the tab.")
+            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, "#5f6b76"),
+                                                   " font-weight: bold;" if st in ("done", "ready") else ""))
+
+    def _toggle_log(self):
+        on = not self.log_edit.isVisible()
+        self.log_edit.setVisible(on)
+        self.log_toggle.setText("Hide log" if on else "Show log")
 
     # -- Simple
     def _build_simple_tab(self):
@@ -1746,6 +1847,11 @@ class NDDamScreeningDialog(QDialog):
     # --------------------------------------------------------------------- log --
     def _log(self, msg):
         self.log_edit.append(str(msg))
+        # GUI port (stage 2a): keep the folded one-line 'Log: <last line>' in step
+        line = getattr(self, "log_line", None)
+        if line is not None:
+            text = str(msg).strip().splitlines()
+            line.setText("Log: " + (text[-1][:120] if text else "-"))
 
     # ----------------------------------------------------------------- refresh --
     # ---------------------------------------------------------- 0.28.0: why, and how long --
@@ -1828,6 +1934,12 @@ class NDDamScreeningDialog(QDialog):
                 self.simple_state[key].setEnabled(used)
         nxt = wf.next_step(work, s) if have else None
         busy = self.chain is not None and self.chain.active
+        # GUI port (stage 2a): the pipeline strip, fed from the SAME wf.statuses rows above
+        try:
+            by = {k: state for k, _t, state, _n in rows}
+            self._refresh_pipeline(by, busy, have, work)
+        except Exception:                                        # noqa - the strip is never a crash
+            pass
         for k in wf.KEYS:
             self.step_button[k].setEnabled(have and not busy)
         self.next_btn.setEnabled(bool(nxt) and not busy)
