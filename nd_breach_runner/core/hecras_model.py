@@ -285,6 +285,7 @@ class Model:
         self.terrain_name = ""
         self.description = []
         self.structures = []         # v3.12.0: structure_connection() dicts
+        self.breaklines = []         # v3.23.0: [{name, polyline, cell_min, cell_max}]
 
     def bounds(self):
         pts = list(self.perimeter) + list(self.reservoir)
@@ -350,6 +351,9 @@ def geometry_text(m, now=None):
         flat += [e, v]
     L += lines8(flat)
     L += ["Storage Area Is2D=0", ""]
+    # --- v3.23.0: breaklines (enforce cell faces along the dam and road embankments) -----
+    for bl in m.breaklines:
+        L += breakline_block(bl)
     # --- SA/2D connection: the dam ------------------------------------------------------
     cx, cy = _centroid(m.conn_line)
     L.append("Connection={},{},{}".format(name16(CONN_NAME), num(cx, 4), num(cy, 4)))
@@ -387,6 +391,24 @@ def geometry_text(m, now=None):
           "Use User Specified Reach Order=0", "GIS Ratio Cuts To Invert=-1",
           "GIS Limit At Bridges=0", "Composite Channel Slope=5"]
     return CR.join(L) + CR
+
+
+def breakline_block(bl):
+    """v3.23.0: the geometry lines of one breakline, as HEC writes them (BaldEagleDamBrk's
+    'Upper/Middle/Lower Levee' breaklines): a named polyline with optional near/far cell
+    sizes. An empty cell size keeps the 2D area's cell size, so the breakline still forces
+    cell faces to line up along it without refining. HEC-RAS honours a breakline when it
+    (re)generates the 2D area's computation points; the README says so."""
+    poly = bl["polyline"]
+    L = ["BreakLine Name=" + str(bl["name"]),
+         "BreakLine CellSize Min=" + ("" if bl.get("cell_min") is None
+                                      else num(bl["cell_min"], 2)),
+         "BreakLine CellSize Max=" + ("" if bl.get("cell_max") is None
+                                      else num(bl["cell_max"], 2)),
+         "BreakLine Near Repeats=0", "BreakLine Protection Radius=-1",
+         "BreakLine Polyline= {} ".format(len(poly))]
+    L += lines_xy(poly, 2)
+    return L
 
 
 def structure_block(c, now):
@@ -1029,6 +1051,12 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     return out, None
 
 
+def _breakline_name(text):
+    """A breakline name for the .g file: no '=' or line breaks (the value is the rest of the
+    line), whitespace collapsed, trimmed to 40 characters."""
+    return (re.sub(r"[\s=]+", " ", str(text or "")).strip() or "Breakline")[:40]
+
+
 def connection_name(text, used):
     """A unique HEC-RAS connection name (16 characters, no , or =) from a structure name."""
     base = re.sub(r"[\s,=]+", " ", str(text or "")).strip() or "Structure"
@@ -1055,7 +1083,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "target_cells": 100000, "equation": EQ_SWE, "base_flow_cfs": 0.0,
             "terrain_cell": 0.0, "max_terrain_cells": 150e6, "extent_depth_ft": 0.0,
             "manning_n": None, "courant": None,
-            "structures": True}                 # v3.12.0: the run's culverts and bridges
+            "structures": True,                  # v3.12.0: the run's culverts and bridges
+            "breaklines": True}                  # v3.23.0: enforce cell faces along the dam
+                                                 #          crest and road embankments
 
 
 def _ogr():
@@ -1857,6 +1887,22 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.description = ["Built by the ND Dam Breach Runner from the run in {}.".format(
         os.path.basename(os.path.normpath(dam_folder)))]
     m.structures = sinfo["exported"]            # v3.12.0
+    # v3.23.0: breaklines along the hydraulic controls, so cell faces line up on them when
+    # the 2D area's computation points are (re)generated in HEC-RAS. The dam crest, and each
+    # exported structure's road line (culvert / bridge / notch embankment). Cell sizes left
+    # empty = the 2D area's cell size (align faces, no refinement).
+    breaklines = []
+    if o["breaklines"]:
+        if len(conn_line) >= 2:
+            breaklines.append({"name": "Dam crest", "polyline": [tuple(p) for p in conn_line],
+                               "cell_min": None, "cell_max": None})
+        for c in sinfo["exported"]:
+            line = c.get("structure_line") or c.get("line")
+            if line and len(line) >= 2:
+                breaklines.append({"name": _breakline_name(c["name"]),
+                                   "polyline": [tuple(p) for p in line],
+                                   "cell_min": None, "cell_max": None})
+    m.breaklines = breaklines
 
     # --- write -------------------------------------------------------------------
     progress(88, "writing files")
@@ -1881,7 +1927,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             "storage_exponent": res.m, "manning_n": m.manning_n,
             "equation": EQUATIONS[m.equation][1], "scenario": report.get("scenario"),
             "edits": settings.get("edits"), "dem": dem_path, "mesh_check": mc,
-            "structures": sinfo}                # v3.12.0
+            "structures": sinfo,                # v3.12.0
+            "breaklines": [bl["name"] for bl in m.breaklines]}    # v3.23.0
     paths["readme"] = write_readme(os.path.join(out, "README_HECRAS.md"), m, info, notes, dam,
                                    params)
     # 3.13.0: roads crossing the flow path with no culvert or bridge in the run (candidates)
@@ -2062,6 +2109,12 @@ def write_layout(path, m, srs, bc_slope_how="", P=None, skipped=()):
              for sk in skipped if len(sk["line"]) >= 2]
     if rows:
         layer("Structures from the run", ogr.wkbLineString, rows)
+    # v3.23.0: breaklines (the dam crest and road embankments the mesh should follow)
+    if m.breaklines:
+        layer("Breaklines", ogr.wkbLineString, [(_line(bl["polyline"]), {
+            "name": bl["name"],
+            "cell_size": "2D area" if bl.get("cell_min") is None else num(bl["cell_min"], 2)})
+            for bl in m.breaklines if len(bl["polyline"]) >= 2])
     ds = None
     return path
 
@@ -2070,6 +2123,7 @@ def write_readme(path, m, info, notes, dam, params):
     u = m.units
     L = u.len_name
     b = info["breach"]
+    bl_g01 = ", breaklines" if m.breaklines else ""
     lines = [
         "# HEC-RAS model: {}".format(m.title), "",
         "Built by the ND Dam Breach Runner the way HEC's tutorial *Dam Breach - Simple 2D "
@@ -2080,7 +2134,7 @@ def write_readme(path, m, info, notes, dam, params):
         "| File | What |", "|---|---|",
         "| `{0}.prj` | HEC-RAS project ({1}) |".format(m.name, u.label),
         "| `{0}.g01` | Geometry: storage area, 2D area ({1:,} cells of {2:g} {3}), dam "
-        "connection, boundary line |".format(m.name, info["cells"], info["cell"], L),
+        "connection, boundary line{4} |".format(m.name, info["cells"], info["cell"], L, bl_g01),
         "| `{0}.u01` | Unsteady flow: initial pool, inflow, normal depth |".format(m.name),
         "| `{0}.p01` | Plan: {1:g} h, {2} time step, {3}, the breach |".format(
             m.name, info["sim_hours"], info["comp_interval"], info["equation"]),
@@ -2100,8 +2154,11 @@ def write_readme(path, m, info, notes, dam, params):
         "Terrain) and pick that terrain.",
         "4. Still in RAS Mapper, right-click the 2D flow area > *Edit 2D Area Properties* and "
         "press *Generate Computation Points* only if you want a different cell size; the "
-        "points are already there. Then *Geometry > Compute Property Tables* (or let the "
-        "plan's geometry preprocessor do it). Check the mesh messages.",
+        "points are already there.{0} Then *Geometry > Compute Property Tables* (or let the "
+        "plan's geometry preprocessor do it). Check the mesh messages.".format(
+            " The breaklines (the dam crest and the roads) are written into the geometry but "
+            "only line the cells up on themselves once you regenerate the computation points."
+            if m.breaklines else ""),
         "5. (Optional) Land cover: the 2D area uses one Manning's n ({:g}). If the run used "
         "an NLCD or Manning raster, make a RAS land cover layer and associate it.".format(
             m.manning_n),
