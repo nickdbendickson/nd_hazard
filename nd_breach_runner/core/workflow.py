@@ -131,7 +131,7 @@ def run_finished(folder):
     if not os.path.isfile(rep):
         return False
     try:                                   # a report without run_finished is an interrupted run
-        with open(rep) as fh:
+        with open(rep, encoding="utf-8") as fh:
             return bool(json.load(fh).get("run_finished"))
     except Exception:                      # unreadable report: the rasters are there, treat as done
         return True
