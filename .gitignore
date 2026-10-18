@@ -1,0 +1,6 @@
+# Python / QGIS build artifacts (never committed)
+__pycache__/
+*.pyc
+*.pyo
+# QGIS writes this style cache when a headless test starts a QgsApplication
+symbology-style.db
