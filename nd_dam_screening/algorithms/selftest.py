@@ -119,22 +119,25 @@ class SelfTest(QgsProcessingAlgorithm):
             created_work = True                      # a temp folder the self-test owns outright
         else:
             created_work = not os.path.isdir(work)   # a user path we make fresh, else their own folder
-        # Never delete the user's WORK root or anything it already held: snapshot the entries of a
-        # folder we did not create so cleanup removes only what the self-test itself writes below.
-        preexisting = set() if created_work else set(os.listdir(work))
-        os.makedirs(work, exist_ok=True)
-        dem_folder, _path = st.write_dem(os.path.join(work, "dem"))
+            os.makedirs(work, exist_ok=True)
+        # Where the self-test actually writes. A temp folder (or a user path we just created) is ours
+        # outright, so we use it directly. But an existing user WORK folder may hold the engineer's own
+        # files - some named like our outputs (e.g. a 'dem' subfolder) - so we run inside a dedicated
+        # unique subdir (mkdtemp picks a name that cannot collide with a pre-existing entry) and never
+        # write into or delete anything else the folder holds. Cleanup (KEEP off) removes only this sandbox.
+        sandbox = work if created_work else tempfile.mkdtemp(prefix="_selftest_", dir=work)
+        dem_folder, _path = st.write_dem(os.path.join(sandbox, "dem"))
         layers = self.make_layers(st.layer_specs())
-        feedback.pushInfo("Synthetic world in {}".format(work))
+        feedback.pushInfo("Synthetic world in {}".format(sandbox))
 
         def run(aid, p):
             if feedback.isCanceled():
                 raise QgsProcessingException("cancelled")
             return processing.run(aid, p, context=context, feedback=feedback, is_child_algorithm=True)
 
-        result = st.run_selftest(work, layers, dem_folder, run, log=feedback.pushInfo, engine=engine,
+        result = st.run_selftest(sandbox, layers, dem_folder, run, log=feedback.pushInfo, engine=engine,
                                  cell_m=cell, sim_h=simh, versions=software_versions(), exe=exe)
-        text = result["report"] + "\nWork folder: {}{}\n".format(work, "" if keep else " (temporary)")
+        text = result["report"] + "\nWork folder: {}{}\n".format(sandbox, "" if keep else " (temporary)")
         if report and report.upper() != "TEMPORARY_OUTPUT":
             os.makedirs(os.path.dirname(os.path.abspath(report)) or ".", exist_ok=True)
             with open(report, "w", encoding="utf-8") as fh:
@@ -144,24 +147,14 @@ class SelfTest(QgsProcessingAlgorithm):
         if not keep:
             try:
                 import shutil
-                if created_work:
-                    shutil.rmtree(work, ignore_errors=True)      # a folder the self-test created
-                else:
-                    for name in os.listdir(work):                # user's WORK: remove only what we added
-                        if name in preexisting:
-                            continue
-                        p = os.path.join(work, name)
-                        if os.path.isdir(p) and not os.path.islink(p):
-                            shutil.rmtree(p, ignore_errors=True)
-                        else:
-                            try:
-                                os.remove(p)
-                            except OSError:
-                                pass
+                # Only the self-test's own sandbox: either a temp folder / fresh user path we own
+                # outright, or a dedicated subdir of the user's WORK - never the user's WORK root or
+                # anything it already held.
+                shutil.rmtree(sandbox, ignore_errors=True)
             except Exception:                                    # noqa
                 pass
         return {"REPORT": report, "OK": result["ok"], "FAILED_STEP": next(
-            (r["step"] for r in result["rows"] if r["status"] == "FAIL"), ""), "WORK": work if keep else ""}
+            (r["step"] for r in result["rows"] if r["status"] == "FAIL"), ""), "WORK": sandbox if keep else ""}
 
     def make_layers(self, specs):
         """Real QGIS memory layers (the tests replace this with the mock's layers)."""
