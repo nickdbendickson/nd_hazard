@@ -149,7 +149,7 @@ class Hydrograph:
             else float(np.trapz(self.q_cms, self.t_s))
 
     def to_csv(self, path):
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("time_hr,discharge_cfs\n")
             for t, q in zip(self.t_s, self.q_cms):
                 f.write("{:.5f},{:.3f}\n".format(t / 3600.0, q / CFS))
@@ -220,7 +220,7 @@ class Hydrograph:
 def read_csv_series(path, what="hydrograph", y_scale=1.0, x_scale=1.0):
     """Two numeric columns; header lines and blank lines are skipped."""
     xs, ys = [], []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             parts = [p.strip() for p in line.replace(";", ",").split(",")]
             if len(parts) < 2:

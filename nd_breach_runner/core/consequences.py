@@ -893,7 +893,7 @@ OUTPUT_NAMES = {"csv": "Consequences (Structures).csv", "roads_csv": "Consequenc
 
 def write_rows_csv(path, rows, columns=None):
     cols = columns or ROW_COLUMNS
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
@@ -1024,10 +1024,10 @@ def write_outputs(folder, rows, summary, crs=None, geojson=True):
     out = {}
     out["csv"] = write_rows_csv(os.path.join(folder, OUTPUT_NAMES["csv"]), rows)
     out["markdown"] = os.path.join(folder, OUTPUT_NAMES["markdown"])
-    with open(out["markdown"], "w") as f:
+    with open(out["markdown"], "w", encoding="utf-8") as f:
         f.write(markdown_summary(summary))
     out["json"] = os.path.join(folder, OUTPUT_NAMES["json"])
-    with open(out["json"], "w") as f:
+    with open(out["json"], "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, default=str)
     out["geojson"] = ""
     if geojson:
