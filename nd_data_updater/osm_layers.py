@@ -214,7 +214,7 @@ def extract(pbf_path, out, box=ND_BBOX, tick=None, say=None):
     tick(features_read), when given, is called every few seconds (it may raise to cancel);
     say(text) reports progress (default: print)."""
     say = say or log
-    from osgeo import gdal, ogr
+    from osgeo import gdal
     gdal.UseExceptions()
     gdal.SetConfigOption("OSM_MAX_TMPFILE_SIZE", "1000")       # MB of node index in memory
     gdal.SetConfigOption("OGR_INTERLEAVED_READING", "YES")

@@ -64,7 +64,7 @@ from . import breach as brmod
 from . import conditioning as cond             # v3.12.0: polygon and polyline helpers
 from . import hecras
 from . import structures as structmod          # v3.12.0: the run's culverts and bridges
-from .units import ACFT, CFS, FT, US_FT, MILE, G
+from .units import ACFT, CFS, FT, US_FT, MILE
 
 PROGRAM_VERSION = "6.10"
 SA_NAME = "Reservoir"
@@ -1383,7 +1383,6 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
     <dam folder>/_hecras/model). Returns a dict with the paths, the Model and notes."""
-    from . import gdal_io
     log = log or (lambda m: None)
     progress = progress or (lambda p, m="": None)
     o = dict(DEFAULTS)
@@ -1958,7 +1957,7 @@ def mesh_check(perimeter, points, cell):
     cell of each point clipped to the perimeter. Returns {'cells_checked', 'max_faces',
     'over_8_faces', 'smallest_fraction'} or None without scipy."""
     try:
-        from scipy.spatial import cKDTree, Voronoi
+        from scipy.spatial import Voronoi
     except ImportError:
         return None
     pts = np.asarray(points, float)

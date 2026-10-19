@@ -40,9 +40,8 @@ Time zero of the result is the start of the storm. The flood scenario treats the
 zero after the last row and starts routing from the normal pool at time zero.
 """
 import math
-import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 

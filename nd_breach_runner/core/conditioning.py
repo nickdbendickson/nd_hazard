@@ -18,12 +18,11 @@ models ask for, so the source DEM is never modified:
   has the crest does nothing further.
 """
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
 
-from .grid import Grid
 
 # v3.4.0 building footprints: how they are represented (BUILDINGS parameter)
 BUILDINGS_NONE = "none"

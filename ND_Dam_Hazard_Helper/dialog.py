@@ -16,6 +16,7 @@ from qgis.core import QgsProject, QgsRasterLayer
 
 from .compat import MSG_INFO, MSG_WARNING, MSG_CRITICAL, WINDOW_MODAL
 from .helpers import log_message, CancelledByUser, plugin_group, dam_display_name
+from .ui_check_panel import CheckPanel
 
 from .constants import (
     PLUGIN_NAME, PLUGIN_VERSION, OUTPUT_FOLDER_NAME,
@@ -98,8 +99,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.dam_folder_edit.textChanged.connect(self._on_dam_folder_changed)
         for e in (self.depth_edit, self.vel_edit, self.arr_edit, self.dv_edit):
             e.textChanged.connect(self._update_button_states)
+            e.textChanged.connect(self.check_panel.clear)   # old check results are stale
         try:
             self.model_combo.currentIndexChanged.connect(self._update_button_states)
+            self.model_combo.currentIndexChanged.connect(self.check_panel.clear)
         except Exception:
             pass
         self._defaults = self._current_state()
@@ -220,9 +223,19 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                                   "depth, arrival in minutes, missing velocity, coordinate "
                                   "systems), the outline file and the download services.")
         self.check_btn.clicked.connect(self._on_check_inputs)
+        self.classify_btn = QPushButton("Classify")
+        self.classify_btn.setMinimumHeight(40)
+        self.classify_btn.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.classify_btn.setToolTip("Finds the depth, velocity, and arrival rasters, "
+                                     "checks them, and classifies.")
+        self.classify_btn.clicked.connect(self._classify_simple)
         btn_layout.addWidget(self.check_btn)
+        btn_layout.addWidget(self.classify_btn)
         btn_layout.addStretch()
         setup_layout.addLayout(btn_layout)
+        # check results by severity, under the button row (ui_check_panel.py)
+        self.check_panel = CheckPanel(self.check_btn, self.classify_btn, action="classifying")
+        setup_layout.addWidget(self.check_panel)
         setup_layout.addStretch()
         self.tab_widget.addTab(_scroll_tab(setup_tab), "Setup & Run")
         self._setup_tab_index = self.tab_widget.count() - 1
@@ -908,6 +921,14 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         return "<br>".join("<span style='color:{}'><b>{}</b></span> {}".format(
             colors.get(lvl, "#000"), lvl, html.escape(t)) for lvl, t in results)
 
+    def _classify_simple(self, *args):
+        """Find the Runner rasters if the boxes are empty, then check and classify."""
+        if getattr(self, "_busy", False):
+            return                      # a run is in progress: do not mutate raster boxes
+        if not self.depth_edit.text().strip():
+            self._auto_fill_rasters(force=True)
+        self._on_run_all()
+
     def _on_check_inputs(self, *args):
         if self._busy:
             return
@@ -935,8 +956,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         n_err, n_warn = summary(results)
         self._update_status("Input check: {} error(s), {} warning(s)".format(n_err, n_warn),
                             n_err == 0)
-        box = QMessageBox.warning if n_err else QMessageBox.information
-        box(self, "Check inputs", self._checks_html(results))
+        # the results are shown in the panel under the buttons (no pop-up)
+        self.check_panel.set_results(results)
         return results
 
     def _on_run_all(self, *args):
@@ -954,6 +975,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for lvl, t in results:
             if lvl != "OK":
                 self._log(">>> CHECK {}: {}".format(lvl, t))
+        self.check_panel.set_results(results)
         if summary(results)[0]:
             QMessageBox.warning(self, "Run everything - inputs need fixing",
                                 self._checks_html([r for r in results if r[0] == ERROR]))

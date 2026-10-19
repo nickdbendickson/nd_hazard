@@ -51,7 +51,6 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .grid import Grid
 from .units import FT, MILE, ACFT, CFS
 from ..damsuite import solvegate as SG
 
@@ -131,7 +130,7 @@ def run_finished(folder):
     if not os.path.isfile(rep):
         return False
     try:                                   # a report without run_finished is an interrupted run
-        with open(rep) as fh:
+        with open(rep, encoding="utf-8") as fh:
             return bool(json.load(fh).get("run_finished"))
     except Exception:                      # unreadable report: the rasters are there, treat as done
         return True
@@ -452,7 +451,7 @@ class _State:
         self.data = {"key": key}
         if enabled and os.path.exists(self.path):
             try:
-                with open(self.path) as f:
+                with open(self.path, encoding="utf-8") as f:
                     old = json.load(f)
                 if old.get("key") == key:
                     self.data = old
@@ -465,7 +464,7 @@ class _State:
     def save(self, **kw):
         self.data.update(kw)
         self.data["key"] = self.key
-        with open(self.path, "w") as f:
+        with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, default=_json_default)
 
     def get(self, k, default=None):
@@ -611,6 +610,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
               "settings": st.as_dict(), "scenario": st.scenario,
               "policy": "North Dakota Dam Safety Standards Policy REG_05.2026, Section 5.1 "
                         "(breach analysis) and 5.4 (outputs)"}
+    rs = _dem_resample_of(terrain_src)
+    if rs is not None:
+        report["dem_resample"] = rs
     arrival_m = st.arrival_depth_ft * FT
     tol_m = st.edge_tolerance_ft * FT
     cs = st.cell_size_m
@@ -1303,7 +1305,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     res.lisflood_stats = dict(lf_env.stats)
     res.gauges = dict(lf_env.gauges)
     for name, (tt, qq) in res.gauges.items():
-        with open(os.path.join(model_dir, "gauge_{}.csv".format(_safe(name))), "w") as f:
+        with open(os.path.join(model_dir, "gauge_{}.csv".format(_safe(name))), "w", encoding="utf-8") as f:
             f.write("time_hr,discharge_cfs\n")
             for a, b in zip(tt, qq):
                 f.write("{:.5f},{:.3f}\n".format(a / 3600.0, b / CFS))
@@ -1573,10 +1575,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w") as f:
+    with open(res.report_json, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=_json_default)
     res.report_md = os.path.join(model_dir, "run_report.md")
-    with open(res.report_md, "w") as f:
+    with open(res.report_md, "w", encoding="utf-8") as f:
         f.write(render_report(report))
     if st.products:
         try:
@@ -1735,11 +1737,11 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     if hy_nb is not None:
         hy_nb.to_csv(os.path.join(model_dir, "no_breach_hydrograph.csv"))
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w") as f:
+    with open(res.report_json, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=_json_default)
     res.report_md = os.path.join(model_dir, "run_report.md")
     from . import damjson
-    with open(res.report_md, "w") as f:
+    with open(res.report_md, "w", encoding="utf-8") as f:
         f.write("# Breach model run: {}\n\nThe dam does not fail in this flood.\n\n{}\n".format(
             res.dam_id, "\n".join("- " + w for w in warnings)))
         if report.get("dam_record"):
@@ -1787,6 +1789,18 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
     return info
 
 
+def _dem_resample_of(terrain_src):
+    """{"method", "source"} of the DEM warp (GdalTerrain, also inside a ConditionedTerrain)."""
+    t = terrain_src
+    for _i in range(4):
+        if t is None:
+            return None
+        if getattr(t, "resample", None):
+            return {"method": t.resample, "source": getattr(t, "resample_source", "parameter")}
+        t = getattr(t, "base", None)
+    return None
+
+
 def _manifest_extra(report, summary, warnings):
     """The manifest's "extra" block. v3.4.0 adds the near-dam refine and the DEM conditioning
     (buildings) so the manifest says what the rasters were made with."""
@@ -1799,6 +1813,8 @@ def _manifest_extra(report, summary, warnings):
             "dist_mi": r.get("dist_mi"), "fine_cell_m": r.get("fine_cell_m"),
             "solver": r.get("solver"), "cells_replaced": r.get("cells_replaced"),
             "receptors_inside": (r.get("counts") or {}).get("total")}
+    if report.get("dem_resample"):
+        extra["dem_resample"] = dict(report["dem_resample"])
     c = report.get("dem_conditioning")
     if c is not None:
         extra["dem_conditioning"] = {"buildings": c["buildings"], "edits": c["edits"],

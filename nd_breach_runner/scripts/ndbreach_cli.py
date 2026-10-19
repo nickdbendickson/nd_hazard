@@ -178,7 +178,8 @@ MODEL_KEYS = {
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
-            "work_crs": ("str",), "reader": ("enum", READERS)},
+            "work_crs": ("str",), "reader": ("enum", READERS),
+            "resample": ("enum", gdal_io.RESAMPLE_METHODS)},
     "breach": {"method": ("enum", brmod.METHODS), "user_csv": ("path",), "overrides": ("dict",)},
     "scenario": {"type": ("enum", SCENARIO_TYPES), "inflow_csv": ("path",),
                  "spillway_csv": ("path",), "normal_pool_ft": ("num", None, None),
@@ -366,9 +367,11 @@ TEMPLATE = {
     "dem": {
         "_help": "GeoTIFF/VRT (needs GDAL) or ESRI ASCII .asc. z_units: auto|feet|us_feet|meters "
                  "(set it: auto only trusts what the raster records). crs is for .asc DEMs "
-                 "(metric CRS).",
+                 "(metric CRS). resample: how GeoTIFF/VRT terrain is resampled onto the model "
+                 "grid (average|bilinear|near|cubic|...); null = the NDBREACH_DEM_RESAMPLE "
+                 "environment variable, else average.",
         "path": "dem.tif", "z_units": "meters", "crs": None, "work_crs": None,
-        "reader": "auto"},
+        "reader": "auto", "resample": None},
     "dam": {
         "_help": "point is the dam crest in the DEM's CRS; the rest are the fields of "
                  "breach.DamData (ft, ac-ft, acres, H in H:1V).",
@@ -902,15 +905,19 @@ def _open_gdal(cfg, d, path, dam_pt, cache):
         geo = frame0.srs("EPSG:4269")
         ll = frame0._ct(dem_srs, geo).TransformPoint(float(dam_pt[0]), float(dam_pt[1]))
         work_text = "EPSG:{}".format(gdal_io.utm_epsg(ll[0], ll[1]))
-    key = ("gdal", path, work_text)
+    key = ("gdal", path, work_text, d.get("resample"))
     if cache is not None and key in cache:
         return cache[key]
     work_srs = frame0.srs(work_text)
     if gdal_io.linear_unit_m(work_text) != 1.0:
         raise CliError("The model CRS must be projected in metres ({} is not)".format(work_text))
     n, mpath, kw = manning_options(cfg)
-    terrain = gdal_io.GdalTerrain(path, work_text, d.get("z_units", gdal_io.Z_AUTO), mpath, n,
-                                  **kw)
+    kw["resample"] = d.get("resample")
+    try:
+        terrain = gdal_io.GdalTerrain(path, work_text, d.get("z_units", gdal_io.Z_AUTO), mpath, n,
+                                      **kw)
+    except ValueError as e:                            # a bad NDBREACH_DEM_RESAMPLE value
+        raise CliError(str(e))
     unit = gdal_io.linear_unit_m(wkt)
     target, res = None, None
     if unit and not gdal_io.same_crs(wkt, work_text):

@@ -5,7 +5,6 @@ import math
 
 import numpy as np
 
-from .grid import Grid
 
 _NB = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 

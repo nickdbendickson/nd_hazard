@@ -168,16 +168,17 @@ def lisflood_smoke(exe, work=None, timeout_s=SMOKE_TIMEOUT_S, title="LISFLOOD-FP
     folder = work or tempfile.mkdtemp(prefix="lf_smoke_")
     try:
         os.makedirs(os.path.join(folder, "out"), exist_ok=True)
-        with open(os.path.join(folder, "dem.asc"), "w") as fh:
+        with open(os.path.join(folder, "dem.asc"), "w", encoding="utf-8") as fh:
             fh.write("ncols 5\nnrows 5\nxllcorner 0\nyllcorner 0\ncellsize 10\n"
                      "NODATA_value -9999\n")
             fh.write("\n".join(" ".join(["100"] * 5) for _ in range(5)) + "\n")
-        with open(os.path.join(folder, "smoke.par"), "w") as fh:
+        with open(os.path.join(folder, "smoke.par"), "w", encoding="utf-8") as fh:
             fh.write(_SMOKE_PAR)
         flags = 0x08000000 if os.name == "nt" else 0          # no console window on Windows
         env = dict(os.environ, OMP_NUM_THREADS="1")
         try:
             r = subprocess.run([exe, "smoke.par"], cwd=folder, capture_output=True, text=True,
+                               errors="replace",
                                timeout=timeout_s, env=env, creationflags=flags)
         except subprocess.TimeoutExpired:
             out = check(FAIL, title, "no answer in {} s on a 5 x 5 grid".format(timeout_s),

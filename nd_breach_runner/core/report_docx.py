@@ -28,13 +28,11 @@ import datetime
 import fnmatch
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
 import struct
 import subprocess
-import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile

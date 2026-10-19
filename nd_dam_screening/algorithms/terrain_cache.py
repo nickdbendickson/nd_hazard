@@ -3,14 +3,13 @@ import os
 
 from osgeo import gdal
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterEnum, QgsProcessingParameterNumber,
-                       QgsProcessingParameterFolderDestination,
-                       QgsProcessingParameterFile, QgsProcessingException,
-                       QgsCoordinateTransform, QgsCoordinateReferenceSystem,
-                       QgsProject)
+                       QgsProcessingParameterEnum, QgsProcessingParameterFolderDestination,
+                       QgsProcessingParameterFile,
+                       QgsProcessingException, QgsCoordinateTransform,
+                       QgsCoordinateReferenceSystem, QgsProject)
 
 from ..core import terrain
-from ..compat import (FILE_FOLDER, NUM_DOUBLE, SRC_POINT)
+from ..compat import (FILE_FOLDER, SRC_POINT)
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
 from ..core import errors as er

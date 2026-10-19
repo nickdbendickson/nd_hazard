@@ -16,7 +16,8 @@ import time
 
 import numpy as np
 
-from .grid import Grid, NODATA
+from .grid import Grid
+from .units import ACFT, ACRE, CFS, FT
 from ..damsuite.keepawake import keep_awake
 
 
@@ -489,22 +490,22 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     stats = {
         "cells": int(dem.data.size), "cell_size_m": dem.dx,
         "sim_time_hr": round(last_t / 3600.0, 2),
-        "max_depth_ft": round(float(np.nanmax(hmax)) / 0.3048, 2),
-        "max_velocity_fps": round(float(np.nanmax(vmax)) / 0.3048, 2),
+        "max_depth_ft": round(float(np.nanmax(hmax)) / FT, 2),
+        "max_velocity_fps": round(float(np.nanmax(vmax)) / FT, 2),
         "flooded_acres": round(float((hmax >= st.arrival_depth_m).sum()) * dem.dx ** 2
-                               / 4046.8564224, 1),
-        "peak_inflow_cfs": round(qin_max / 0.028316846592, 0),
+                               / ACRE, 1),
+        "peak_inflow_cfs": round(qin_max / CFS, 0),
         "max_volume_error_pct": round(100.0 * abs(verr) / injected, 3) if injected else None,
         "worst_interval_error_pct": round(100.0 * worst / injected, 3) if injected else None,
-        "injected_acft": round(injected / 1233.48183754752, 2),
-        "in_domain_acft": round(vol / 1233.48183754752, 2),
+        "injected_acft": round(injected / ACFT, 2),
+        "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": velocity_written,
     }
     if st.initial_depth is not None:
         init_d = st.initial_depth.data
         stats["initial_water_acft"] = round(float(np.nansum(np.where(np.isfinite(init_d),
-                                            init_d, 0.0))) * dem.dx ** 2 / 1233.48183754752, 2)
+                                            init_d, 0.0))) * dem.dx ** 2 / ACFT, 2)
     # v3.11.0: what the model holds against what was put in. A free FV1 edge can import water
     # (it grew to 6.5e10 m3 against 9.7e6 m3 injected at Elm River Dam 1); the near-dam refine
     # checks these before it merges anything. Only meaningful without ambient sources.
@@ -513,8 +514,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         stats["max_domain_volume_ratio"] = round(float(v_ser.max()) / injected, 3)
     if not st.extra_sources:
         lv, lq, lt = late_inflow(os.path.join(res, name + ".mass"), float(hydrograph.duration_s))
-        stats["late_boundary_inflow_acft"] = round(lv / 1233.48183754752, 2)
-        stats["late_boundary_inflow_max_cfs"] = round(lq / 0.028316846592, 1)
+        stats["late_boundary_inflow_acft"] = round(lv / ACFT, 2)
+        stats["late_boundary_inflow_max_cfs"] = round(lq / CFS, 1)
         stats["late_boundary_inflow_pct"] = round(100.0 * lv / injected, 2) if injected else None
         if injected and lv > 0.02 * injected:
             notes.append(
@@ -522,8 +523,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
                 "({:,.0f} ac-ft, {:.1f}% of the {:,.0f} ac-ft injected; largest inflow {:,.0f} "
                 "cfs at {:.1f} h). The edge is bringing water into the model, so the volumes "
                 "and depths are not reliable. Close that edge or use the ACC solver.".format(
-                    lv / 1233.48183754752, 100.0 * lv / injected,
-                    injected / 1233.48183754752, lq / 0.028316846592, lt / 3600.0))
+                    lv / ACFT, 100.0 * lv / injected,
+                    injected / ACFT, lq / CFS, lt / 3600.0))
     if stats["max_volume_error_pct"] and stats["max_volume_error_pct"] > 1.0:
         notes.append("LISFLOOD-FP mass-balance error is {}% of the injected volume (limit 1%); "
                      "try a smaller cell size or initial time step.".format(

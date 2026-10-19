@@ -22,7 +22,6 @@ plus the travel time to the interface, not the main run's whole clock, and (4) t
 checked (`check_fine`) and the ACC results are kept when it fails.
 """
 import copy
-import math
 import os
 
 import numpy as np

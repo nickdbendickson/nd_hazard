@@ -244,6 +244,10 @@ def fake_download(extent, cell, out, stem, feedback=None):
 
 
 dd.download, dd.point_box = fake_download, (lambda lon, lat, mi: (lon, lat, lon + 1, lat + 1))
+# 0.24.0 reprojects the downloaded VRT to a local GeoTIFF; the raster mock cannot warp a VRT, so
+# stub warp_to_local to emit the dest .tif (dam.json recording is still exercised). Real GDAL
+# covers the warp/standardisation in test_dem_local_024.py.
+dd.warp_to_local = lambda src, dest, cell_m, feedback=None: (open(dest, "w").write("tif"), dest)[1]
 d2 = dam_folder(dams, "DWR-77", lon=-99.5, lat=47.5)
 alg = DDA.DownloadDem()
 alg.initAlgorithm()
@@ -252,14 +256,14 @@ r = alg.run_mock({"SOURCE": 0, "SCOPE": 0, "CELL": 10.0, "BUFFER_MI": 10.0, "DAM
                   "DAM_ID": "DWR-77", "OUT": os.path.join(tmp, "elsewhere")}, QgsProcessingContext(), fb)
 assert seen["out"] == os.path.join(d2, "data") and seen["stem"] == "DWR-77_dem_10m"
 assert seen["extent"][:2] == (-99.5, 47.5)                 # the dam point came from dam.json
-assert r["VRT"] == os.path.join(d2, "data", "DWR-77_dem_10m.vrt")
+assert r["VRT"] == os.path.join(d2, "data", "DWR-77_10m_5070.tif")
 assert DD.dam_data(d2)["dem"] == r["VRT"]
-assert DR.load(d2).extra["data"]["dem"]["path"] == "data/DWR-77_dem_10m.vrt"
+assert DR.load(d2).extra["data"]["dem"]["path"] == "data/DWR-77_10m_5070.tif"
 assert any("dam point from dam.json" in m for m in fb.log)
 # no dam folder: the output folder and a county name
 r = alg.run_mock({"SOURCE": 0, "SCOPE": 0, "CELL": 10.0, "BUFFER_MI": 10.0, "DAM_POINT": "-97.5,47.3",
                   "DAM_ID": "X-1", "OUT": os.path.join(tmp, "elsewhere")}, QgsProcessingContext(), fb)
-assert r["VRT"] == os.path.join(tmp, "elsewhere", "X-1_dem_10m.vrt")
+assert r["VRT"] == os.path.join(tmp, "elsewhere", "X-1_10m_5070.tif")
 print("OK (tool 20: dam / county names, dam folder and dam.json)")
 
 # ---------------------------------------------------------------------------------------------

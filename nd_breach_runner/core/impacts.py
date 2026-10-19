@@ -10,7 +10,6 @@ Structures are points; roads and rail are lines, sampled every `spacing`
 metres so each sample stands for that much length.
 """
 import csv
-import math
 
 import numpy as np
 

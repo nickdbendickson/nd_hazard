@@ -37,7 +37,7 @@ from qgis.core import (
     QgsCoordinateTransformContext, QgsFeatureRequest, QgsField,
 )
 
-from .compat import FT_STRING, WRITER_NO_ERROR, MSG_WARNING, NULL, enum_value
+from .compat import FT_STRING, WRITER_NO_ERROR, NULL, enum_value
 from .helpers import log_message, prepare_output_path
 
 WEB_SUBDIR = "Web"
@@ -521,7 +521,7 @@ def polygonize_bands(tif, name=None):
     the raster's CRS). GDAL Polygonize into an OGR memory layer: no file is
     written. Returns (layer, "") or (None, why)."""
     from osgeo import gdal, ogr
-    from qgis.core import QgsRasterLayer, QgsFeature, QgsGeometry
+    from qgis.core import QgsRasterLayer, QgsFeature
     from .compat import WKB_POLYGON, FT_INT
     from .helpers import create_memory_layer, gdal_exceptions, geometry_from_wkb
     from .eap import band_labels

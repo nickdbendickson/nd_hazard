@@ -1,6 +1,5 @@
 """Processing algorithm "Nested run: fine grid near the dam, coarse downstream"
 (ndbreach:nested)."""
-import os
 
 from qgis.core import QgsProcessingException, QgsProcessingOutputFile
 

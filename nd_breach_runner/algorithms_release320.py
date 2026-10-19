@@ -32,7 +32,7 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, Qgs
                        QgsProcessingParameterFileDestination)
 
 from . import qgis_io as qio
-from .algorithms import (RunDamAlgorithm, _Base, _Feedback, _attr_of, _safe_name)
+from .algorithms import (RunDamAlgorithm, _Base, _Feedback, _attr_of)
 from .algorithms_consequences import ROAD_SYNONYMS, _ground_m_per_unit, _txt
 from .algorithms_tools import _ToolBase
 from .compat import ALG_NO_THREADING, SOURCE_LINE, SOURCE_POINT, SOURCE_POLYGON

@@ -31,7 +31,7 @@ from . import breach as brmod
 from . import flood as floodmod
 from . import impacts as impmod
 from . import workflow
-from .units import FT, CFS
+from .units import FT
 
 
 @dataclasses.dataclass

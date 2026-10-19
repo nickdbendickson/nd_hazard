@@ -217,6 +217,16 @@ def _floats(text, default=()):
     return tuple(out) if out else tuple(default)
 
 
+DEM_RESAMPLE_AUTO = "Automatic"
+
+
+def dem_resample_param(index):
+    """The DEM_RESAMPLE enum index as a GdalTerrain `resample` (None = automatic)."""
+    from .core import gdal_io
+    i = int(index or 0)
+    return gdal_io.RESAMPLE_METHODS[i - 1] if 0 < i <= len(gdal_io.RESAMPLE_METHODS) else None
+
+
 class _Feedback:
     """Adapts QgsProcessingFeedback to the workflow callbacks."""
 
@@ -527,6 +537,11 @@ class _Base(QgsProcessingAlgorithm):
                                                             "is fine)"))
         self.addParameter(QgsProcessingParameterEnum("DEM_Z", "DEM elevation units",
                                                      [z[1] for z in ZUNITS], defaultValue=0))
+        from .core import gdal_io
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "DEM_RESAMPLE", "DEM resampling onto the model grid (Automatic = the {} "
+            "environment variable, else {})".format(gdal_io.ENV_RESAMPLE, gdal_io.DEFAULT_RESAMPLE),
+            [DEM_RESAMPLE_AUTO] + list(gdal_io.RESAMPLE_METHODS), defaultValue=0, optional=True)))
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
@@ -818,9 +833,15 @@ class _Base(QgsProcessingAlgorithm):
                 raise QgsProcessingException(str(e))
         self._record("DEM", dem.source())
         self._record("Manning / NLCD raster", (man or nlcd).source() if (man or nlcd) else "")
-        src = gdal_io.GdalTerrain(dem.source(), work_srs, zc,
-                                  (man or nlcd).source() if (man or nlcd) else None,
-                                  n_default, **kw)
+        kw["resample"] = dem_resample_param(self.parameterAsEnum(parameters, "DEM_RESAMPLE", context)
+                                            if has("DEM_RESAMPLE") else 0)
+        try:
+            src = gdal_io.GdalTerrain(dem.source(), work_srs, zc,
+                                      (man or nlcd).source() if (man or nlcd) else None,
+                                      n_default, **kw)
+        except ValueError as e:                       # a bad NDBREACH_DEM_RESAMPLE value
+            raise QgsProcessingException(str(e))
+        self._record("DEM resampling", "{} (from {})".format(src.resample, src.resample_source))
         dem_wkt = dem.crs().toWkt()
         target, res = None, None
         unit = gdal_io.linear_unit_m(dem_wkt) if dem.crs().isValid() else None

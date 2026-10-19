@@ -31,9 +31,9 @@ from .constants import (
 from .helpers import log_message, CancelledByUser
 from .structures import SAMPLE_AREAS
 from .processing import is_plugin_output_name, is_downloaded_data_layer
-from .scenarios import (Scenario, ROLE_BREACH, ROLE_BASELINE, MAIN_NAME, clean_rows,
-                        raster_reuse_problems,
-                        rows_to_scenarios, comparison_rows, COMPARE_COLS)
+from .scenarios import (ROLE_BREACH, ROLE_BASELINE, MAIN_NAME, clean_rows, raster_reuse_problems,
+                        rows_to_scenarios,
+                        comparison_rows, COMPARE_COLS)
 
 _AUTO, _NONE, _DOWNLOAD = "__auto__", "__none__", "__download__"
 _ROAD_RE = re.compile(r"road|street|hpms|highway|hwy|route|aadt|traffic", re.I)

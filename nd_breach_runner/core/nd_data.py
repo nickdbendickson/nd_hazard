@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 
 # --------------------------------------------------------------------------------------
 # NLCD land cover -> Manning's n (floodplain, shallow flow)

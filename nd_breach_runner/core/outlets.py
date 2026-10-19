@@ -27,13 +27,12 @@ approximations without conduit friction or tailwater: replace them with a rating
 curve (the spillway CSV) when the dam has a better one.
 """
 import math
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
-import numpy as np
 
 from .breach import BreachInputError
-from .units import FT, G, CFS
+from .units import FT, G
 
 WEIR_C_US = 3.0
 

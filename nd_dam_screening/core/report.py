@@ -14,7 +14,7 @@ import zlib
 import numpy as np
 
 from .proposed import PHRASE as PROPOSED_PHRASE
-from .us_units import FT, ACRE_M2, AF_M3, CFS_M3S, convert
+from .us_units import FT, ACRE_M2, CFS_M3S, convert
 
 # ---- colours: sequential blue ramp for depth, fixed status colours for classes
 DEPTH_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]

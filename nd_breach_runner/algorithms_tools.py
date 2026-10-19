@@ -1,16 +1,14 @@
 """Data-preparation, comparison and hand-off algorithms of the provider."""
 import os
 
-import numpy as np
-from qgis.core import (QgsCoordinateTransform, QgsPointXY, QgsProcessingException,
-                       QgsProcessingOutputFile, QgsProcessingOutputFolder,
-                       QgsProcessingOutputString, QgsProcessingParameterEnum,
-                       QgsProcessingParameterExtent, QgsProcessingParameterFileDestination,
-                       QgsProcessingParameterPoint, QgsProcessingParameterRasterLayer,
-                       QgsProcessingParameterString)
+from qgis.core import (QgsPointXY, QgsProcessingException, QgsProcessingOutputFile,
+                       QgsProcessingOutputFolder, QgsProcessingOutputString,
+                       QgsProcessingParameterEnum, QgsProcessingParameterExtent,
+                       QgsProcessingParameterFileDestination, QgsProcessingParameterPoint,
+                       QgsProcessingParameterRasterLayer, QgsProcessingParameterString)
 
 from .compat import ALG_NO_THREADING
-from .algorithms import _Base, _safe_name
+from .algorithms import _Base
 from .core import (benchmark, conditioning as condmod, gdal_io, handoff, nd_data, products,
                    structures as structmod, workflow)
 from .core.units import FT, MILE

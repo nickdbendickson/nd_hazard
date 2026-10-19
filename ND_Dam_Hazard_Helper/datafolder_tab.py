@@ -33,7 +33,7 @@ import os
 
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QCheckBox, QComboBox,
-    QLineEdit, QTableWidget, QTableWidgetItem, QWidget, QMessageBox, QFileDialog,
+    QLineEdit, QTableWidget, QTableWidgetItem, QMessageBox, QFileDialog,
 )
 
 from .helpers import log_message

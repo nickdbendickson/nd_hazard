@@ -24,7 +24,6 @@ in the fine domain at the end is not passed on (only the flow through the interf
 handover is checked: the volume through the interface against the breach volume is reported.
 """
 import copy
-import dataclasses
 import math
 import os
 

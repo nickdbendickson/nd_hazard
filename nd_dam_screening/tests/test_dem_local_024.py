@@ -24,7 +24,8 @@ except Exception:
 sys.path.insert(0, MOCK)
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
-from nd_dam_screening.core.dem_download import local_tif_stem, write_sidecar, warp_to_local, tag_local_tif  # noqa: E402
+from nd_dam_screening.core.dem_download import (  # noqa: E402
+    local_tif_stem, write_sidecar, warp_to_local, tag_local_tif, build_vrts)
 
 # ---------------------------------------------------------------------------
 # 1. local_tif_stem
@@ -101,13 +102,19 @@ else:
     print("SKIP (GeoTIFF tags: real GDAL not available)")
 
 # ---------------------------------------------------------------------------
-# 3. warp_to_local: synthetic ND-feet grid (EPSG:3721) → EPSG:5070 float32
+# 3. the foot-grid pipeline end to end: build_vrts (feet→metres) THEN warp_to_local
+#    (reproject + standardise). warp_to_local only reprojects horizontally and never
+#    converts vertical units, so the metres conversion must come from build_vrts first;
+#    feeding a raw foot grid straight to warp_to_local would mislabel feet as metres.
 
 if HAS_GDAL:
     tmp = tempfile.mkdtemp()
     try:
-        # 5×5 GeoTIFF in EPSG:3721 (ND SP North, US survey feet), values ~1640 ft ≈ 500 m
-        src_path = os.path.join(tmp, "nd_feet.tif")
+        # 5×5 foot grid in EPSG:3721 (ND SP North, US survey feet), 1640 ft ≈ 500 m. It must
+        # live under an ASCII_Grids_ft/ folder so build_vrts recognises it as feet and scales.
+        src_dir = os.path.join(tmp, "ASCII_Grids_ft")
+        os.makedirs(src_dir)
+        src_path = os.path.join(src_dir, "nd_feet.tif")
         driver = gdal.GetDriverByName("GTiff")
         ds = driver.Create(src_path, 5, 5, 1, gdal.GDT_Float32)
         srs = osr.SpatialReference()
@@ -115,15 +122,18 @@ if HAS_GDAL:
         ds.SetProjection(srs.ExportToWkt())
         # ~1670 ft cell (≈510 m) so we have meaningful area to resample to 10 m
         ds.SetGeoTransform([2100000.0, 1670.0, 0, 370000.0, 0, -1670.0])
-        import ctypes
         band = ds.GetRasterBand(1)
         band.Fill(1640.0)
         band.SetNoDataValue(-9999.0)
         ds.FlushCache()
         ds = None
 
+        # build_vrts does the feet→metres conversion (1640 ft × 0.3048 ≈ 499.9 m) and returns
+        # the metres VRT; warp_to_local then standardises it to EPSG:5070 10 m float32.
+        m_vrt = build_vrts([src_path], tmp)
+        assert m_vrt and os.path.isfile(m_vrt), "build_vrts returned no metres VRT"
         dest_path = os.path.join(tmp, "result_10m_5070.tif")
-        warp_to_local(src_path, dest_path, 10.0)
+        warp_to_local(m_vrt, dest_path, 10.0)
         assert os.path.isfile(dest_path), "output GeoTIFF not created"
 
         ds2 = gdal.Open(dest_path)
@@ -135,15 +145,30 @@ if HAS_GDAL:
         gt = ds2.GetGeoTransform()
         assert abs(abs(gt[1]) - 10.0) < 1.0 and abs(abs(gt[5]) - 10.0) < 1.0, \
             "cell size not ~10 m: {}".format(gt)
-        # 1640 ft ÷ 3.28084 ≈ 499.9 m
+        # 1640 ft × 0.3048 ≈ 499.9 m — the conversion is build_vrts', not warp_to_local's
         arr = ds2.GetRasterBand(1).ReadAsArray()
         centre = float(arr[arr.shape[0] // 2, arr.shape[1] // 2])
         assert 490 < centre < 510, "elevation not ~500 m: {}".format(centre)
         ds2 = None
-        print("OK (warp_to_local: synthetic ND-feet EPSG:3721 → EPSG:5070 10 m float32)")
+
+        # and warp_to_local refuses a source still tagged in feet instead of mislabelling it.
+        # Only assert when the intermediate VRT really reports feet, so a GDAL build that does
+        # not persist a VRT band unit simply skips this check rather than failing it.
+        ft_vrt = os.path.join(tmp, "nd_lidar_ascii_ft.vrt")   # build_vrts' pre-scale foot VRT
+        fds = gdal.Open(ft_vrt) if os.path.isfile(ft_vrt) else None
+        ft_unit = (fds.GetRasterBand(1).GetUnitType() if fds is not None else "") or ""
+        fds = None
+        if ft_unit.strip().lower() == "ft":
+            try:
+                warp_to_local(ft_vrt, os.path.join(tmp, "bad.tif"), 10.0)
+                raise AssertionError("warp_to_local should refuse a feet-tagged source")
+            except ValueError as e:
+                assert "metres" in str(e), e
+
+        print("OK (foot-grid pipeline: build_vrts feet→metres → warp_to_local EPSG:5070 10 m)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 else:
-    print("SKIP (warp_to_local: real GDAL not available)")
+    print("SKIP (foot-grid pipeline: real GDAL not available)")
 
 print("all dem_local_024 checks passed")

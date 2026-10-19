@@ -12,7 +12,6 @@ and writes the output layers, the summary (TXT / XLSX / CSV), the
 completeness QA table and the PDF report.
 """
 
-import json
 import os
 import re
 import time
