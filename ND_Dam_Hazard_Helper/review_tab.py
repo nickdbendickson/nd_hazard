@@ -561,8 +561,7 @@ class ReviewTabMixin(object):
             if not rows:
                 QMessageBox.information(self, "Field-check sheet",
                                         "No structure needs a site visit: none is in the ACER "
-                                        "high or judgment zone, unverified, borderline or cut "
-                                        "off.")
+                                        "high or judgment zone, unverified or borderline.")
                 return
             name = self._review_dam_name()
             md = FC.write_sheet(folder, name, rows)
