@@ -5,8 +5,10 @@
 DWR_Plugins repo, and the nd_* plugins here. The canonical source lives in DWR_Plugins
 (`shared/damsuite/`); a content fingerprint of it is pinned in `tools/damsuite_pin.json`, committed
 byte-identical into both repos. This tool checks each nd plugin's vendored copy against that pin,
-so NORMAL CI on every PR can prove the copies have not drifted from the shared source WITHOUT a
-checkout of the other repo and WITHOUT network access.
+so NORMAL CI on every PR can prove the copies match THIS repo's committed pin (and that the pin is
+internally consistent) WITHOUT a checkout of the other repo and WITHOUT network access. Keeping
+this repo's pin byte-identical to DamSafety's canonical pin is a separate, cross-repo mirror step
+(a maintainer copies tools/damsuite_pin.json); no single repo's CI can verify that across repos.
 
     python3 tools/sync_damsuite.py --check                 # verify: exit 1 on any drift from the pin
     python3 tools/sync_damsuite.py --from <DWR>/shared/damsuite   # re-vendor from the pinned source
@@ -80,6 +82,19 @@ def check(root=ROOT):
         return ["pin missing: tools/{}".format(os.path.basename(PIN_PATH))]
     pin_files = pin["files"]
     fork_specific = set(pin.get("fork_specific") or ())
+    # the committed pin must be internally consistent: pin_sha256 is a fingerprint over the
+    # content-checked (non-fork-specific) files, computed exactly as DamSafety's --write-pin does.
+    # This catches a corrupt or hand-edited pin (e.g. a file hash bumped without rewriting
+    # pin_sha256) before it is trusted. Keeping this repo's pin identical to DamSafety's canonical
+    # pin is a separate, cross-repo step (mirror tools/damsuite_pin.json); no single repo's CI can
+    # verify that without reaching the other repo.
+    content = {k: v for k, v in pin_files.items() if k not in fork_specific}
+    want_sha = hashlib.sha256(
+        json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if pin.get("pin_sha256") != want_sha:
+        problems.append("pin is internally inconsistent: pin_sha256 does not match its files map "
+                        "(tools/damsuite_pin.json is corrupt or was hand-edited; re-mirror it from "
+                        "DWR_Plugins)")
     expected = _expected(pin)
     seen = {}                                                   # name -> {sha: [plugins]} for consistency
     for plugin in ND_PLUGINS:
