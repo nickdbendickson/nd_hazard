@@ -366,6 +366,60 @@ def hecras_model_geometry_text_layout():
 
 
 @test
+def hecras_model_breakline_block_format():
+    # _breakline_name strips '=' and line breaks and collapses whitespace
+    assert hm._breakline_name("Culvert A = B\n  x") == "Culvert A B x"
+    assert hm._breakline_name("") == "Breakline"
+    bl = {"name": "Dam crest",
+          "polyline": [(1000.0, 2000.0), (1100.5, 2100.25), (1200.0, 2200.0)],
+          "cell_min": None, "cell_max": None}
+    L = hm.breakline_block(bl)
+    assert L[0] == "BreakLine Name=Dam crest"
+    assert L[1] == "BreakLine CellSize Min=" and L[2] == "BreakLine CellSize Max="
+    assert L[3] == "BreakLine Near Repeats=0" and L[4] == "BreakLine Protection Radius=-1"
+    assert L[5] == "BreakLine Polyline= 3 "
+    pts = []
+    for ln in L[6:]:
+        assert "=" not in ln
+        pts += [float(ln[k:k + 16]) for k in range(0, len(ln.rstrip()), 16)]
+    assert np.allclose(np.asarray(pts).reshape(-1, 2), bl["polyline"], atol=1e-3)
+    # a set cell size is written; an empty one is blank
+    L2 = hm.breakline_block({"name": "Road", "polyline": [(0.0, 0.0), (1.0, 1.0)],
+                             "cell_min": 25.0, "cell_max": 50.0})
+    assert L2[1].startswith("BreakLine CellSize Min=") and L2[1] != "BreakLine CellSize Min="
+
+
+@test
+def hecras_model_breaklines_written():
+    if not _has_gdal():
+        print("  (skipped: no GDAL)")
+        return
+    d, dfold, r = _build()
+    try:
+        m = r["model"]
+        assert m.breaklines, "no breaklines were built"
+        assert "Dam crest" in [bl["name"] for bl in m.breaklines]
+        assert "Dam crest" in (r["info"].get("breaklines") or [])
+        with open(r["paths"]["g01"], newline="") as f:
+            lines = _blocks(f.read())
+        bi = lines.index("BreakLine Name=Dam crest")
+        ci = next(k for k, ln in enumerate(lines) if ln.startswith("Connection="))
+        assert bi < ci, "breaklines must come before the connections"
+        poly, _ = _count_block(lines, "BreakLine Polyline=", 4, 16)
+        assert np.allclose(poly, m.conn_line, atol=1e-3)
+    finally:
+        shutil.rmtree(d)
+    # the checkbox turns them off
+    d, dfold, r = _build(options={"breaklines": False})
+    try:
+        assert not r["model"].breaklines
+        with open(r["paths"]["g01"], newline="") as f:
+            assert "BreakLine Name=" not in f.read()
+    finally:
+        shutil.rmtree(d)
+
+
+@test
 def hecras_model_plan_and_flow_text():
     if not _has_gdal():
         print("  (skipped: no GDAL)")
