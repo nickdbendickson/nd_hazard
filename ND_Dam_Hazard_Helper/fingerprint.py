@@ -49,7 +49,9 @@ def content_digest(path, full_limit=chain.FULL_HASH_LIMIT):
     if not path:
         return {"missing": True}
     _forget_cached(path)
-    d = chain.file_digest(path, full_limit=full_limit)
+    # FP.1: never trust the persistent size+mtime digest cache for evaluation keys - a raster
+    # rewritten in place must re-hash so a changed raster is seen as changed (parity with DamSafety).
+    d = chain.file_digest(path, full_limit=full_limit, use_disk_cache=False)
     if d.get("missing"):
         return {"missing": True}
     return {"sha256": d.get("sha256"), "size": d.get("size"), "sampled": bool(d.get("sampled"))}
