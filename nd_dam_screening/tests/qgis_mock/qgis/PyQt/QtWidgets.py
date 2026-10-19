@@ -24,8 +24,17 @@ class _Signal(object):
             raise TypeError("not connected")
 
     def emit(self, *args):
+        import inspect
         for s in list(self._slots):
-            s(*args)
+            try:                                 # real PyQt trims to what the slot accepts
+                params = inspect.signature(s).parameters.values()
+                has_var = any(p.kind == p.VAR_POSITIONAL for p in params)
+                npos = sum(1 for p in params
+                           if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD))
+            except (TypeError, ValueError):      # C/builtin callables with no signature
+                s(*args)
+                continue
+            s(*(args if has_var else args[:npos]))
 
 
 class _NoOp(object):
@@ -230,6 +239,10 @@ class QComboBox(QWidget):
         self._items.append((text, data))
         if self._cur < 0:
             self._cur = 0
+
+    def addItems(self, items):
+        for t in items:
+            self.addItem(t)
 
     def clear(self):
         self._items = []

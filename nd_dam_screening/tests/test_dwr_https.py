@@ -161,11 +161,15 @@ class Alg(alg_mod.DownloadDem):
 
 
 dd.fetch_dwr_area = fake_area
+real_warp = dd.warp_to_local
+# 1.24 standardises the fetched VRT to a local EPSG:5070 GeoTIFF; fake_area returns a 0-byte
+# placeholder x.vrt (not a real raster), so stub the warp like the fetch is already stubbed.
+dd.warp_to_local = lambda src, dest, cell_m, feedback=None: dest
 try:
     params = {"SOURCE": 1, "SCOPE": 0, "DAM_POINT": "-101.2,47.5", "BUFFER_MI": 2.0,
               "IMAGINE": True, "OUT": os.path.join(work, "t20"), "DWR_PATH": ""}
     res = Alg(params).processAlgorithm(params, None, FB())
-    assert res["VRT"].endswith("x.vrt")
+    assert res["VRT"].endswith("_10m_5070.tif")   # 1.24 returns the standardised local GeoTIFF
     scope, county, products, b = calls[-1]
     assert scope == 0 and products == ["DEM_Imagine"]
     assert b == dd.point_box_2266(-101.2, 47.5, 2.0)
@@ -186,7 +190,7 @@ try:
     Alg(p3).processAlgorithm(p3, None, FB())
     assert calls[-1][:2] == (1, "McLean") and calls[-1][3] is None
 finally:
-    dd.fetch_dwr_area = real_area
+    dd.fetch_dwr_area, dd.warp_to_local = real_area, real_warp
 
 # --- live: one McLean County dam box over HTTPS --------------------------------------------
 if os.environ.get("ND_LIVE") == "1":
