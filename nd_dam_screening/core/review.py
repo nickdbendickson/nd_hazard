@@ -259,9 +259,10 @@ def move_xy(work, dam_id, value, applier=None):
     return x, y
 
 
-def apply(work, row, applier=None):
+def apply(work, row, applier=None, xy=None):
     """Write one decision row into the work folder's layers. Returns [(file, rows changed)];
-    files that do not exist are skipped. The 18_* copies are updated too when present."""
+    files that do not exist are skipped. The 18_* copies are updated too when present.
+    xy is the pre-validated (x, y) for a move_breach row; recomputed when None."""
     applier = applier or SqliteApply()
     did = row["dam_id"]
     stamp = {"rev_decision": row["action"], "rev_by": row["reviewer"], "rev_date": row["when"],
@@ -286,7 +287,7 @@ def apply(work, row, applier=None):
                 except Exception as e:                           # noqa
                     done.append((p, "not written: {}".format(e)))
     elif row["action"] == "move_breach":
-        x, y = move_xy(work, did, row["value"], applier)
+        x, y = xy if xy is not None else move_xy(work, did, row["value"], applier)
         for p in _breach_layers(work):
             if p:
                 try:
@@ -307,10 +308,11 @@ def apply(work, row, applier=None):
 
 def decide(work, dam_id, action, value="", reviewer="", note="", applier=None):
     """Record and apply a decision in one go. Returns (row, [(file, changed)])."""
+    xy = None
     if action == "move_breach":
-        move_xy(work, str(dam_id).strip(), value, applier)  # 0.17.0: a refused move is not logged
+        xy = move_xy(work, str(dam_id).strip(), value, applier)  # 0.17.0: a refused move is not logged
     row = record(work, dam_id, action, value, reviewer, note)
-    return row, apply(work, row, applier)
+    return row, apply(work, row, applier, xy=xy)
 
 
 def excluded_ids(work):
