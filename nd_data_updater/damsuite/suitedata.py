@@ -57,6 +57,9 @@ TERRAIN, NLCD, DEM, DWR, HIFLD = "terrain", "nlcd", "dem", "dwr", "hifld"
 SUBFOLDERS = (TERRAIN, NLCD, DEM, DWR, HIFLD)
 MANIFEST = "manifest.json"
 RASTER_EXT = (".tif", ".tiff", ".vrt", ".img")
+# 1.17.4: tile caches inside dem/ that are not "your own DEM": Screening's native 3DEP 1 m lidar
+# tiles (dem/lidar_1m/, hundreds of 10 km tiles) would otherwise be taken by local_dem().
+TILE_CACHES = ("lidar_1m",)
 VECTOR_EXT = (".gpkg", ".shp", ".geojson", ".json", ".kml", ".kmz", ".zip", ".gdb", ".csv")
 STALE_DAYS = 365          # a pack data set older than this is offered for refresh
 
@@ -374,7 +377,7 @@ def _files(folder, exts, recurse=True):
         return out
     for root, dirs, files in os.walk(folder):
         dirs[:] = [d for d in dirs if not d.startswith((".", "_")) and not
-                   d.lower().endswith(".gdb")] if recurse else []
+                   d.lower().endswith(".gdb") and d.lower() not in TILE_CACHES] if recurse else []
         for d in list(os.listdir(root)):
             if d.lower().endswith(".gdb") and ".gdb" in exts and os.path.isdir(
                     os.path.join(root, d)):
