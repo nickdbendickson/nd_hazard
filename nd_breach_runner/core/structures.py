@@ -14,9 +14,8 @@ end:
 
 The report says which representation each structure got.
 """
-import math
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 

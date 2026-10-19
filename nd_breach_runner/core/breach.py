@@ -416,7 +416,6 @@ def starting_wse_ft(dam):
 
 class _Ctx:
     """Shared set-up for the hydrograph methods (SI units)."""
-    pass
 
 
 def _common(dam, wse0_m=None, wse0_rule=None):

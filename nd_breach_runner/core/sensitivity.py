@@ -37,7 +37,7 @@ import numpy as np
 from . import breach as brmod
 from . import impacts as impmod
 from . import workflow
-from .units import FT, CFS
+from .units import FT
 
 GROUP_WIDTH, GROUP_TIME, GROUP_N, GROUP_METHOD, GROUP_BASE = (
     "breach width", "formation time", "roughness", "method", "base")

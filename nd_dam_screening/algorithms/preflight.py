@@ -7,7 +7,6 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsPr
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination,
                        QgsProcessingException)
 
-from ..core import workflow as wf
 from ..core import preflight as pf
 from ..compat import FILE_FOLDER
 from . import run_chain as rc

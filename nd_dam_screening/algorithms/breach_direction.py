@@ -3,16 +3,16 @@ import os
 
 import numpy as np
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterFile, QgsProcessingParameterNumber,
-                       QgsProcessingParameterField,
-                       QgsProcessingParameterFeatureSink, QgsFields,
-                       QgsField, QgsFeature, QgsGeometry, QgsPointXY,
-                       QgsCoordinateTransform, QgsCoordinateReferenceSystem, QgsProject,
-                       QgsFeatureRequest, QgsRectangle)
+                       QgsProcessingParameterFile, QgsProcessingParameterField,
+                       QgsProcessingParameterFeatureSink,
+                       QgsFields, QgsField,
+                       QgsFeature, QgsGeometry, QgsPointXY, QgsCoordinateTransform,
+                       QgsCoordinateReferenceSystem, QgsProject, QgsFeatureRequest,
+                       QgsRectangle)
 import math
 
 from ..core import breach_dir as bd
-from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_LONGLONG, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
+from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_LONGLONG, FT_STRING, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from . import _common as cm
 
 RESERVOIR_TOUCH_M = 150.0      # a water body this close to the dam line counts as the reservoir

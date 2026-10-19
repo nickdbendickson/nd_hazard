@@ -51,7 +51,6 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .grid import Grid
 from .units import FT, MILE, ACFT, CFS
 from ..damsuite import solvegate as SG
 

@@ -7,7 +7,6 @@ the dam's first domain and adds the usual extra runs when the domain has to
 grow. Deep, fast water (a tall dam) shortens the time step and makes a run
 slower than the calibration case, so the range given is wide.
 """
-import math
 
 DEEP_WATER_FACTOR = 1.3      # typical breach floods are deeper than the calibration flood
 EXTENSION_RUNS = (1.0, 1.8, 3.0)      # sizes of a first, second, third run relative to the first

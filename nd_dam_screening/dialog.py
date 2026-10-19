@@ -1045,8 +1045,7 @@ class NDDamScreeningDialog(QDialog):
 
     def _show_counties(self):
         from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
-                               QgsProject, QgsField, QgsFillSymbol, QgsSingleSymbolRenderer)
-        from qgis.PyQt.QtCore import QVariant
+                               QgsProject, QgsFillSymbol, QgsSingleSymbolRenderer)
         from nd_dam_screening.core import dem_download as dd
         layer = QgsVectorLayer("Polygon?crs=EPSG:4326&field=county:string",
                                "ND counties (download clips)", "memory")

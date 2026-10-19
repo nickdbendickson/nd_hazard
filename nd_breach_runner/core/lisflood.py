@@ -16,7 +16,7 @@ import time
 
 import numpy as np
 
-from .grid import Grid, NODATA
+from .grid import Grid
 from ..damsuite.keepawake import keep_awake
 
 

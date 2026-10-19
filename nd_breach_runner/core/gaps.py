@@ -48,7 +48,6 @@ import math
 
 import numpy as np
 
-from . import conditioning as cond
 from . import structures as structmod
 from .units import FT
 
