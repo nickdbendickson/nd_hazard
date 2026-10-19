@@ -504,10 +504,34 @@ def local_tif_stem(scope, cell_m, dam_id="", county="", point=None):
     return "north_dakota" + tag
 
 
+_FEET_UNITS = ("ft", "feet", "foot", "us-ft", "usft", "us survey foot",
+               "us survey feet", "international foot")
+
+
 def warp_to_local(src, dest, cell_m, feedback=None):
-    """Warp to the standardised format: EPSG:5070, float32, tiled, DEFLATE at cell_m metres."""
+    """Warp to the standardised format: EPSG:5070, float32, tiled, DEFLATE at cell_m metres.
+
+    PRECONDITION: the elevation VALUES in ``src`` must already be in metres. gdal.Warp only
+    reprojects horizontally and resamples - it never converts vertical units - yet this
+    function stamps UNITS="m" on the output, so a foot source would be silently mislabelled
+    metres and feed feet into the breach/flood model. The DWR foot grids are converted with
+    ``build_vrts`` (its FT_TO_M scale); callers must pass that metres VRT, never a raw foot
+    grid. As a guard, a source whose band 1 is explicitly tagged in feet is refused here
+    rather than relabelled metres."""
     if feedback is not None:
         feedback.pushInfo("warping to EPSG:5070 at {} m (float32 GeoTIFF)".format(cell_m))
+    try:
+        src_ds = gdal.Open(src)
+    except Exception:
+        src_ds = None
+    if src_ds is not None:
+        unit = (src_ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
+        src_ds = None
+        if unit in _FEET_UNITS:
+            raise ValueError(
+                "warp_to_local needs a metres source; band 1 of {} is tagged {!r}. Convert the "
+                "foot grid to metres with build_vrts first - warp_to_local only reprojects "
+                "horizontally, it does not convert elevations.".format(src, unit))
     xres = yres = float(cell_m)
     ds = gdal.Warp(dest, src, dstSRS="EPSG:5070", format="GTiff",
                    resampleAlg="bilinear", outputType=gdal.GDT_Float32,
