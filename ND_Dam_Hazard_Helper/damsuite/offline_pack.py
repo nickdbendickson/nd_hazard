@@ -948,7 +948,7 @@ def _unzip_folder(zip_path, manifest, log):
         try:
             os.makedirs(target, exist_ok=True)
             probe = os.path.join(target, ".write_test")
-            with open(probe, "w") as fh:
+            with open(probe, "w", encoding="utf-8") as fh:
                 fh.write("x")
             os.remove(probe)
         except OSError:
@@ -989,7 +989,7 @@ def _unzip(zip_path, log):
         try:
             os.makedirs(target, exist_ok=True)
             probe = os.path.join(target, ".write_test")
-            with open(probe, "w") as fh:
+            with open(probe, "w", encoding="utf-8") as fh:
                 fh.write("x")
             os.remove(probe)
         except OSError:
