@@ -1,0 +1,62 @@
+name: CI
+
+# Merge gate for the nd_* plugin suite.
+#
+# fast-checks   — the always-on HARD GATE: no QGIS/GDAL needed, fully deterministic, seconds to run.
+#                 It proves every vendored damsuite copy still matches the shared pin
+#                 (tools/damsuite_pin.json) - the single source both forks vendor from - with no
+#                 checkout of the DWR_Plugins repo and no network; plus version sanity, py_compile
+#                 of every source, and the fingerprint nested-VRT regression. Mark THIS job required
+#                 in branch protection.
+# plugin-suites — the fuller per-plugin test suites. These need QGIS/GDAL (and a scipy-compatible
+#                 numpy), so the job provisions them via conda. Best-effort for now (does not block):
+#                 promote it to required once it is green on your runners.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  fast-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fast checks (damsuite pin parity, versions, compile)
+        run: python3 tools/ci_checks.py
+      - name: Fingerprint nested-VRT regression (QGIS-free)
+        run: python3 ND_Dam_Hazard_Helper/tests/test_fingerprint_vrt.py
+
+  plugin-suites:
+    runs-on: ubuntu-latest
+    continue-on-error: true          # best-effort until green on your runners
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Plugin suites
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          fail=0
+          for p in ND_Dam_Hazard_Helper nd_breach_runner nd_data_updater; do
+            echo "== $p =="
+            python -m "$p.tests.run_tests" || fail=1
+          done
+          echo "== nd_dam_screening =="
+          for t in nd_dam_screening/tests/test_*.py; do
+            echo "-- $t --"
+            python "$t" || fail=1
+          done
+          exit $fail
