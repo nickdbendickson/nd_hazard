@@ -467,9 +467,12 @@ def run_par(par_path, progress=None, cancel=None, log=None):
             if newly.any():
                 a = arrival[r0:r1, c0:c1]
                 a[newly] = t / 3600.0
-            if steps % 5 == 0:
-                vw = vmax[r0:r1, c0:c1]
-                np.maximum(vw, m.cell_speed(win), out=vw)
+            # Sample the max velocity EVERY step (not every 5th): it feeds the ACER TM-11
+            # depth-velocity danger chart, whose High zone is largely velocity-driven, so a peak
+            # missed on a non-sampled step biases velocity low and can under-classify. Depth
+            # already updates every step; match it for velocity.
+            vw = vmax[r0:r1, c0:c1]
+            np.maximum(vw, m.cell_speed(win), out=vw)
             if t >= next_mass - 1e-6:
                 write_mass(t)
                 next_mass += massint
