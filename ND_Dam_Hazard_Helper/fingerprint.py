@@ -49,36 +49,77 @@ def content_digest(path, full_limit=chain.FULL_HASH_LIMIT):
     if not path:
         return {"missing": True}
     _forget_cached(path)
-    # FP.1: never trust the persistent size+mtime digest cache for evaluation keys - a raster
-    # rewritten in place must re-hash so a changed raster is seen as changed (parity with DamSafety).
+    # FP.1: never trust the persistent size+mtime digest cache for evaluation keys
     d = chain.file_digest(path, full_limit=full_limit, use_disk_cache=False)
     if d.get("missing"):
         return {"missing": True}
     return {"sha256": d.get("sha256"), "size": d.get("size"), "sampled": bool(d.get("sampled"))}
 
 
-def _vrt_sources(path, limit=2000):
-    """[(name, content digest)] of the files a VRT reads (a tile rewritten
-    behind an unchanged VRT is a changed raster)."""
+_VRT_SRC_RE = re.compile(
+    r"<SourceFilename\b([^>]*)>([^<]+)</SourceFilename>", re.I)
+_VRT_REL_RE = re.compile(r'relativeToVRT\s*=\s*"?([01])"?', re.I)
+
+
+def _vrt_source_paths(path, limit=2000, _seen=None):
+    """Source file paths a VRT reads (nested VRTs followed; cycles skipped).
+    Returns (paths, incomplete): incomplete when the tile cap truncated the list."""
+    _seen = set() if _seen is None else _seen
+    ap = os.path.abspath(path)
+    if ap in _seen:
+        return [], False
+    _seen.add(ap)
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
     except OSError:
-        return None
-    out = []
+        return None, False
     base = os.path.dirname(path)
-    for rel, name in re.findall(
-            r'<SourceFilename[^>]*?relativeToVRT="(\d)"[^>]*>([^<]+)</SourceFilename>',
-            text)[:limit]:
-        src = os.path.join(base, name.strip()) if rel == "1" else name.strip()
-        out.append([name.strip(), content_digest(src)])
+    found, incomplete = [], False
+    for attrs, name in _VRT_SRC_RE.findall(text):
+        name = html_unescape(name.strip())
+        m = _VRT_REL_RE.search(attrs or "")
+        rel = m.group(1) if m else "1"          # GDAL default: relative to the VRT
+        src = os.path.join(base, name) if rel == "1" else name
+        if len(found) >= limit:
+            incomplete = True
+            break
+        if src.lower().endswith(".vrt"):
+            nested, nest_inc = _vrt_source_paths(src, limit - len(found), _seen)
+            if nested is None:
+                found.append(src)
+            else:
+                found.extend(nested)
+                incomplete = incomplete or nest_inc
+        else:
+            found.append(src)
+    return found, incomplete
+
+
+def html_unescape(text):
+    return (text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", '"').replace("&apos;", "'"))
+
+
+def _vrt_sources(path, limit=2000):
+    """[(name, content digest)] of the files a VRT reads (a tile rewritten
+    behind an unchanged VRT is a changed raster). Last item may be
+    ["incomplete", True] when the source list was truncated (FP.2)."""
+    paths, incomplete = _vrt_source_paths(path, limit)
+    if paths is None:
+        return None
+    out = [[os.path.basename(src), content_digest(src)] for src in paths]
+    if incomplete:
+        out.append(["incomplete", True])
     return out
 
 
 def file_sig(path):
     """The evaluation-key signature of a file: path, size, content digest
     (and, for a VRT, its sources'; for a GeoPackage, its -wal journal's).
-    No modification time. [path, None] when the file cannot be read."""
+    No modification time. [path, None] when the file cannot be read.
+    A truncated VRT source list is marked incomplete so the signature changes
+    rather than silently ignoring tiles (FP.2)."""
     d = content_digest(path)
     if d.get("missing"):
         return [path, None]
