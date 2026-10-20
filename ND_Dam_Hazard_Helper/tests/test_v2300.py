@@ -515,6 +515,21 @@ def the_window_opens_on_setup_and_run_and_takes_a_hand_off():
     from qgis.core import QgsApplication
     app = QgsApplication.instance() or QgsApplication([], False)
     from ND_Dam_Hazard_Helper.dialog import NDDamHazardDialog
+    from ND_Dam_Hazard_Helper.tests.test_suite116 import _Isolated, SD
+    with _Isolated() as iso:
+        # the window needs a suite folder with a pack before it lets anything run; without one
+        # the hand-off button stays off (that is the "Suite folder is missing" preflight reason)
+        SD.adopt_folder(iso.folder)
+        pack = os.path.join(iso.folder, "ND_Dam_Suite_Pack")
+        os.makedirs(pack)
+        with open(os.path.join(pack, "manifest.json"), "w", encoding="utf-8") as f:
+            f.write('{"datasets": {}}')
+        SD._PACK_MANIFESTS.clear()
+        SD.adopt_folder(iso.folder)
+        _window_takes_a_hand_off(NDDamHazardDialog)
+
+
+def _window_takes_a_hand_off(NDDamHazardDialog):
     dlg = NDDamHazardDialog()
     tabs = [dlg.tab_widget.tabText(i).replace("&&", "&") for i in range(
         dlg.tab_widget.count())]

@@ -31,6 +31,7 @@ from .core import incomplete as ic          # 0.28.0: the run flags, in red
 from .core import resume as rs              # 0.28.0: what an interrupted run got through
 from .core import runplan as rp             # 0.28.0: the cell size and the time estimate
 from .damsuite import settings as DS
+from .tokens import TOKENS
 from .damsuite import priority as PR         # 0.28.0: the statewide review list
 
 TITLE = "ND Dam Breach Screening"
@@ -50,7 +51,7 @@ REVIEW_COLUMNS = ("Dam", "Name", "Why", "From", "Decision")
 # 0.28.0: the Results tab's dam table gains the run flags, and the Priority tab is the statewide
 # review list (damsuite.priority)
 DAM_COLUMNS = ("Dam ID", "Name", "Class", "Storage (ac-ft)", "Confidence", "Flags")
-RED = "color: #b00020"
+RED = "color: {}".format(TOKENS["error"])
 FOLLOW_TERRAIN_LABEL = "Follow the terrain source (recommended)"
 RUN_COUNTY_TIP = ("Runs every step that is not done, in order, in the background, for every dam of "
                   "the chosen county (or of the whole work folder), with the values of this window "
@@ -65,8 +66,8 @@ PIPELINE = (("data", "Data", "1", "simple"), ("dem", "DEM", "2", "simple"),
             ("screen", "Screen", "7", "simple"), ("report", "Report", None, "results"))
 PIPE_MARK = {"done": "✓", "ready": "●", "running": "◐", "problem": "!",
              "stale": "↻", "waiting": "○", "optional": "○"}
-PIPE_COLOR = {"done": "#2e7d32", "ready": "#1a73e8", "running": "#1a73e8", "problem": "#c62828",
-              "stale": "#b26a00"}
+PIPE_COLOR = {"done": TOKENS["success"], "ready": TOKENS["link"], "running": TOKENS["link"],
+              "problem": TOKENS["error"], "stale": TOKENS["warn"]}
 # a pipeline tab-key -> the tab TITLE it jumps to (resolved to a live index at click time, so nd_'s
 # tab order can change without touching this)
 PIPE_TAB = {"simple": "Simple", "inputs": "Inputs", "review": "Review", "results": "Results"}
@@ -108,7 +109,7 @@ class _DamPicker(QDialog):
 
     def __init__(self, parent, choices):
         super().__init__(parent)
-        self.setWindowTitle(TITLE + " - Run selected dams")
+        self.setWindowTitle(TITLE + " — Run selected dams")
         lay = QVBoxLayout(self)
         lay.addWidget(QLabel("Tick the dams or ponds to run. The whole chain runs for them alone, into "
                              "one folder under <work folder>/one_dam; the batch is left as it is."))
@@ -249,6 +250,11 @@ class NDDamScreeningDialog(QDialog):
             self.engine.currentIndexChanged.connect(self._auto_pf_timer.start)
         except Exception:
             pass
+        try:
+            from .ui_widgets import ellipsize
+            ellipsize(self)                       # 0.31.0: one '…' on every opener button
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
 
     # ------------------------------------------------------------------ build --
     def _build(self):
@@ -330,7 +336,7 @@ class NDDamScreeningDialog(QDialog):
         lay.addWidget(self.log_edit)
         row = QHBoxLayout()
         self.log_line = QLabel("Log: -")
-        self.log_line.setStyleSheet("color: #4a5560;")
+        self.log_line.setStyleSheet("color: {};".format(TOKENS["muted"]))
         self.log_toggle = QPushButton("Show log")
         self.log_toggle.setToolTip("Show or hide the whole log.")
         self.log_toggle.clicked.connect(lambda _c=False: self._toggle_log())
@@ -398,7 +404,7 @@ class NDDamScreeningDialog(QDialog):
             b = self.pipe_btn[key]
             b.setText("{} {}".format(label, PIPE_MARK.get(st, "○")))
             b.setToolTip(why + ". Click to go to the tab.")
-            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, "#5f6b76"),
+            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, TOKENS["off"]),
                                                    " font-weight: bold;" if st in ("done", "ready") else ""))
 
     def _toggle_log(self):
@@ -415,14 +421,14 @@ class NDDamScreeningDialog(QDialog):
         grid = QGridLayout()
         r = 0
         grid.addWidget(QLabel("What to screen"), r, 0)
-        box = QHBoxLayout()
+        box = QGridLayout()                       # 0.31.0: two on a row, so the page fits 1080p
         self.screen_radio = []
         for i, label in enumerate(SCREEN_WHAT):
             rb = QRadioButton(label)
             rb.toggled.connect(lambda on, idx=i: self._screen_toggled(idx, on))
             self.screen_radio.append(rb)
-            box.addWidget(rb)
-        box.addStretch(1)
+            box.addWidget(rb, i // 2, i % 2)
+        box.setColumnStretch(2, 1)
         grid.addLayout(box, r, 1)
         r += 1
         grid.addWidget(QLabel("Data package (step 0)"), r, 0)
@@ -451,6 +457,15 @@ class NDDamScreeningDialog(QDialog):
         grid.addWidget(self.engine, r, 1)
         r += 1
         self.crit = self._combo(CRIT_LABELS)
+        # 0.31.0: the longest label is 870 px; the list shows it in full, the closed box need
+        # not (the page fits a 1080p screen without a sideways scroll, docs/gui-grammar.md)
+        try:
+            self.crit.setSizeAdjustPolicy(
+                getattr(getattr(QComboBox, "SizeAdjustPolicy", QComboBox),
+                        "AdjustToMinimumContentsLengthWithIcon"))
+            self.crit.setMinimumContentsLength(40)
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
         self.crit.currentIndexChanged.connect(self._changed)
         grid.addWidget(QLabel("Hazard criterion"), r, 0)
         grid.addWidget(self.crit, r, 1)
@@ -610,16 +625,17 @@ class NDDamScreeningDialog(QDialog):
             "run with the preflight check first.")
         txt.setWordWrap(True)
         g.addWidget(txt)
-        row = QHBoxLayout()
+        row = QGridLayout()                       # 0.31.0: two rows of three, fits 1080p
         self.chain_check = {}
-        for key, label in (("0", "also build the data package (0)"), ("6", "also the quick screen (6)"),
-                           ("9", "also the sensitivity (9)"),
-                           ("16", "ponds and dugouts (16)"), ("18", "merge dams and ponds (18)"),
-                           ("19", "a proposed dam (19)")):
+        for n, (key, label) in enumerate((
+                ("0", "also build the data package (0)"), ("6", "also the quick screen (6)"),
+                ("9", "also the sensitivity (9)"),
+                ("16", "ponds and dugouts (16)"), ("18", "merge dams and ponds (18)"),
+                ("19", "a proposed dam (19)"))):
             c = QCheckBox(label)
             c.toggled.connect(self._chain_check_toggled)
             self.chain_check[key] = c
-            row.addWidget(c)
+            row.addWidget(c, n // 3, n % 3)
         g.addLayout(row)
         row = QHBoxLayout()
         self.chain_btn = QPushButton("Run the steps in order")

@@ -138,6 +138,11 @@ class NDBreachRunnerDialog(QDialog):
         self._fill_dem()
         self.refresh()
         self._log_suite_versions()
+        try:
+            from .ui_widgets import ellipsize
+            ellipsize(self)                       # 3.23.0: one '…' on every opener button
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
         try:                                  # after the window is up
             from qgis.PyQt.QtCore import QTimer
             QTimer.singleShot(0, self._refresh_models)

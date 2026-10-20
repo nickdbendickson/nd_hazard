@@ -351,6 +351,9 @@ class ClassificationTabMixin(object):
             "with a manifest and a cover-letter template")
         self.submittal_btn.clicked.connect(self._make_submittal)
         row.addWidget(self.submittal_btn)
+        # 2.33.0: the five tools that open their own window sit on a second row, so the
+        # page fits a 1080p screen without a sideways scroll (docs/gui-grammar.md)
+        row2 = QHBoxLayout()
         self.watch_btn = QPushButton("Creep watch...")
         self.watch_btn.setToolTip(
             "Re-classifies every dam in a folder with fresh data and lists the dams whose "
@@ -358,7 +361,7 @@ class ClassificationTabMixin(object):
             "this QGIS session (it can take long for many dams - for those, schedule the "
             "Processing algorithm 'Hazard creep watch' with qgis_process).")
         self.watch_btn.clicked.connect(self._run_watch)
-        row.addWidget(self.watch_btn)
+        row2.addWidget(self.watch_btn)
         self.series_btn = QPushButton("Dams in series...")
         self.series_btn.setToolTip(
             "Screens a folder of studied dams: which dam's breach flood reaches which other "
@@ -366,7 +369,7 @@ class ClassificationTabMixin(object):
             "table only - it does not route a combined breach. Writes Dams_In_Series_Screen.csv / "
             ".html.")
         self.series_btn.clicked.connect(self._run_series)
-        row.addWidget(self.series_btn)
+        row2.addWidget(self.series_btn)
         # 2.30.0: the one-page EAP map, the owner / county letter drafts and the class history
         self.eap_map_btn = QPushButton("EAP map (1 page)...")
         self.eap_map_btn.setToolTip(
@@ -375,7 +378,7 @@ class ClassificationTabMixin(object):
             "vintages - and exports EAP/EAP_Map.pdf and a GeoPDF. The layout stays in the "
             "project's Layout Manager for editing.")
         self.eap_map_btn.clicked.connect(self._build_eap_map)
-        row.addWidget(self.eap_map_btn)
+        row2.addWidget(self.eap_map_btn)
         self.letters_btn = QPushButton("Owner / county letters...")
         self.letters_btn.setToolTip(
             "Drafts the dam-owner letter and the county notification from the last run "
@@ -383,19 +386,21 @@ class ClassificationTabMixin(object):
             "classification), to edit and export as .docx or .md. Drafts only: no legal "
             "language is written for you.")
         self.letters_btn.clicked.connect(self._open_letters)
-        row.addWidget(self.letters_btn)
+        row2.addWidget(self.letters_btn)
         self.history_btn = QPushButton("Class history...")
         self.history_btn.setToolTip(
             "Every classification run recorded for this dam: the class over time with the "
             "data vintage and the plugin version that produced it "
             "(<dam folder>/Classification_History.json).")
         self.history_btn.clicked.connect(self._show_history)
-        row.addWidget(self.history_btn)
+        row2.addWidget(self.history_btn)
         self.open_outputs_btn = QPushButton("Open outputs folder")
         self.open_outputs_btn.clicked.connect(self._open_outputs_folder)
         row.addWidget(self.open_outputs_btn)
         row.addStretch()
         outer.addLayout(row)
+        row2.addStretch()
+        outer.addLayout(row2)
         self.result_label = QLabel("No classification run yet")
         self.result_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 4px;")
         outer.addWidget(self.result_label)

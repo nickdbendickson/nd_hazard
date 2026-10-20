@@ -2,7 +2,8 @@
 """The suite's layer styles (QML in <plugin>/styles/), one look for the three plugins.
 
 Byte-identical in ND Dam Hazard Classification Helper, ND Dam Breach Runner and ND Dam Breach
-Screening (written by suite/suite_styles/make_styles.py). Pure Python except for the QGIS calls
+Screening. Canonical copy: shared/ui/suite_styles.py; edit it there and run tools/sync_ui.py
+(tools/ci_checks.py fails on a stale copy). Pure Python except for the QGIS calls
 inside try blocks: a style that cannot be applied never fails a run.
 
     style_for_path(path)      -> QML file name for an output file, by its name / fields, or None

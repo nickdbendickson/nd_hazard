@@ -32,6 +32,7 @@ from .compat import MB_YES, MB_NO
 from .constants import ZONE_LABELS
 from .helpers import log_message, buffer_distance_in_layer_units
 from .review import ReviewStore, needs_review, review_path, CONFIRMED
+from .tokens import TOKENS
 from .structures import (
     CAT_DWELLING, CAT_OCCUPIED, CAT_UNVERIFIED, CAT_NOT_HABITABLE, TYPE_HOUSE, TYPE_MOBILE,
     TYPE_HABITABLE, address_of,
@@ -176,7 +177,8 @@ class ReviewTabMixin(object):
         except Exception:                                        # noqa - selection is a nicety
             pass
         self.review_card.setStyleSheet(
-            "padding: 10px; background-color: #f7f7f7; border: 1px solid #d0d0d0;")
+            "padding: 10px; background-color: {}; border: 1px solid {};".format(
+                TOKENS["subtle"], TOKENS["frame"]))
         lay.addWidget(self.review_card)
         # 2.30.0: "what would change it" - the items nearest a class boundary (whatif.py)
         self.whatif_label = QLabel("<b>What would change the class</b> - the items nearest a "
@@ -291,8 +293,15 @@ class ReviewTabMixin(object):
             "listed before anything is saved.")
         self.field_import_btn.clicked.connect(self._field_sheet_import)
         for b in (self.review_zoom_btn, self.review_webmap_btn, self.review_save_btn,
-                  self.review_rerun_btn, self.review_export_btn, self.review_merge_btn,
-                  self.field_sheet_btn, self.field_import_btn):
+                  self.review_rerun_btn):
+            row.addWidget(b)
+        row.addStretch()
+        lay.addLayout(row)
+        # 2.33.0: the exchange tools on a second row, so the page fits a 1080p screen
+        # without a sideways scroll (docs/gui-grammar.md)
+        row = QHBoxLayout()
+        for b in (self.review_export_btn, self.review_merge_btn, self.field_sheet_btn,
+                  self.field_import_btn):
             row.addWidget(b)
         row.addStretch()
         lay.addLayout(row)

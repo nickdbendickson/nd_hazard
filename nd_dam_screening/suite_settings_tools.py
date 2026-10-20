@@ -2,7 +2,8 @@
 """The suite settings file as the DEFAULTS of a plugin's Processing tools (no Qt).
 
 Byte-identical in ND Dam Hazard Classification Helper, ND Dam Breach Runner and ND Dam Breach
-Screening (written by suite/suite_shared/make_styles.py; edit it there). damsuite.settings holds
+Screening. Canonical copy: shared/ui/suite_settings_tools.py; edit it there and run tools/sync_ui.py
+(tools/ci_checks.py fails on a stale copy). damsuite.settings holds
 the file; this module is the QGIS-facing adapter: it reads a tool's parameter definitions into the
 pure catalog, and sets the file's values as the parameters' defaults when a tool is created
 (`settings_aware` wraps a tool class), so the Processing dialogs open with the engineer's values,

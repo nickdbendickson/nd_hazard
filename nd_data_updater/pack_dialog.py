@@ -32,7 +32,7 @@ import os
 import threading
 
 from qgis.PyQt.QtCore import QTimer, QUrl
-from qgis.PyQt.QtGui import QDesktopServices
+from qgis.PyQt.QtGui import QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton,
@@ -112,6 +112,8 @@ class TextWindow(QDialog):
         row.addStretch(1)
         layout.addLayout(row)
         buttons = QDialogButtonBox(BB_CLOSE)
+        for b in buttons.buttons():                  # no icons on action buttons (docs/gui-grammar.md)
+            b.setIcon(QIcon())
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
@@ -142,7 +144,7 @@ class PackDialog(QDialog):
         self.plugin = plugin
         self.service_rows = []
         self._service_thread = None
-        self.setWindowTitle("ND Data Updater - offline pack and data folder")
+        self.setWindowTitle("ND Data Updater — Offline pack and data folder")
         self.setMinimumSize(900, 700)
         layout = QVBoxLayout(self)
 
@@ -183,6 +185,8 @@ class PackDialog(QDialog):
         layout.addLayout(run_row)
 
         buttons = QDialogButtonBox(BB_CLOSE)
+        for b in buttons.buttons():                  # no icons on action buttons (docs/gui-grammar.md)
+            b.setIcon(QIcon())
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 

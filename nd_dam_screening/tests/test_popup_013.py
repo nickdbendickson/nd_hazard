@@ -58,7 +58,9 @@ assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Simple", "All
                                                                   "Review", "Results", "Priority"]
 g = dlg.grid
 assert isinstance(g, SS.SettingsGrid) and g.tabs.titles[0] == "Run options"
-assert g.tabs.titles[1:] == [t for t in SG.TAB_ORDER if t in g.groups], g.tabs.titles
+# 0.31.0: a lone '&' in a tab title is doubled for Qt (suite_settings.tab_title)
+assert [t.replace("&&", "&") for t in g.tabs.titles[1:]] == \
+    [t for t in SG.TAB_ORDER if t in g.groups], g.tabs.titles
 assert len(g.catalog) > 100 and all(s.plugin == "ndscreen" for s in g.catalog)
 head = ("ndscreen", "findponds", "HEAD_FT")
 assert head in g.items and g.value(head) == 1.0 and g.by_id[head].unit == "ft" and g.by_id[head].your
@@ -98,10 +100,11 @@ assert "(1 changed)" in g.file_label.text()
 fresh = algs["findponds"].createInstance()
 fresh.initAlgorithm()
 assert fresh._params["HEAD_FT"].defaultValue == 1.5
-# bad input: refused with a message, the row shows the value in effect
+# bad input: refused on the status line under the table (0.31.0: no message box), the row
+# shows the value in effect
 EVENTS["messages"].clear()
 assert "not a number" in g.set_value(head, "tall", from_widget=True)
-assert EVENTS["messages"][-1][0] == "information" and g.value(head) == 1.5
+assert not EVENTS["messages"] and "not a number" in g.status_label.text() and g.value(head) == 1.5
 # an enum through its combo, a bool through its check state
 src = ("ndscreen", "findponds", "SRC")
 g.combos[src].setCurrentIndex(1)
