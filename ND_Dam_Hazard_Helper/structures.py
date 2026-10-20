@@ -1080,7 +1080,8 @@ def _log_site_rules(structs):
                     "building, {} building(s) only NSI calls residential are unverified and {} "
                     "that no source calls habitable are outbuildings (not habitable, listed in "
                     "QA/Inventory_QA.csv); {} 911 address point(s) with no building are "
-                    "unverified".format(unv, out, lone))
+                    "counted as habitable by the ND site address rule (listed for "
+                    "review)".format(unv, out, lone))
 
 
 def _log_mobile_rules(structs):
@@ -1279,23 +1280,24 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                 and not (kw_dwelling or kw_occupied or has_address):
             category = CAT_NOT_HABITABLE
             site_note = "outbuilding: no source says it is habitable and {}".format(where)
-    # v2.20.1: 911 address points with no building - no outline within the
-    # address snap distance and no NSI structure merged with them (a field
-    # access, vacant lot, tower or utility site) - are unverified, unless
-    # their Place_Type says what is there
+    # 911 address points with no building - no outline within the address snap
+    # distance and no NSI structure merged with them. Audit H1: they stay habitable
+    # by the ND site address rule below (conservative: a new house is often not yet
+    # in FEMA USA Structures or the NSI, common in rural ND); the missing building is
+    # only noted for the engineer's review (field access, vacant lot, tower or utility
+    # site?). An earlier build had made them Unverified, which never raises the class.
     lone = bool(rec.get("lone_address")) and not (
         place_kinds & {_PT_DWELLING, _PT_MOBILE, _PT_OCCUPIED})
     if lone:
-        category = CAT_UNVERIFIED
         site_note = "911 address point with no building outline within {:.0f} ft and no NSI " \
-            "structure - field access, vacant lot, tower or utility site? verify".format(
-                ADDRESS_SNAP_FT)
+            "structure - counted as habitable by the ND site address rule; field access, " \
+            "vacant lot, tower or utility site? verify".format(ADDRESS_SNAP_FT)
 
     # v2.5.1: a structure with an ND GIS Hub site address is habitable - the
     # address is the evidence. Place_Type values that would otherwise read as
     # vacant / not habitable are kept in a note (and listed for review).
     addr_note = ""
-    if nd_addr and not lone and category not in (CAT_DWELLING, CAT_OCCUPIED):
+    if nd_addr and category not in (CAT_DWELLING, CAT_OCCUPIED):
         odd = sorted({s.get("place_type") or "" for s in nd_srcs
                       if s.get("place_kind") in (_PT_NONHAB, _PT_UNVERIFIED)} - {""})
         was = category
