@@ -41,10 +41,12 @@ from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QDoubleSpinBox, QCheckBox,
-    QGroupBox, QScrollArea,
+    QGroupBox, QScrollArea, QToolButton,
 )
 
 from . import popup_logic as pl
+from .tokens import TOKENS
+from .ui_widgets import Collapsible, EngineChip, InfoBanner, StageStrip
 
 try:                                    # Qt5 and Qt6 (QGIS 4) spell the answer differently
     _YES = QMessageBox.StandardButton.Yes
@@ -80,9 +82,13 @@ def _scroll_tab(w):
 
     3.20.0: with a small minimum height of its own - a scroll area that refuses to shrink
     makes the whole window refuse to shrink, which is how the window came to ask for 902 px."""
-    sa = QScrollArea()
-    sa.setWidgetResizable(True)
-    sa.setWidget(w)
+    try:
+        from .ui_fit import _scroll                              # 3.24.0: the suite's FitScroll
+        sa = _scroll(w)
+    except Exception:                                            # noqa - the tests' stand-in Qt
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setWidget(w)
     try:
         sa.setMinimumHeight(TAB_MIN_H)
     except Exception:                                            # pragma: no cover - noqa
@@ -152,9 +158,18 @@ class NDBreachRunnerDialog(QDialog):
     # ------------------------------------------------------------------ build --
     def _build(self):
         lay = QVBoxLayout()
-        info = QLabel(DISCLAIMER)
-        info.setWordWrap(True)
-        lay.addWidget(info)
+        lay.setSpacing(6)
+        # 3.24.0 (docs/gui-grammar.md): the shared banner, the stage strip, the gear on the tab
+        # bar, the primary action at the bottom right, the log folded
+        lay.addWidget(InfoBanner(DISCLAIMER))
+        self.strip = StageStrip([pl.STAGE_LABELS[k] for k in pl.STAGE_KEYS])
+        lay.addWidget(self.strip)
+        self.gear = QToolButton()
+        self.gear.setText("\u2699")
+        self.gear.setAutoRaise(True)
+        self.gear.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
+        self.gear.setToolTip("Settings: the suite settings file the tools open with.")
+        self.gear.clicked.connect(lambda _c=False: self._open_settings())
 
         grid = QGridLayout()
         self.dams_edit = QLineEdit()
@@ -191,12 +206,12 @@ class NDBreachRunnerDialog(QDialog):
         # path lives in the tooltip instead of on the row.
         self.dem_note = QLabel("")
         self.dem_note.setWordWrap(True)
-        self.dem_note.setStyleSheet("color: gray;")
+        self.dem_note.setStyleSheet("color: {};".format(TOKENS["muted"]))
         grid.addWidget(self.dem_note, 3, 0, 1, 3)
         # 3.20.0: where the values came from, when the screening handed this dam over
         self.handoff_note = QLabel("")
         self.handoff_note.setWordWrap(True)
-        self.handoff_note.setStyleSheet("color: gray;")
+        self.handoff_note.setStyleSheet("color: {};".format(TOKENS["muted"]))
         grid.addWidget(self.handoff_note, 4, 0, 1, 3)
         self.grid_m = QDoubleSpinBox()
         self.grid_m.setRange(0.5, 500.0)
@@ -226,23 +241,59 @@ class NDBreachRunnerDialog(QDialog):
         lay.addLayout(grid)
         lay.addWidget(self._dem_download_box())
 
+        # the engines as status chips in the action bar; the sentence stays for anything that
+        # reads it (not shown)
         self.models_label = QLabel("")
         self.models_label.setWordWrap(True)
-        lay.addWidget(self.models_label)
+        self.models_label.setVisible(False)
 
         self.tabs = QTabWidget()
         for tab, tools in pl.TABS:
             self.tabs.addTab(_scroll_tab(self._build_tab(tab, tools)), tab)
         self.tabs.addTab(_scroll_tab(self._build_advanced_tab()), ADVANCED_TAB)
-        self.tabs.addTab(_scroll_tab(self._build_settings_tab()), "Settings")
+        self.tabs.setCornerWidget(self.gear)     # 3.24.0: the settings grid is behind the gear
         lay.addWidget(self.tabs, 1)
 
-        # 3.20.0: why the grey buttons are grey, in words, under the tabs
+        # 3.24.0: the action bar under the tabs: engine state on the left, why the run button is
+        # grey in the middle (3.20.0's status line), the primary action at the bottom right in
+        # Qt's own look, bold (docs/gui-grammar.md)
+        run_row = QHBoxLayout()
+        engines = QLabel("Engines:")
+        engines.setStyleSheet("color:{};".format(TOKENS["muted"]))
+        run_row.addWidget(engines)
+        self.lis_chip = EngineChip("LISFLOOD-FP")       # status labels, not buttons
+        self.anuga_chip = EngineChip("ANUGA")
+        for chip in (self.lis_chip, self.anuga_chip):
+            run_row.addWidget(chip)
+        run_row.addSpacing(12)
         self.ready_label = QLabel("")
         self.ready_label.setWordWrap(True)
-        lay.addWidget(self.ready_label)
+        self.ready_label.setStyleSheet("color:{};".format(TOKENS["muted"]))
+        run_row.addWidget(self.ready_label, 1)
+        self.run_dam_btn = QPushButton("Run this dam")
+        self.run_dam_btn.setDefault(True)
+        self.run_dam_btn.setMinimumHeight(34)
+        self.run_dam_btn.setStyleSheet("QPushButton {font-weight:bold; padding:4px 16px;}")
+        self.run_dam_btn.setToolTip(pl.TABS[0][1][1][2])
+        self.run_dam_btn.setEnabled(False)          # _refresh_ready enables it with the tool
+        self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
+        run_row.addWidget(self.run_dam_btn)
+        lay.addLayout(run_row)
 
-        lay.addWidget(QLabel("Log"))
+        self.settings_dialog = QDialog(self)
+        self.settings_dialog.setWindowTitle("{} \u2014 Settings".format(TITLE))
+        self.settings_dialog.setModal(False)
+        self.settings_dialog.resize(900, 620)
+        sd = QVBoxLayout()
+        sd.addWidget(self._build_settings_tab(), 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        done = QPushButton("Close")
+        done.clicked.connect(lambda _c=False: self.settings_dialog.close())
+        row.addWidget(done)
+        sd.addLayout(row)
+        self.settings_dialog.setLayout(sd)
+
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
@@ -250,14 +301,24 @@ class NDBreachRunnerDialog(QDialog):
             self.log_edit.setMinimumHeight(LOG_MIN_H)            # 3.20.0: may shrink
         except Exception:                                        # pragma: no cover - noqa
             pass
-        lay.addWidget(self.log_edit)
-        row = QHBoxLayout()
+        self.log_section = Collapsible("Log", self.log_edit)
+        lay.addWidget(self.log_section)
+        row = QHBoxLayout()                       # Close in its own row, bottom right
         self.close_btn = QPushButton("Close")
+        self.close_btn.setAutoDefault(False)
         self.close_btn.clicked.connect(self.close)
         row.addStretch(1)
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+
+    def _open_settings(self):
+        self.settings_dialog.show()
+        try:
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+        except Exception:                                        # noqa
+            pass
 
 
     def _dem_download_box(self):
@@ -335,7 +396,7 @@ class NDBreachRunnerDialog(QDialog):
         # item 2+7: inline format facts + time estimate label
         self.dem_info_label = QLabel("")
         self.dem_info_label.setWordWrap(True)
-        self.dem_info_label.setStyleSheet("color: gray;")
+        self.dem_info_label.setStyleSheet("color: {};".format(TOKENS["muted"]))
         grid.addWidget(self.dem_info_label, 6, 0, 1, 4)
         self.dem_source.currentIndexChanged.connect(self._update_dem_info)
         self.dem_resolution.currentIndexChanged.connect(self._update_dem_info)
@@ -1080,6 +1141,13 @@ class NDBreachRunnerDialog(QDialog):
         self._collapse_dem_box(bool(dem))                        # 3.20.0
         self._refresh_handoff(folder if have else "")            # 3.20.0
         self._refresh_ready(s, folder if have else "", dem)      # 3.20.0
+        try:                                                     # 3.24.0: the stage strip
+            has_json = have and os.path.isfile(os.path.join(folder, "dam.json"))
+            states = pl.stage_states(rows, have, has_json, dem, from_folder, s["dam_id"])
+            self.strip.set_states([states[k] for k in pl.STAGE_KEYS],
+                                  [pl.stage_tip(k, states[k]) for k in pl.STAGE_KEYS])
+        except Exception as e:                                   # noqa - never raise in the UI
+            self._log("!!! the stage strip was not updated: {}".format(e))
 
     # -------------------------------------------- the screening hand-off (3.20.0) --
     def _refresh_handoff(self, folder):
@@ -1152,6 +1220,11 @@ class NDBreachRunnerDialog(QDialog):
                 first = next((g["status"] for g in states.values() if not g["ok"]), "")
             self.ready_label.setText(first or "Ready: every tool of this window can run for "
                                               "this dam.")
+            run = states.get("rundam")                           # 3.24.0: the bottom-right button
+            if run is not None:
+                self.run_dam_btn.setEnabled(bool(run["ok"]))
+                self.run_dam_btn.setToolTip(RB.tooltip("rundam", run["why"],
+                                                       self.tool_tip.get("rundam", "")))
         except Exception as e:                                   # noqa - never raise in the UI
             self.ready_label.setText("")
             self._log("!!! the readiness check failed: {}".format(e))
@@ -1165,6 +1238,11 @@ class NDBreachRunnerDialog(QDialog):
             self.models_label.setText("LISFLOOD-FP: {}.  ANUGA: {}.  (Model paths: Checks tab.)".format(
                 "found" if m.get("lisflood") else "NOT found",
                 "found" if m.get("anuga") else "not found (only the ANUGA tier needs it)"))
+            hint = "Model paths: Checks tab."
+            self.lis_chip.set_state(bool(m.get("lisflood")), hint=hint)
+            self.anuga_chip.set_state(bool(m.get("anuga")),
+                                      "" if m.get("anuga") else "only the ANUGA tier needs it",
+                                      hint=hint, optional=True)
         except Exception:                                        # noqa
             self.models_label.setText("")
 

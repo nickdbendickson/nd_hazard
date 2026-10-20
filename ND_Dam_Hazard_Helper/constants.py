@@ -5,6 +5,11 @@ Classification Helper. Pure data - no QGIS imports needed here."""
 import os as _os
 
 PLUGIN_NAME = "ND Dam Hazard Classification Helper"
+# 2.34.0: the window's banner (docs/gui-grammar.md) - the wording the plugin already uses (README
+# "WHAT IT DOES", the submittal cover letter, the Runner's banner); no new authority is cited
+DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
+              "USBR ACER TM 11. They are not the classification until the engineer of record "
+              "adopts them; the Department of Water Resources decides the official hazard class.")
 
 
 def _version_from_metadata(fallback, path=None):

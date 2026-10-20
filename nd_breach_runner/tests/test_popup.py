@@ -377,9 +377,11 @@ def popup_window_shows_the_dam_and_opens_tools():
         q.project.layers["dem1"] = q.Raster("dem1", "ND LiDAR 1m")
         q.project.layers["dem2"] = q.Raster("dem2", "Another DEM")
         dlg = q.dialog.NDBreachRunnerDialog()
-        # 3.20.0: the run settings moved off the header onto an Advanced tab
-        assert dlg.tabs.count() == 7 and [dlg.tabs.tabText(i) for i in range(7)] == \
-            [t for t, _x in pl.TABS] + [q.dialog.ADVANCED_TAB, "Settings"]
+        # 3.20.0: the run settings moved off the header onto an Advanced tab; 3.24.0: the
+        # settings grid is a window behind the gear, not a tab
+        assert dlg.tabs.count() == 6 and [dlg.tabs.tabText(i) for i in range(6)] == \
+            [t for t, _x in pl.TABS] + [q.dialog.ADVANCED_TAB]
+        assert dlg.settings_dialog is not None and dlg.run_dam_btn.text() == "Run this dam"
         # 3.5: the suite settings grid, one tab per popup tab, the tools' defaults from the file
         assert dlg.grid.tabs.titles == [t for t in pl.TAB_ORDER if t in dlg.grid.groups]
         assert len(dlg.grid.catalog) > 30 and all(s.plugin == "ndbreach" for s in dlg.grid.catalog)

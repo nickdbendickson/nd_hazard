@@ -10,6 +10,7 @@ from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
     QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox, QScrollArea, QCheckBox,
+    QToolButton, QMenu,
 )
 
 from qgis.core import QgsProject, QgsRasterLayer
@@ -17,10 +18,11 @@ from qgis.core import QgsProject, QgsRasterLayer
 from .compat import MSG_INFO, MSG_WARNING, MSG_CRITICAL, WINDOW_MODAL
 from .helpers import log_message, CancelledByUser, plugin_group, dam_display_name
 from .ui_check_panel import CheckPanel
+from .ui_widgets import Collapsible, InfoBanner
 from .tokens import TOKENS
 
 from .constants import (
-    PLUGIN_NAME, PLUGIN_VERSION, OUTPUT_FOLDER_NAME,
+    PLUGIN_NAME, PLUGIN_VERSION, OUTPUT_FOLDER_NAME, DISCLAIMER,
     BTN_ACTIVE_STYLE, BTN_INACTIVE_STYLE, README_TEXT, PROGRESS_MIN_INTERVAL_S,
 )
 from .extent import make_extent_clip
@@ -130,6 +132,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         except Exception:
             pass
         main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(6)
+        main_layout.addWidget(InfoBanner(DISCLAIMER))     # 2.34.0: docs/gui-grammar.md
         self.tab_widget = QTabWidget()
 
         # --- 2.30.0 tab order: the window opens on "Setup & Run", the step a novice has to
@@ -218,25 +222,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         raster_group.setLayout(raster_layout)
         setup_layout.addWidget(raster_group)
 
-        btn_layout = QHBoxLayout()
-        self.check_btn = QPushButton("Check inputs")
-        self.check_btn.setToolTip("Checks the rasters (units, water-surface raster given as "
-                                  "depth, arrival in minutes, missing velocity, coordinate "
-                                  "systems), the outline file and the download services.")
-        self.check_btn.clicked.connect(self._on_check_inputs)
-        self.classify_btn = QPushButton("Classify")
-        self.classify_btn.setMinimumHeight(40)
-        self.classify_btn.setStyleSheet("font-size: 14px; font-weight: bold;")
-        self.classify_btn.setToolTip("Finds the depth, velocity, and arrival rasters, "
-                                     "checks them, and classifies.")
-        self.classify_btn.clicked.connect(self._classify_simple)
-        btn_layout.addWidget(self.check_btn)
-        btn_layout.addWidget(self.classify_btn)
-        btn_layout.addStretch()
-        setup_layout.addLayout(btn_layout)
-        # check results by severity, under the button row (ui_check_panel.py)
-        self.check_panel = CheckPanel(self.check_btn, self.classify_btn, action="classifying")
-        setup_layout.addWidget(self.check_panel)
+        # 2.34.0: Check inputs, Classify and the check panel sit in the action area under the
+        # tabs (docs/gui-grammar.md: the primary action at the bottom right, always in view)
+        self.action_area = self._build_action_area()
         setup_layout.addStretch()
         self.tab_widget.addTab(_scroll_tab(setup_tab), "Setup & Run")
         self._setup_tab_index = self.tab_widget.count() - 1
@@ -286,8 +274,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         selftest_row.addStretch()
         readme_layout.addLayout(selftest_row)
         self.tab_widget.addTab(_scroll_tab(readme_tab), "Readme")
+        self.tab_widget.setCornerWidget(self._build_gear())    # 2.34.0
 
-        main_layout.addWidget(self.tab_widget)
+        main_layout.addWidget(self.tab_widget, 1)
+        main_layout.addWidget(self.action_area)   # Setup & Run only (_on_tab_changed)
 
         self.status_label = QLabel("Ready")
         self.status_label.setWordWrap(True)
@@ -297,7 +287,15 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.log_text = QTextEdit()
         self.log_text.setMaximumHeight(150)
         self.log_text.setReadOnly(True)
-        main_layout.addWidget(self.log_text)
+        self.log_section = Collapsible("Log", self.log_text)   # 2.34.0: folded, as in the suite
+        main_layout.addWidget(self.log_section)
+        row = QHBoxLayout()                       # Close in its own row, bottom right
+        row.addStretch(1)
+        self.close_btn = QPushButton("Close")
+        self.close_btn.setAutoDefault(False)
+        self.close_btn.clicked.connect(self.close)
+        row.addWidget(self.close_btn)
+        main_layout.addLayout(row)
         try:
             from .ui_widgets import ellipsize
             ellipsize(self)                       # 2.33.0: one '…' on every opener button
@@ -319,8 +317,91 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _on_tab_changed(self, index):
-        if self.tab_widget.tabText(index).replace("&&", "&") in ("Hazard Classification", "Data & Output"):
+        title = self.tab_widget.tabText(index).replace("&&", "&")
+        area = self.__dict__.get("action_area")
+        if area is not None:
+            area.setVisible(title == "Setup & Run")
+        if title in ("Hazard Classification", "Data & Output"):
             self._refresh_layer_combos()
+
+    def _select_tab(self, title):
+        """Show the tab with this title; False when there is none."""
+        try:
+            for i in range(self.tab_widget.count()):
+                if self.tab_widget.tabText(i).replace("&&", "&") == title:
+                    self.tab_widget.setCurrentIndex(i)
+                    return True
+        except Exception:                                        # noqa
+            pass
+        return False
+
+    # -- 2.34.0: the action area and the gear (docs/gui-grammar.md)
+    def _build_action_area(self):
+        """Check inputs, the bold Classify at the bottom right and the check panel between the
+        tabs and the status line; shown with the Setup & Run tab, whose inputs it acts on."""
+        body = QWidget()
+        outer = QVBoxLayout(body)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        self.check_btn = QPushButton("Check inputs")
+        self.check_btn.setToolTip("Checks the rasters (units, water-surface raster given as "
+                                  "depth, arrival in minutes, missing velocity, coordinate "
+                                  "systems), the outline file and the download services.")
+        self.check_btn.setAutoDefault(False)
+        self.check_btn.clicked.connect(self._on_check_inputs)
+        self.classify_btn = QPushButton("Classify")
+        self.classify_btn.setMinimumHeight(36)
+        self.classify_btn.setMinimumWidth(160)
+        self.classify_btn.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.classify_btn.setToolTip("Finds the depth, velocity, and arrival rasters, "
+                                     "checks them, and classifies.")
+        self.classify_btn.setDefault(True)
+        self.classify_btn.clicked.connect(self._classify_simple)
+        # check results by severity (ui_check_panel.py), next to the button they block
+        self.check_panel = CheckPanel(self.check_btn, self.classify_btn, action="classifying")
+        outer.addWidget(self.check_panel)
+        bar = QHBoxLayout()
+        self.next_label = QLabel("Classify \u2192 the classes and the report on Hazard "
+                                 "Classification \u2192 your decisions on Review")
+        self.next_label.setToolTip(
+            "Classify finds the habitable structures, overtopped roads (AADT) and inundated "
+            "railroads, estimates the consequences, classifies the dam (REG_05.2026 Sec. 5.2, "
+            "ACER TM 11) and writes the report.")
+        self.next_label.setWordWrap(True)
+        self.next_label.setStyleSheet("color:{};".format(TOKENS["muted"]))
+        bar.addWidget(self.next_label, 1)
+        bar.addWidget(self.check_btn)
+        bar.addWidget(self.classify_btn)
+        outer.addLayout(bar)
+        return body
+
+    def _build_gear(self):
+        """The \u2699 on the tab bar: the suite settings, the README, the self-test and the
+        data-source file (the Suite settings and Readme tabs stay; the gear is the short way)."""
+        self.gear_btn = QToolButton()
+        self.gear_btn.setText("\u2699")
+        self.gear_btn.setToolTip("Suite settings, documentation, self-test, data sources")
+        try:
+            self.gear_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        except AttributeError:                                   # Qt5
+            self.gear_btn.setPopupMode(QToolButton.InstantPopup)
+        self.gear_btn.setAutoRaise(True)
+        self.gear_btn.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
+        menu = QMenu(self.gear_btn)
+        self.settings_action = menu.addAction("Suite settings\u2026")
+        self.settings_action.triggered.connect(lambda _c=False: self._select_tab("Suite settings"))
+        self.readme_action = menu.addAction("Documentation (README)\u2026")
+        self.readme_action.triggered.connect(lambda _c=False: self._select_tab("Readme"))
+        menu.addSeparator()
+        self.selftest_action = menu.addAction("Run self-test")
+        self.selftest_action.setToolTip("Runs the full pipeline on synthetic data in a "
+                                        "temporary folder. Your project is not changed.")
+        self.selftest_action.triggered.connect(lambda _c=False: self._on_run_selftest())
+        self.sources_action = menu.addAction("Edit data sources\u2026")
+        self.sources_action.triggered.connect(lambda _c=False: self._on_edit_sources())
+        self.gear_menu = menu
+        self.gear_btn.setMenu(menu)
+        return self.gear_btn
 
     def _inline_row(self, edit, btn):
         w = QWidget()
