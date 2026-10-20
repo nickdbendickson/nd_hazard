@@ -139,9 +139,42 @@ class QPushButton(QWidget):
         self._text = text
         self.clicked = _Signal()
 
+    def text(self):                              # 3.24.0: the action bar's button is checked
+        return self._text
+
+    def setText(self, t):
+        self._text = t
+
     def click(self):
         if self._enabled:
             self.clicked.emit()
+
+
+class QToolButton(QPushButton):
+    """GUI grammar widgets (ui_widgets.py): a checkable flat button."""
+    def __init__(self, *a):
+        super().__init__("")
+        self._c = False
+        self.toggled = _Signal()
+
+    def setText(self, t):
+        self._text = t
+
+    def text(self):
+        return self._text
+
+    def setChecked(self, v):
+        changed = bool(v) != self._c
+        self._c = bool(v)
+        if changed:
+            self.toggled.emit(self._c)
+
+    def isChecked(self):
+        return self._c
+
+
+class QFrame(QWidget):
+    pass
 
 
 class QLabel(QWidget):

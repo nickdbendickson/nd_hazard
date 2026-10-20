@@ -225,6 +225,44 @@ def dam_status(folder):
     return rows
 
 
+# 3.24.0: the window's stage strip (ui_widgets.StageStrip): Dam -> Terrain -> Model run -> Products
+STAGE_KEYS = ("dam", "terrain", "run", "products")
+STAGE_LABELS = {"dam": "Dam", "terrain": "Terrain", "run": "Model run", "products": "Products"}
+STAGE_TIPS = {
+    ("dam", "yes"): "the dam folder and its dam.json record exist",
+    ("dam", "part"): "dam.json not written yet - the dam folder (or only the dam ID) is set; "
+                     "the first run, Screening tool 7b or ND Dam Hazard writes it",
+    ("dam", "no"): "set the Dams folder and the dam ID",
+    ("terrain", "yes"): "the DEM of this dam is recorded in its folder (Get data for this dam)",
+    ("terrain", "part"): "a DEM is chosen in the window; the run cuts the terrain from it",
+    ("terrain", "no"): "no DEM chosen and none recorded in the dam folder yet",
+    ("run", "yes"): "a finished model run is in the dam folder",
+    ("run", "part"): "a model run is there but incomplete - see the Dam tab",
+    ("run", "no"): "no model run yet",
+    ("products", "yes"): "the flood products and the hand-off to ND Dam Hazard are made",
+    ("products", "part"): "some products are made - see the Dam tab",
+    ("products", "no"): "no products yet",
+}
+
+
+def stage_states(rows, has_folder, has_dam_json, dem, dem_from_folder, dam_id):
+    """{stage key: 'yes' / 'part' / 'no'} for Dam -> Terrain -> Model run -> Products, from
+    dam_status() rows and the window's DEM choice."""
+    st = {k: v for k, _l, v, _d in rows}
+    dam = "yes" if has_folder and has_dam_json else "part" if has_folder or dam_id else "no"
+    terrain = "yes" if (has_folder and dem and dem_from_folder) else "part" if dem else "no"
+    run = st.get("run", "no") if has_folder else "no"
+    prod = [st.get(k) for k in ("products", "handoff", "report")]
+    products = "yes" if st.get("products") == "yes" and st.get("handoff") == "yes" else \
+        "part" if any(v in ("yes", "part") for v in prod) else "no"
+    return {"dam": dam, "terrain": terrain, "run": run, "products": products}
+
+
+def stage_tip(key, state):
+    """The tooltip of one stage chip: '<Stage>: <state> - <why>'."""
+    return "{}: {} - {}".format(STAGE_LABELS.get(key, key), state, STAGE_TIPS.get((key, state), ""))
+
+
 def status_lines(rows):
     mark = {"yes": "✓", "part": "◐", "no": "·"}
     return ["{} {}{}".format(mark[st], label, " - " + detail if detail else "")
