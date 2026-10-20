@@ -50,16 +50,18 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           fail=0
+          # every step names its exit status, so a red job says which step it was
+          step() { "$@"; rc=$?; if [ $rc -ne 0 ]; then echo "::error::'$*' exited with status $rc"; fail=1; fi; }
           for p in ND_Dam_Hazard_Helper nd_breach_runner nd_data_updater; do
             echo "== $p =="
-            python -m "$p.tests.run_tests" || fail=1
+            step python -m "$p.tests.run_tests"
           done
           echo "== nd_dam_screening =="
           for t in nd_dam_screening/tests/test_*.py; do
             echo "-- $t --"
-            python "$t" || fail=1
+            step python "$t"
           done
           # opens every window offscreen and checks it against docs/gui-grammar.md
           echo "== gui_lint =="
-          python tools/gui_lint.py || fail=1
+          step python tools/gui_lint.py
           exit $fail
