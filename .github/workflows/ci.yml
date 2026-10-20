@@ -52,11 +52,17 @@ jobs:
           fail=0
           for p in ND_Dam_Hazard_Helper nd_breach_runner nd_data_updater; do
             echo "== $p =="
-            python -m "$p.tests.run_tests" || fail=1
+            python -m "$p.tests.run_tests" || { echo "::error::$p.tests.run_tests exited $?"; fail=1; }
           done
           echo "== nd_dam_screening =="
           for t in nd_dam_screening/tests/test_*.py; do
             echo "-- $t --"
-            python "$t" || fail=1
+            python "$t" || { echo "::error::$t exited $?"; fail=1; }
           done
-          exit $fail
+          # Do not end on the `exit` builtin: under `bash -el {0}` (a non-interactive login
+          # shell) `exit` runs ~/.bash_logout, whose Ubuntu-default clear_console returns 1 when
+          # there is no tty, and `-e` makes that 1 the step's status - so `exit 0` surfaced as a
+          # red step with every suite passing (Hazard/Runner/Updater clean, every screening
+          # script OK). Ending on `test` leaves the step's status as the aggregate test result
+          # (0 or 1); the `::error::` lines above name any script that does exit non-zero.
+          test "$fail" -eq 0
