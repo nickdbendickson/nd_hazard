@@ -22,17 +22,19 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QFrame, QLabel, QToolButton, QVBoxLayout, QHBoxLayout, QWidget
 
 from .checks import ERROR, WARNING, OK
+from .tokens import TOKENS as T
 
-BANNER_QSS = ("QFrame#checkErrorBanner {background:#b3261e; border:1px solid #8c1d18;"
-              " border-radius:4px;} QFrame#checkErrorBanner QLabel {color:white;}")
-WARN_PILL_QSS = ("QLabel {background:#f9a825; color:#3e2723; font-weight:bold;"
-                 " font-size:10px; border-radius:3px; padding:1px 5px;}")
+BANNER_QSS = ("QFrame#checkErrorBanner {background:%s; border:1px solid %s;"
+              " border-radius:4px;} QFrame#checkErrorBanner QLabel {color:white;}"
+              % (T["error_fill"], T["error_edge"]))
+WARN_PILL_QSS = ("QLabel {background:%s; color:%s; font-weight:bold;"
+                 " font-size:10px; border-radius:3px; padding:1px 5px;}" % (T["warn_fill"], T["warn_ink"]))
 # the collapsible header: one base style plus the two coloured variants, each a
 # complete stylesheet string (the fragile ``.replace("}", ...)`` of the original
 # rewrote every ``}`` in whatever string was there)
 HEADER_QSS = "QToolButton {border:none; font-weight:bold; text-align:left;}"
-WARN_HEADER_QSS = "QToolButton {border:none; font-weight:bold; text-align:left; color:#a15c00;}"
-OK_HEADER_QSS = "QToolButton {border:none; font-weight:bold; text-align:left; color:#2e7d32;}"
+WARN_HEADER_QSS = "QToolButton {border:none; font-weight:bold; text-align:left; color:%s;}" % T["warn"]
+OK_HEADER_QSS = "QToolButton {border:none; font-weight:bold; text-align:left; color:%s;}" % T["success"]
 
 
 def _qt_enum(group, name):
@@ -194,7 +196,7 @@ class CheckPanel(QWidget):
 
     def _add_ok_summary(self, n):
         inner = QLabel("All passed — the log lists the values.")
-        inner.setStyleSheet("color:#777;")
+        inner.setStyleSheet("color:%s;" % T["muted"])
         box = Collapsible(_plural(n, "check") + " passed", inner, expanded=False, parent=self)
         box.header.setStyleSheet(OK_HEADER_QSS)
         self._layout.addWidget(box)

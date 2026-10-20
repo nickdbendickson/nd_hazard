@@ -5,6 +5,11 @@ Classification Helper. Pure data - no QGIS imports needed here."""
 import os as _os
 
 PLUGIN_NAME = "ND Dam Hazard Classification Helper"
+# 2.34.0: the window's banner (docs/gui-grammar.md) - the wording the plugin already uses (README
+# "WHAT IT DOES", the submittal cover letter, the Runner's banner); no new authority is cited
+DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
+              "USBR ACER TM 11. They are not the classification until the engineer of record "
+              "adopts them; the Department of Water Resources decides the official hazard class.")
 
 
 def _version_from_metadata(fallback, path=None):
@@ -73,14 +78,10 @@ CLASS_JUDGMENT = 2
 CLASS_LOW = 3
 CLASS_NODATA = -9999
 
-BTN_ACTIVE_STYLE = (
-    "background-color: #4CAF50; color: white; "
-    "font-weight: bold; padding: 10px 20px; border-radius: 4px;"
-)
-BTN_INACTIVE_STYLE = (
-    "background-color: #B0BEC5; color: #eceff1; "
-    "font-weight: bold; padding: 10px 20px; border-radius: 4px;"
-)
+# docs/gui-grammar.md: the primary button keeps Qt's own look; bold says it is the main action
+# and Qt greys it when it is disabled (it was painted green / grey before).
+BTN_ACTIVE_STYLE = "font-weight: bold; padding: 10px 20px;"
+BTN_INACTIVE_STYLE = BTN_ACTIVE_STYLE
 
 # How often (in features) the processing loops report progress. The dialog
 # additionally throttles UI refreshes to PROGRESS_MIN_INTERVAL_S seconds.

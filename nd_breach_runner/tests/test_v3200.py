@@ -927,10 +927,10 @@ def v3200_the_release_version_is_consistent_everywhere_it_is_written():
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
     md = cp["general"]["version"].strip()
-    assert md == "3.22.0" == wf.VERSION == wf.VERSION_FALLBACK
+    assert md == "3.25.0" == wf.VERSION == wf.VERSION_FALLBACK
     assert versions.RELEASE["ndbreach"] == md
     changelog = cp["general"]["changelog"]
-    assert changelog.strip().startswith("3.22.0 ") and "3.21.0 - " in changelog
+    assert changelog.strip().startswith("3.25.0 ") and "3.24.0 - " in changelog
     for word in ("crossing", "cascade", "queue", "population at risk"):
         assert word in changelog.lower().split("3.19.0")[0], word
 

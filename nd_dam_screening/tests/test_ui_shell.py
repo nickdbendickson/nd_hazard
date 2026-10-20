@@ -67,8 +67,8 @@ print("OK (0: the dialog builds without error)")
 # ======================================================= 1. the pipeline strip exists, 4 stages
 assert set(dlg.pipe_btn) == {"data", "dem", "screen", "report"}, sorted(dlg.pipe_btn)
 assert [k for k, _l, _s, _t in PIPELINE] == ["data", "dem", "screen", "report"]
-for key, label, _step, _tab in PIPELINE:
-    assert dlg.pipe_btn[key].text().startswith(label), dlg.pipe_btn[key].text()
+for key, label, _step, _tab in PIPELINE:              # 0.32.0: mark before the word
+    assert dlg.pipe_btn[key].text().endswith(label), dlg.pipe_btn[key].text()
 print("OK (1: Data -> DEM -> Screen -> Report buttons exist)")
 
 # ============================================= 2. with no work folder every stage reads 'waiting'
@@ -77,7 +77,7 @@ print("OK (1: Data -> DEM -> Screen -> Report buttons exist)")
 assert dlg.pipe_state == {"data": "waiting", "dem": "waiting", "screen": "waiting",
                           "report": "waiting"}, dlg.pipe_state
 for key, _l, _s, _t in PIPELINE:
-    assert dlg.pipe_btn[key].text().endswith(PIPE_MARK["waiting"]), dlg.pipe_btn[key].text()
+    assert dlg.pipe_btn[key].text().startswith(PIPE_MARK["waiting"]), dlg.pipe_btn[key].text()
 print("OK (2: no work folder -> every stage waiting, glyph follows PIPE_MARK)")
 
 # ============================================= 3. the stage state FOLLOWS wf.statuses on a real run
@@ -90,7 +90,7 @@ by = _by(dlg)
 for key, _label, step, _tab in PIPELINE:
     if step is not None:
         assert dlg.pipe_state[key] == by[step], (key, dlg.pipe_state[key], by.get(step))
-        assert dlg.pipe_btn[key].text().endswith(PIPE_MARK.get(by[step], "○"))
+        assert dlg.pipe_btn[key].text().startswith(PIPE_MARK.get(by[step], "\u25cb"))
 
 # write step 1's output: wf.statuses now calls step 1 done, and the Data stage must move with it
 _gpkg.write(wf.path(W, "1", "OUT"),
@@ -100,8 +100,7 @@ dlg.refresh()
 by = _by(dlg)
 assert by["1"] == "done", by["1"]                  # sanity: wf.statuses agrees
 assert dlg.pipe_state["data"] == "done", dlg.pipe_state
-assert dlg.pipe_btn["data"].text() == "Data " + PIPE_MARK["done"], dlg.pipe_btn["data"].text()
-assert PIPE_COLOR["done"] in dlg.pipe_btn["data"]._style        # coloured by state
+assert dlg.pipe_btn["data"].text() == PIPE_MARK["done"] + " Data", dlg.pipe_btn["data"].text()
 assert "step 1" in dlg.pipe_btn["data"].toolTip() and "go to the tab" in dlg.pipe_btn["data"].toolTip()
 # the stages that are still waiting did not move
 assert dlg.pipe_state["dem"] == by["2"] and dlg.pipe_state["screen"] == by["7"]
@@ -116,7 +115,7 @@ class _FakeChain(object):
 dlg.chain = _FakeChain()
 dlg._refresh_pipeline(_by(dlg), busy=True, have=True, work=W)
 assert dlg.pipe_state["screen"] == "running", dlg.pipe_state
-assert dlg.pipe_btn["screen"].text() == "Screen " + PIPE_MARK["running"]
+assert dlg.pipe_btn["screen"].text() == PIPE_MARK["running"] + " Screen"
 dlg.chain = None
 print("OK (4: a running step 7 lights the Screen stage)")
 
@@ -126,7 +125,7 @@ os.makedirs(os.path.dirname(report), exist_ok=True)
 open(report, "w").write("<html></html>")
 dlg.refresh()
 assert dlg.pipe_state["report"] == "done", dlg.pipe_state
-assert dlg.pipe_btn["report"].text() == "Report " + PIPE_MARK["done"]
+assert dlg.pipe_btn["report"].text() == PIPE_MARK["done"] + " Report"
 os.remove(report)
 dlg.refresh()
 assert dlg.pipe_state["report"] == "waiting", dlg.pipe_state
@@ -148,14 +147,14 @@ assert hasattr(dlg, "help_btn")
 print("OK (7: workspace header folded, county_combo kept)")
 
 # ============================================================ 8. the folded log + the toggle
-assert dlg.log_edit.isVisible() is False                         # starts folded
+assert dlg.log_section.is_expanded() is False                    # starts folded (Collapsible)
 assert dlg.log_line.text() == "Log: -"
 dlg._log("first line\nsecond and last line")
 assert dlg.log_line.text() == "Log: second and last line", dlg.log_line.text()
 dlg._toggle_log()
-assert dlg.log_edit.isVisible() is True and dlg.log_toggle.text() == "Hide log"
+assert dlg.log_section.is_expanded() is True
 dlg._toggle_log()
-assert dlg.log_edit.isVisible() is False and dlg.log_toggle.text() == "Show log"
+assert dlg.log_section.is_expanded() is False
 assert hasattr(dlg, "step_progress")                             # the progress bar is preserved
 print("OK (8: the log folds to one line and toggles; step_progress kept)")
 

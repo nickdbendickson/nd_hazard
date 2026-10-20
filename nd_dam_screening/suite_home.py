@@ -39,6 +39,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .damsuite import suite_home as SH
+from .tokens import TOKENS
 from .damsuite import suitecheck as SC
 from .damsuite import suitedata as SD
 from .damsuite import versions as VS
@@ -51,8 +52,8 @@ COLUMNS = ("Dam ID", "Name", "Class", "Existing", "Screened", "Modelled", "Class
 # plugin key -> (plugin folder name, how to point its window at the dam)
 PLUGIN_FOLDER = VS.PLUGINS
 # 1.16.0: the light for each check level - a colour and a word, never colour alone
-MARKS = {"ok": ("●", "#1a7f37", "OK"), "info": ("○", "#57606a", "-"),
-         "warn": ("●", "#9a6700", "check"), "error": ("●", "#b42318", "stop")}
+MARKS = {"ok": ("●", TOKENS["success"], "OK"), "info": ("○", TOKENS["muted"], "-"),
+         "warn": ("●", TOKENS["warn"], "check"), "error": ("●", TOKENS["error"], "stop")}
 GUIDE = """\
 Getting started on a new machine
 
@@ -119,14 +120,19 @@ class SuiteHomeDialog(QDialog):
         self._build()
         self._load()
         self.refresh()
+        try:
+            from .ui_widgets import ellipsize
+            ellipsize(self)                       # one '…' on every opener button
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
 
     # ------------------------------------------------------------------ build --
     def _build(self):
         lay = QVBoxLayout()
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_start(), "&Start")
-        self.tabs.addTab(self._build_dams(), "&Dams")
-        self.tabs.addTab(self._build_guide(), "&Getting started")
+        self.tabs.addTab(self._build_start(), "Start")
+        self.tabs.addTab(self._build_dams(), "Dams")
+        self.tabs.addTab(self._build_guide(), "Getting started")
         lay.addWidget(self.tabs, 1)
         self.setLayout(lay)
 
@@ -163,7 +169,7 @@ class SuiteHomeDialog(QDialog):
         grid = QGridLayout()
         for i, (key, label, plugin, why, _needs) in enumerate(SC.STEPS):
             light = QLabel("")
-            btn = QPushButton(label.split(". ", 1)[-1] + "...")
+            btn = QPushButton(label.split(". ", 1)[-1] + "…")
             btn.setMinimumWidth(110)
             btn.clicked.connect(lambda _c=False, k=plugin: self.open_plugin(k))
             num = QLabel(label.split(".", 1)[0] + ".")
@@ -264,7 +270,7 @@ class SuiteHomeDialog(QDialog):
         lay.addLayout(row)
         row = QHBoxLayout()
         for key in ("ndupdater", "ndscreen", "ndbreach", "ndhazard"):
-            btn = QPushButton(VS.LABELS.get(key, key) + "...")
+            btn = QPushButton(VS.LABELS.get(key, key) + "…")
             btn.clicked.connect(lambda _c=False, k=key: self.open_plugin(k))
             setattr(self, "btn_" + key, btn)
             row.addWidget(btn)

@@ -8,6 +8,8 @@ QGIS/GDAL install, so they can gate every PR cheaply:
                        damsuite SUITE_VERSION is identical across every copy
   3. compile         — py_compile every .py in the suite (catches a syntax error from a bad merge
                        across all plugins in seconds, without importing anything)
+  4. shared/ui       — every plugin copy of the shared window files matches shared/ui/, and no
+                       window code writes a #rrggbb colour outside tokens.py (docs/gui-grammar.md)
 
 Exit non-zero on any failure. The fuller per-plugin test suites (real/mock QGIS) run separately;
 this job is the always-on hard gate.
@@ -32,6 +34,43 @@ def check_damsuite_pin(problems):
     import sync_damsuite
     for p in sync_damsuite.check(ROOT):
         _fail(problems, "damsuite pin: " + p)
+
+
+def check_ui_drift(problems):
+    """Every plugin copy of the shared window files (shared/ui/) matches its canonical file."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import sync_ui
+    for p in sync_ui.check(ROOT):
+        _fail(problems, "shared/ui drift: " + p)
+
+
+# Window code: the files that build windows. A colour in them comes from tokens.py
+# (docs/gui-grammar.md); maps, reports and charts keep their own palettes and are not listed.
+WINDOW_FILES = ("dialog.py", "wizard.py", "popup_logic.py", "settings_dialog.py", "pack_dialog.py",
+                "status_dock.py", "plugin.py", "suite_settings_tab.py", "classify_tab.py",
+                "review_tab.py", "facility_review_tab.py", "data_tab.py", "datafolder_tab.py",
+                "dsswise_tab.py", "extras_tab.py", "extras290_tab.py", "rasimport_tab.py",
+                "suite_tab.py", "ui_check_panel.py", "constants.py")
+HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-zA-Z])")
+
+
+def check_window_colours(problems):
+    """No #rrggbb in window code outside tokens.py (the shared/ui files are checked at their
+    canonical copy; tokens.py is the one place a window colour is written)."""
+    files = [os.path.join(ROOT, "shared", "ui", f) for f in os.listdir(os.path.join(ROOT, "shared", "ui"))
+             if f.endswith(".py") and f not in ("tokens.py", "suite_styles.py")]
+    for plugin in PLUGINS:
+        for f in WINDOW_FILES:
+            files.append(os.path.join(ROOT, plugin, f))
+    for path in files:
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for n, line in enumerate(f, 1):
+                code = line.split("  #", 1)[0] if not line.lstrip().startswith("#") else ""
+                if HEX_RE.search(code):
+                    _fail(problems, "{}:{}: colour literal in window code - use tokens.py".format(
+                        os.path.relpath(path, ROOT), n))
 
 
 def check_versions(problems):
@@ -77,6 +116,7 @@ def check_compile(problems):
 def main():
     problems = []
     for name, fn in (("damsuite pin", check_damsuite_pin), ("versions", check_versions),
+                     ("shared/ui drift", check_ui_drift), ("window colours", check_window_colours),
                      ("compile", check_compile)):
         print("[ci] " + name)
         try:

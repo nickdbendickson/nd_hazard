@@ -20,7 +20,7 @@ from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QGroupBox, QFileDialog, QMessageBox,
     QCheckBox, QRadioButton, QTableWidget, QTableWidgetItem, QInputDialog, QScrollArea, QProgressBar,
-    QHeaderView, QAbstractItemView,
+    QHeaderView, QAbstractItemView, QMenu, QToolButton,
 )
 
 from .core import workflow as wf
@@ -31,6 +31,8 @@ from .core import incomplete as ic          # 0.28.0: the run flags, in red
 from .core import resume as rs              # 0.28.0: what an interrupted run got through
 from .core import runplan as rp             # 0.28.0: the cell size and the time estimate
 from .damsuite import settings as DS
+from .tokens import TOKENS
+from .ui_widgets import Collapsible, InfoBanner, StageStrip
 from .damsuite import priority as PR         # 0.28.0: the statewide review list
 
 TITLE = "ND Dam Breach Screening"
@@ -50,7 +52,7 @@ REVIEW_COLUMNS = ("Dam", "Name", "Why", "From", "Decision")
 # 0.28.0: the Results tab's dam table gains the run flags, and the Priority tab is the statewide
 # review list (damsuite.priority)
 DAM_COLUMNS = ("Dam ID", "Name", "Class", "Storage (ac-ft)", "Confidence", "Flags")
-RED = "color: #b00020"
+RED = "color: {}".format(TOKENS["error"])
 FOLLOW_TERRAIN_LABEL = "Follow the terrain source (recommended)"
 RUN_COUNTY_TIP = ("Runs every step that is not done, in order, in the background, for every dam of "
                   "the chosen county (or of the whole work folder), with the values of this window "
@@ -63,10 +65,15 @@ RUN_COUNTY_TIP = ("Runs every step that is not done, in order, in the background
 # (key, label, the step whose state it shows, the tab-key it jumps to).
 PIPELINE = (("data", "Data", "1", "simple"), ("dem", "DEM", "2", "simple"),
             ("screen", "Screen", "7", "simple"), ("report", "Report", None, "results"))
-PIPE_MARK = {"done": "✓", "ready": "●", "running": "◐", "problem": "!",
-             "stale": "↻", "waiting": "○", "optional": "○"}
-PIPE_COLOR = {"done": "#2e7d32", "ready": "#1a73e8", "running": "#1a73e8", "problem": "#c62828",
-              "stale": "#b26a00"}
+# 0.32.0: the strip is the suite's StageStrip (docs/gui-grammar.md): these are its states, and
+# the marks / colours it draws (kept here for anything that reads them)
+PIPE_STAGE = {"done": StageStrip.YES, "ready": StageStrip.ACTIVE, "running": StageStrip.PART,
+              "stale": StageStrip.PART, "problem": StageStrip.ERR, "waiting": StageStrip.NO,
+              "optional": StageStrip.NO}
+PIPE_MARK = {"done": "\u2713", "ready": "\u25b6", "running": "\u25d0", "problem": "\u2715",
+             "stale": "\u25d0", "waiting": "\u25cb", "optional": "\u25cb"}
+PIPE_COLOR = {"done": TOKENS["success"], "ready": TOKENS["link"], "running": TOKENS["warn"],
+              "problem": TOKENS["error"], "stale": TOKENS["warn"]}
 # a pipeline tab-key -> the tab TITLE it jumps to (resolved to a live index at click time, so nd_'s
 # tab order can change without touching this)
 PIPE_TAB = {"simple": "Simple", "inputs": "Inputs", "review": "Review", "results": "Results"}
@@ -108,7 +115,7 @@ class _DamPicker(QDialog):
 
     def __init__(self, parent, choices):
         super().__init__(parent)
-        self.setWindowTitle(TITLE + " - Run selected dams")
+        self.setWindowTitle(TITLE + " — Run selected dams")
         lay = QVBoxLayout(self)
         lay.addWidget(QLabel("Tick the dams or ponds to run. The whole chain runs for them alone, into "
                              "one folder under <work folder>/one_dam; the batch is left as it is."))
@@ -249,13 +256,20 @@ class NDDamScreeningDialog(QDialog):
             self.engine.currentIndexChanged.connect(self._auto_pf_timer.start)
         except Exception:
             pass
+        try:
+            from .ui_widgets import ellipsize
+            ellipsize(self)                       # 0.31.0: one '…' on every opener button
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
 
     # ------------------------------------------------------------------ build --
     def _build(self):
         lay = QVBoxLayout()
-        info = QLabel(DISCLAIMER)
-        info.setWordWrap(True)
-        lay.addWidget(info)
+        lay.setSpacing(6)
+        # 0.32.0 (docs/gui-grammar.md): the shared banner; How it decides and Settings behind
+        # the gear on the tab bar; the run buttons at the bottom right; the log folded
+        self.disclaimer = InfoBanner(DISCLAIMER)
+        lay.addWidget(self.disclaimer)
 
         # GUI port (stage 2a): nd_'s existing header row (work folder + county) folded into a
         # Workspace group hoisted above the tabs. Every widget and its wiring are nd_'s own - the
@@ -273,16 +287,6 @@ class NDDamScreeningDialog(QDialog):
         self.work_browse.clicked.connect(lambda _c=False: self._browse_folder(self.work_edit))
         self.work_open = QPushButton("Open folder")
         self.work_open.clicked.connect(self._open_work_folder)
-        self.help_btn = QPushButton("How it decides...")
-        self.help_btn.setToolTip("Pictures of the rules: the rim / toe of a pond, the triage envelope, the "
-                                 "ND 5.2 / 5.3 decision tree, and what every threshold does.")
-        self.help_btn.clicked.connect(lambda _c=False: self._open_help())
-        # GUI port (stage 2a): a gear SHORTCUT that only SELECTS the Settings tab (no separate
-        # window - the Settings-window move is deferred to a later stage; nd_'s Settings tab stays).
-        self.settings_shortcut_btn = QPushButton("⚙ Settings")
-        self.settings_shortcut_btn.setToolTip("Jump to the Settings tab: every engineer-chosen value, "
-                                              "the settings file and the run options.")
-        self.settings_shortcut_btn.clicked.connect(lambda _c=False: self._select_tab("Settings"))
         row.addWidget(self.work_edit, 1)
         row.addWidget(self.work_browse)
         row.addWidget(self.work_open)
@@ -299,8 +303,6 @@ class NDDamScreeningDialog(QDialog):
             "again after changing it. Use a work folder per county.")
         self.county_combo.currentIndexChanged.connect(lambda *_a: self._changed())
         row.addWidget(self.county_combo)
-        row.addWidget(self.help_btn)
-        row.addWidget(self.settings_shortcut_btn)
         ws.setLayout(row)
         lay.addWidget(ws)
         # GUI port (stage 2a): the pipeline strip sits between the workspace header and the tabs
@@ -314,7 +316,13 @@ class NDDamScreeningDialog(QDialog):
         self.tabs.addTab(_scroll_tab(self._build_review_tab()), "Review")
         self.tabs.addTab(_scroll_tab(self._build_results_tab()), "Results")
         self.tabs.addTab(_scroll_tab(self._build_priority_tab()), "Priority")    # 0.28.0
+        self.tabs.setCornerWidget(self._build_gear())
         lay.addWidget(self.tabs, 1)
+        lay.addWidget(self._build_action_bar())
+        try:
+            self.tabs.currentChanged.connect(self._on_tab_changed)
+        except Exception:                                        # noqa
+            pass
         # 0.28.0: what each Run button says when it CAN be pressed, so the reason it is grey can
         # be put in its place and taken back out again (refresh)
         self._run_tips = dict((id(b), b.toolTip()) for b in
@@ -323,42 +331,79 @@ class NDDamScreeningDialog(QDialog):
         # GUI port (stage 2a): the log folded to a one-line 'Log: <last line>' with a 'Show log'
         # toggle, replacing nd_'s always-open box. The full box is hidden until asked for; the
         # Simple tab's step_progress bar is left where it is (preserved).
+        # the status line, then the log folded away (the suite's Collapsible), then Close
+        self.log_line = QLabel("Log: -")
+        self.log_line.setStyleSheet("color: {};".format(TOKENS["muted"]))
+        lay.addWidget(self.log_line)
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
-        self.log_edit.setVisible(False)
-        lay.addWidget(self.log_edit)
+        self.log_section = Collapsible("Log", self.log_edit)
+        self.log_toggle = self.log_section.header
+        lay.addWidget(self.log_section)
         row = QHBoxLayout()
-        self.log_line = QLabel("Log: -")
-        self.log_line.setStyleSheet("color: #4a5560;")
-        self.log_toggle = QPushButton("Show log")
-        self.log_toggle.setToolTip("Show or hide the whole log.")
-        self.log_toggle.clicked.connect(lambda _c=False: self._toggle_log())
+        row.addStretch(1)
         self.close_btn = QPushButton("Close")
+        self.close_btn.setAutoDefault(False)
         self.close_btn.clicked.connect(self.close)
-        row.addWidget(self.log_line, 1)
-        row.addWidget(self.log_toggle)
-        row.addStretch(0)
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
 
+    def _build_gear(self):
+        """The \u2699 on the tab bar: click = the Settings tab; its menu also holds How it decides."""
+        self.settings_shortcut_btn = QToolButton()
+        self.settings_shortcut_btn.setText("\u2699")
+        self.settings_shortcut_btn.setToolTip("Settings: every engineer-chosen value, the settings "
+                                              "file and the run options. The arrow: How it decides.")
+        self.settings_shortcut_btn.setAutoRaise(True)
+        self.settings_shortcut_btn.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
+        self.settings_shortcut_btn.clicked.connect(lambda _c=False: self._select_tab("Settings"))
+        menu = QMenu(self.settings_shortcut_btn)
+        self.settings_action = menu.addAction("Settings\u2026")
+        self.settings_action.triggered.connect(lambda _c=False: self._select_tab("Settings"))
+        self.help_action = menu.addAction("How it decides\u2026")
+        self.help_action.setToolTip("Pictures of the rules: the rim / toe of a pond, the triage envelope, "
+                                    "the ND 5.2 / 5.3 decision tree, and what every threshold does.")
+        self.help_action.triggered.connect(lambda _c=False: self._open_help())
+        self.gear_menu = menu
+        self.settings_shortcut_btn.setMenu(menu)
+        try:
+            self.settings_shortcut_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        except AttributeError:                                   # Qt5 / the test double
+            try:
+                self.settings_shortcut_btn.setPopupMode(QToolButton.MenuButtonPopup)
+            except Exception:                                    # noqa
+                pass
+        self.help_btn = self.settings_shortcut_btn               # kept name: How it decides is in its menu
+        return self.settings_shortcut_btn
+
+    def _build_action_bar(self):
+        """The run buttons at the bottom right, Run county bold as the primary action (docs/
+        gui-grammar.md); shown with the Simple tab, where their inputs are."""
+        self.action_area = QWidget()
+        bar = QHBoxLayout(self.action_area)
+        bar.setContentsMargins(0, 0, 0, 0)
+        self.run_hint = QLabel("Choose a work folder and a county, then Run county.")
+        self.run_hint.setWordWrap(True)
+        self.run_hint.setStyleSheet("color: {};".format(TOKENS["muted"]))
+        bar.addWidget(self.run_hint, 1)
+        for b in (self.preflight_btn, self.one_dam_btn, self.sel_dams_btn, self.stop_btn):
+            b.setAutoDefault(False)
+            bar.addWidget(b)
+        bar.addWidget(self.run_all_btn)
+        return self.action_area
+
+    def _on_tab_changed(self, index):
+        self.action_area.setVisible(index == 0)
+
     # -- GUI port (stage 2a): the pipeline strip, the tab shortcuts and the folded log
     def _build_pipeline(self):
-        """Data -> DEM -> Screen -> Report; each a flat button that jumps to its owning tab."""
-        bar = QGroupBox("")
-        row = QHBoxLayout()
-        self.pipe_btn = {}
-        for i, (key, label, _step, _tab) in enumerate(PIPELINE):
-            if i:
-                row.addWidget(QLabel("→"))
-            b = QPushButton("{} ○".format(label))
-            b.setFlat(True)
-            b.clicked.connect(lambda _c=False, k=key: self._goto_stage(k))
-            self.pipe_btn[key] = b
-            row.addWidget(b)
-        row.addStretch(1)
-        bar.setLayout(row)
+        """Data -> DEM -> Screen -> Report: the suite's StageStrip (0.32.0); each chip jumps to
+        its owning tab."""
+        self.strip = bar = StageStrip([label for _k, label, _s, _t in PIPELINE], clickable=True)
+        self.pipe_btn = {key: chip for (key, _l, _s, _t), chip in zip(PIPELINE, bar.chips)}
+        bar.clicked.connect(lambda i: self._goto_stage(PIPELINE[i][0]))
         self.pipeline_bar = bar
         return bar
 
@@ -383,6 +428,7 @@ class NDDamScreeningDialog(QDialog):
         built from) plus the report file. Each stage shows a live glyph + colour and a 'why'
         tooltip. Never the cause of a crash in refresh()."""
         self.pipe_state = {}
+        tips = []
         cur = getattr(self.chain, "current", None) if busy else None
         for key, label, step, _tab in PIPELINE:
             if step is None:
@@ -395,16 +441,12 @@ class NDDamScreeningDialog(QDialog):
                     st = "running"
                 why = "{}: step {} - {} ({})".format(label, step, wf.TITLE.get(step, ""), st)
             self.pipe_state[key] = st
-            b = self.pipe_btn[key]
-            b.setText("{} {}".format(label, PIPE_MARK.get(st, "○")))
-            b.setToolTip(why + ". Click to go to the tab.")
-            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, "#5f6b76"),
-                                                   " font-weight: bold;" if st in ("done", "ready") else ""))
+            tips.append(why + ". Click to go to the tab.")
+        self.strip.set_states([PIPE_STAGE.get(self.pipe_state[k], StageStrip.NO)
+                               for k, _l, _s, _t in PIPELINE], tips)
 
     def _toggle_log(self):
-        on = not self.log_edit.isVisible()
-        self.log_edit.setVisible(on)
-        self.log_toggle.setText("Hide log" if on else "Show log")
+        self.log_section.set_expanded(not self.log_section.is_expanded())
 
     # -- Simple
     def _build_simple_tab(self):
@@ -415,14 +457,14 @@ class NDDamScreeningDialog(QDialog):
         grid = QGridLayout()
         r = 0
         grid.addWidget(QLabel("What to screen"), r, 0)
-        box = QHBoxLayout()
+        box = QGridLayout()                       # 0.31.0: two on a row, so the page fits 1080p
         self.screen_radio = []
         for i, label in enumerate(SCREEN_WHAT):
             rb = QRadioButton(label)
             rb.toggled.connect(lambda on, idx=i: self._screen_toggled(idx, on))
             self.screen_radio.append(rb)
-            box.addWidget(rb)
-        box.addStretch(1)
+            box.addWidget(rb, i // 2, i % 2)
+        box.setColumnStretch(2, 1)
         grid.addLayout(box, r, 1)
         r += 1
         grid.addWidget(QLabel("Data package (step 0)"), r, 0)
@@ -451,6 +493,15 @@ class NDDamScreeningDialog(QDialog):
         grid.addWidget(self.engine, r, 1)
         r += 1
         self.crit = self._combo(CRIT_LABELS)
+        # 0.31.0: the longest label is 870 px; the list shows it in full, the closed box need
+        # not (the page fits a 1080p screen without a sideways scroll, docs/gui-grammar.md)
+        try:
+            self.crit.setSizeAdjustPolicy(
+                getattr(getattr(QComboBox, "SizeAdjustPolicy", QComboBox),
+                        "AdjustToMinimumContentsLengthWithIcon"))
+            self.crit.setMinimumContentsLength(40)
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
         self.crit.currentIndexChanged.connect(self._changed)
         grid.addWidget(QLabel("Hazard criterion"), r, 0)
         grid.addWidget(self.crit, r, 1)
@@ -532,6 +583,10 @@ class NDDamScreeningDialog(QDialog):
         # 0.28.0: "Run county" - what it does. "Run all" read like "run all the tools", and the
         # one-dam buttons beside it were the only way a novice found a single dam.
         self.run_all_btn = QPushButton("Run county")
+        self.run_all_btn.setMinimumHeight(36)
+        self.run_all_btn.setMinimumWidth(160)
+        self.run_all_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px 12px; }")
+        self.run_all_btn.setDefault(True)
         self.run_all_btn.setToolTip(RUN_COUNTY_TIP)
         self.run_all_btn.clicked.connect(lambda _c=False: self._run_chain(preflight=True))
         self.stop_btn = QPushButton("Stop")
@@ -549,13 +604,7 @@ class NDDamScreeningDialog(QDialog):
                                      "<work folder>/one_dam/<IDs> (the step 1 filter is set to their IDs; the "
                                      "window's own settings are not changed).")
         self.sel_dams_btn.clicked.connect(lambda _c=False: self._run_selected_dams())
-        row.addWidget(self.preflight_btn)
-        row.addWidget(self.run_all_btn)
-        row.addWidget(self.stop_btn)
-        row.addWidget(self.one_dam_btn)
-        row.addWidget(self.sel_dams_btn)
-        row.addStretch(1)
-        lay.addLayout(row)
+        lay.addLayout(row)                    # 0.32.0: the five run buttons are in the action bar
         # 0.28.1: one button for the next plugin the selected dam needs (wf.continue_target)
         self.continue_btn = self._continue_button()
         row = QHBoxLayout()
@@ -610,16 +659,17 @@ class NDDamScreeningDialog(QDialog):
             "run with the preflight check first.")
         txt.setWordWrap(True)
         g.addWidget(txt)
-        row = QHBoxLayout()
+        row = QGridLayout()                       # 0.31.0: two rows of three, fits 1080p
         self.chain_check = {}
-        for key, label in (("0", "also build the data package (0)"), ("6", "also the quick screen (6)"),
-                           ("9", "also the sensitivity (9)"),
-                           ("16", "ponds and dugouts (16)"), ("18", "merge dams and ponds (18)"),
-                           ("19", "a proposed dam (19)")):
+        for n, (key, label) in enumerate((
+                ("0", "also build the data package (0)"), ("6", "also the quick screen (6)"),
+                ("9", "also the sensitivity (9)"),
+                ("16", "ponds and dugouts (16)"), ("18", "merge dams and ponds (18)"),
+                ("19", "a proposed dam (19)"))):
             c = QCheckBox(label)
             c.toggled.connect(self._chain_check_toggled)
             self.chain_check[key] = c
-            row.addWidget(c)
+            row.addWidget(c, n // 3, n % 3)
         g.addLayout(row)
         row = QHBoxLayout()
         self.chain_btn = QPushButton("Run the steps in order")

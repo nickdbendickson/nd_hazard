@@ -1596,4 +1596,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)              # offscreen QGIS can crash on teardown; the result stands

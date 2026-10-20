@@ -318,23 +318,49 @@ def _classes():
             problems.append("'{}' is not a number for: {}.".format(t, what))
         return x
 
+    from .tokens import TOKENS
+    from .ui_widgets import Collapsible, DamCard
+
+    # 3.25.0, docs/gui-grammar.md: the row marks lead their row, coloured from tokens.py
+    ROW_MARKS = {"ok": ("\u2713", TOKENS["success"]), "empty": ("\u25cb", TOKENS["off"]),
+                 "flag": ("\u26a0", TOKENS["warn"]), "bad": ("\u2715", TOKENS["error"])}
+
+    def mark_label():
+        lab = W.QLabel("")
+        lab.setMinimumWidth(16)
+        return lab
+
+    def set_mark(lab, state, tip=""):
+        mark, colour = ROW_MARKS[state]
+        lab.setText(mark)
+        lab.setStyleSheet("color: {};".format(colour))
+        lab.setToolTip(tip)
+
+    def red_label():
+        lab = W.QLabel("")
+        lab.setWordWrap(True)
+        lab.setStyleSheet("color: {};".format(TOKENS["error"]))
+        lab.setVisible(False)
+        return lab
+
+    def muted_label():
+        lab = W.QLabel("")
+        lab.setWordWrap(True)
+        lab.setStyleSheet("color: {};".format(TOKENS["muted"]))
+        return lab
+
     class Page(W.QWizardPage):
+        problems = None              # the page's red line (docs/gui-grammar.md: no message box)
+
         def answers(self):
             return self.wizard().answers
 
         def show_problems(self, errors):
-            _message("warning", "Please fix:\n\n- " + "\n- ".join(errors), parent=self)
-
-        def _scrolled_layout(self):
-            """Return a VBoxLayout for this page's content, wrapped in a QScrollArea."""
-            content = W.QWidget()
-            sa = W.QScrollArea()
-            sa.setWidgetResizable(True)
-            sa.setWidget(content)
-            page_lay = W.QVBoxLayout(self)
-            page_lay.setContentsMargins(0, 0, 0, 0)
-            page_lay.addWidget(sa)
-            return W.QVBoxLayout(content)
+            if self.problems is None:
+                _message("warning", "Please fix:\n\n- " + "\n- ".join(errors), parent=self)
+                return
+            self.problems.setText("\n".join("\u2715 " + e for e in errors))
+            self.problems.setVisible(bool(errors))
 
         def check(self, page):
             """Validate this page's answers; show the errors and return False if any."""
@@ -344,6 +370,8 @@ def _classes():
             if errors:
                 self.show_problems(errors)
                 return False
+            if self.problems is not None:
+                self.show_problems([])
             return True
 
     # -- 1. the dam ---------------------------------------------------------------------
@@ -352,9 +380,19 @@ def _classes():
             Page.__init__(self)
             self.setTitle("The dam")
             self.setSubTitle("Pick the layer and the dam in it; the fields are matched by name "
-                             "and you can correct any value.")
+                             "and you can correct any value. Required values first; the "
+                             "others improve the estimate.")
             self.layer_crs = ""
-            outer = self._scrolled_layout()
+            outer = W.QVBoxLayout(self)
+            # 3.25.0: the DamCard sums the dam up (title, source, amber warnings); the page's
+            # problems are a red line under it, seen without scrolling
+            self.card = DamCard()
+            for w in (self.card.chips_row, self.card.status_label, self.card.record_label,
+                      self.card.suggest_label):
+                w.setVisible(False)
+            outer.addWidget(self.card)
+            self.problems = red_label()
+            outer.addWidget(self.problems)
             form = W.QFormLayout()
             self.layer = W.QComboBox()
             self.feature = W.QComboBox()
@@ -368,26 +406,42 @@ def _classes():
             form.addRow("County", self.county)
             form.addRow("Dam (feature)", self.feature)
             outer.addLayout(form)
-            self.note = W.QLabel("")
-            self.note.setWordWrap(True)
+            self.note = muted_label()
             outer.addWidget(self.note)
+            # the values in two groups, Required and Improves the estimate, each row led by
+            # its mark (3.25.0; before: one 'Data' table in DAM_FIELDS order)
             grid = W.QGridLayout()
-            grid.addWidget(W.QLabel("<b>Data</b>"), 0, 0)
-            grid.addWidget(W.QLabel("<b>Layer field</b>"), 0, 1)
-            grid.addWidget(W.QLabel("<b>Value</b>"), 0, 2)
-            self.field_combo, self.value_edit = {}, {}
-            for i, (key, param, label, _kind, _req) in enumerate(wl.DAM_FIELDS):
-                combo, edit = W.QComboBox(), W.QLineEdit()
-                self.field_combo[key], self.value_edit[param] = combo, edit
-                grid.addWidget(W.QLabel(label), i + 1, 0)
-                grid.addWidget(combo, i + 1, 1)
-                grid.addWidget(edit, i + 1, 2)
-                combo.currentIndexChanged.connect(self.values_from_feature)
-            n = len(wl.DAM_FIELDS) + 1
-            self.point_edit = W.QLineEdit()
-            self.point_label = W.QLabel("Location (x, y)")
-            grid.addWidget(self.point_label, n, 0)
-            grid.addWidget(self.point_edit, n, 2)
+            grid.addWidget(W.QLabel("<b>Layer field</b>"), 0, 2)
+            grid.addWidget(W.QLabel("<b>Value</b>"), 0, 3)
+            grid.setColumnStretch(2, 1)
+            grid.setColumnStretch(3, 2)
+            self.field_combo, self.value_edit, self.mark = {}, {}, {}
+            row = 1
+            for title, required in (("Required", True), ("Improves the estimate", False)):
+                grid.addWidget(W.QLabel("<b>{}</b>".format(title)), row, 0, 1, 2)
+                row += 1
+                for key, param, label, _kind, req in wl.DAM_FIELDS:
+                    if bool(req) != required:
+                        continue
+                    combo, edit, mark = W.QComboBox(), W.QLineEdit(), mark_label()
+                    self.field_combo[key], self.value_edit[param] = combo, edit
+                    self.mark[param] = mark
+                    grid.addWidget(mark, row, 0)
+                    grid.addWidget(W.QLabel(label), row, 1)
+                    grid.addWidget(combo, row, 2)
+                    grid.addWidget(edit, row, 3)
+                    combo.currentIndexChanged.connect(self.values_from_feature)
+                    edit.textChanged.connect(self.refresh)
+                    row += 1
+                if required:                     # the location is required too
+                    self.point_edit = W.QLineEdit()
+                    self.point_label = W.QLabel("Location (x, y)")
+                    self.mark["point"] = mark_label()
+                    grid.addWidget(self.mark["point"], row, 0)
+                    grid.addWidget(self.point_label, row, 1)
+                    grid.addWidget(self.point_edit, row, 3)
+                    self.point_edit.textChanged.connect(self.refresh)
+                    row += 1
             outer.addLayout(grid)
             # 3.9.0: the Dams folder on this page (was on Terrain): the dam's dam.json fills the
             # empty values before this page's check
@@ -395,9 +449,9 @@ def _classes():
             box, self.folder = path_row(self, folder=True)
             form2.addRow("Dams folder", box)
             outer.addLayout(form2)
-            self.record_note = W.QLabel("")
-            self.record_note.setWordWrap(True)
+            self.record_note = muted_label()
             outer.addWidget(self.record_note)
+            outer.addStretch(1)
             self.layer.currentIndexChanged.connect(self.layer_changed)
             self.county.currentIndexChanged.connect(self.layer_changed)
             self.feature.currentIndexChanged.connect(self.values_from_feature)
@@ -442,6 +496,7 @@ def _classes():
                     self.point_edit.setText("")
                     self.value_edit["DAM_ID"].setText(did)
             self.values_from_record()
+            self.refresh()
 
         @_safe(what="reading the dam's dam.json")
         def values_from_record(self, *_):
@@ -543,10 +598,9 @@ def _classes():
                 p = geom.centroid().asPoint()
                 self.point_edit.setText(wl.point_text(p.x(), p.y()).replace(",", ", "))
 
-        @_safe(default=False, what="the dam page")
-        def validatePage(self):
-            a, problems = self.answers(), []
-            dam = {}
+        def read(self):
+            """(dam values, point, problems) from the boxes as they are."""
+            problems, dam = [], {}
             for _key, param, label, kind, _req in wl.DAM_FIELDS:
                 t = self.value_edit[param].text().strip()
                 if not t:
@@ -562,6 +616,51 @@ def _classes():
             pt = wl.parse_point(self.point_edit.text())
             if self.point_edit.text().strip() and pt is None:
                 problems.append("The location must be two numbers, x and y.")
+            return dam, pt, problems
+
+        @_safe(what="the dam page")
+        def refresh(self, *_):
+            """3.25.0: the row marks and the DamCard follow every edit."""
+            dam, pt, _problems = self.read()
+            for _key, param, _label, _kind, req in wl.DAM_FIELDS:
+                t = self.value_edit[param].text().strip()
+                if not t:
+                    set_mark(self.mark[param], "bad" if req else "empty",
+                             "Required" if req else "Optional: improves the estimate")
+                elif param not in dam:
+                    set_mark(self.mark[param], "bad", "Not a number")
+                else:
+                    set_mark(self.mark[param], "ok")
+            if pt is not None:
+                set_mark(self.mark["point"], "ok")
+            else:
+                set_mark(self.mark["point"], "bad", "Required: x, y of a point on the crest")
+            parts = [dam.get("DAM_NAME") or dam.get("DAM_ID") or ""]
+            if self.county.currentData():
+                parts.append(self.county.currentData())
+            if dam.get("HEIGHT_FT") is not None:
+                parts.append("{:g} ft".format(dam["HEIGHT_FT"]))
+            if dam.get("STORAGE_ACFT") is not None:
+                parts.append("{:,.0f} ac-ft".format(dam["STORAGE_ACFT"]))
+            title = " \u00b7 ".join(p for p in parts if p) if parts[0] else ""
+            sub = []
+            if dam.get("DAM_ID") and dam.get("DAM_NAME"):
+                sub.append("ID {}".format(dam["DAM_ID"]))
+            if self.layer.currentData() and self.layer.currentText():
+                sub.append(self.layer.currentText())
+            self.card.set_context(title, " \u00b7 ".join(sub))
+            try:
+                a = dict(self.answers())
+                a["dam"], a["point"] = dam, ((pt[0], pt[1], self.layer_crs) if pt else None)
+                _errors, warnings = wl.validate_page("dam", a)
+            except Exception:                                    # noqa
+                warnings = []
+            self.card.set_warnings(warnings)         # amber, not red: the run can still go
+
+        @_safe(default=False, what="the dam page")
+        def validatePage(self):
+            a = self.answers()
+            dam, pt, problems = self.read()
             if problems:
                 self.show_problems(problems)
                 return False
@@ -582,7 +681,8 @@ def _classes():
             self.setTitle("Terrain")
             self.setSubTitle("The LiDAR DEM (a GeoTIFF or a VRT mosaic loaded in QGIS), its "
                              "elevation units and the roughness.")
-            form = W.QFormLayout(self)
+            outer = W.QVBoxLayout(self)
+            form = W.QFormLayout()
             self.dem, self.z = W.QComboBox(), W.QComboBox()
             for zid in wl.Z_IDS:
                 self.z.addItem(wl.Z_LABELS[zid], zid)
@@ -614,12 +714,76 @@ def _classes():
             dl_row.addWidget(self.dem_res)
             dl_row.addStretch(1)
             form.addRow("DEM", self.dem)
+            # 3.25.0: the live coverage line: does the chosen DEM cover the dam point?
+            self.coverage = W.QLabel("")
+            self.coverage.setWordWrap(True)
+            form.addRow("", self.coverage)
             form.addRow("", dl)
             form.addRow("", self.dem_note)
             form.addRow("DEM elevation units", self.z)
-            form.addRow("NLCD land cover (optional)", self.nlcd)
-            form.addRow("or a Manning's n raster (optional)", self.manning)
-            form.addRow("Manning's n where there is no raster", self.n)
+            outer.addLayout(form)
+            # roughness: optional, folded; the header shows the values so nothing hides
+            rough = W.QWidget()
+            f2 = W.QFormLayout(rough)
+            f2.addRow("NLCD land cover (optional)", self.nlcd)
+            f2.addRow("or a Manning's n raster (optional)", self.manning)
+            f2.addRow("Manning's n where there is no raster", self.n)
+            self.advanced = Collapsible("Advanced", rough)
+            outer.addWidget(self.advanced)
+            self.problems = red_label()
+            outer.addWidget(self.problems)
+            outer.addStretch(1)
+            for sig in (self.nlcd.currentIndexChanged, self.manning.currentIndexChanged,
+                        self.n.valueChanged):
+                sig.connect(self.sync_advanced)
+            self.dem.currentIndexChanged.connect(self.show_coverage)
+
+        def sync_advanced(self, *_):
+            parts = ["Manning's n {:.3f}".format(self.n.value())]
+            if self.manning.currentData():
+                parts.append("n raster " + self.manning.currentText())
+            parts.append("NLCD " + self.nlcd.currentText() if self.nlcd.currentData()
+                         else "no land cover")
+            self.advanced.set_title("Advanced  \u00b7  " + " \u00b7 ".join(parts))
+
+        def dem_layer(self):
+            ref = str(self.dem.currentData() or "")
+            try:
+                lyr = _layer(ref)
+                if lyr is None and ref and os.path.isfile(ref.split("|")[0]):
+                    from qgis.core import QgsRasterLayer
+                    lyr = QgsRasterLayer(ref, os.path.basename(ref.split("|")[0]))
+                return lyr if lyr is not None and lyr.isValid() else None
+            except Exception:                                    # noqa
+                return None
+
+        @_safe(what="the DEM coverage check")
+        def show_coverage(self, *_):
+            """\u2713 the DEM covers the dam point / \u2715 it does not / \u25cb nothing to check yet."""
+            try:
+                pt = self.answers().get("point")
+            except Exception:                                    # noqa
+                pt = None
+            lyr = self.dem_layer()
+            if lyr is None or not pt:
+                state, text = "empty", ("Choose a DEM: its coverage of the dam is checked here."
+                                        if lyr is None else "No dam location to check against.")
+            else:
+                from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+                                       QgsPointXY, QgsProject)
+                p = QgsPointXY(pt[0], pt[1])
+                src = QgsCoordinateReferenceSystem(pt[2]) if len(pt) > 2 and pt[2] else lyr.crs()
+                if src.isValid() and src != lyr.crs():
+                    p = QgsCoordinateTransform(src, lyr.crs(), QgsProject.instance()).transform(p)
+                if lyr.extent().contains(p):
+                    state, text = "ok", "The DEM covers the dam point."
+                else:
+                    state, text = "bad", ("The DEM does not cover the dam point: download one for "
+                                          "this dam or choose another.")
+            mark, colour = ROW_MARKS[state]
+            self.coverage.setText("{} {}".format(mark, text))
+            self.coverage.setStyleSheet("color: {};".format(colour if state != "empty"
+                                                            else TOKENS["muted"]))
 
         @_safe(what="the terrain page")
         def initializePage(self):
@@ -632,6 +796,8 @@ def _classes():
             fill_layers(self.manning, "raster", True, a.get("manning_id", ""))
             self.z.setCurrentIndex(max(self.z.findData(a.get("z_units", "auto")), 0))
             self.n.setValue(a.get("manning_n", 0.06))
+            self.sync_advanced()
+            self.show_coverage()
 
         @_safe(what="the DEM download")
         def download_dem(self, *_):
@@ -694,7 +860,7 @@ def _classes():
             Page.__init__(self)
             self.setTitle("Scenario")
             self.setSubTitle("Sunny-day failure, or a flood (PMF) with and without the breach.")
-            outer = self._scrolled_layout()
+            outer = W.QVBoxLayout(self)
             form = W.QFormLayout()
             self.method, self.scenario = W.QComboBox(), W.QComboBox()
             for m in wl.METHOD_IDS:
@@ -705,9 +871,7 @@ def _classes():
             form.addRow("Scenario", self.scenario)
             outer.addLayout(form)
             # 3.20.0: what ND Dam Breach Screening ran for this dam, and where that came from
-            self.handoff = W.QLabel("")
-            self.handoff.setWordWrap(True)
-            self.handoff.setStyleSheet("color: gray;")
+            self.handoff = muted_label()
             outer.addWidget(self.handoff)
             self.flood = W.QGroupBox("Flood scenario inputs")
             f2 = W.QFormLayout(self.flood)
@@ -723,6 +887,9 @@ def _classes():
             f2.addRow("The dam fails", self.trigger)
             f2.addRow("Failure time (hr) or elevation (ft)", self.trigger_value)
             outer.addWidget(self.flood)
+            self.problems = red_label()
+            outer.addWidget(self.problems)
+            outer.addStretch(1)
             self.scenario.currentIndexChanged.connect(self.toggle)
 
         @_safe(what="the scenario page")
@@ -770,7 +937,7 @@ def _classes():
             self.setTitle("Models and cell size")
             self.setSubTitle("A finer cell is more accurate and much slower: LISFLOOD-FP's "
                              "run time grows about with the cube of 1/cell size.")
-            outer = self._scrolled_layout()
+            outer = W.QVBoxLayout(self)
             form = W.QFormLayout()
             self.tier = W.QComboBox()
             for t in wl.TIER_IDS:
@@ -784,15 +951,16 @@ def _classes():
             form.addRow("Models", self.tier)
             form.addRow("Cell size (m; 10 m = 32.8 ft)", self.cell)
             outer.addLayout(form)
-            self.handoff = W.QLabel("")                      # 3.20.0
-            self.handoff.setWordWrap(True)
-            self.handoff.setStyleSheet("color: gray;")
+            self.handoff = muted_label()                     # 3.20.0
             outer.addWidget(self.handoff)
             self.button = W.QPushButton("Estimate the run time")
             self.result = W.QLabel("")
             self.result.setWordWrap(True)
             outer.addWidget(self.button)
             outer.addWidget(self.result)
+            self.problems = red_label()
+            outer.addWidget(self.problems)
+            outer.addStretch(1)
             self.button.clicked.connect(self.estimate)
             self.cell.valueChanged.connect(self.rescale)
             self.tier.currentIndexChanged.connect(self.rescale)
@@ -847,7 +1015,9 @@ def _classes():
             Page.__init__(self)
             self.setTitle("Review")
             self.setSubTitle("Check the values, then open the tool.")
-            lay = self._scrolled_layout()
+            lay = W.QVBoxLayout(self)
+            self.problems = red_label()
+            lay.addWidget(self.problems)
             self.text = W.QPlainTextEdit()
             self.text.setReadOnly(True)
             lay.addWidget(self.text)
@@ -859,8 +1029,7 @@ def _classes():
             errors, warnings = wl.validate_all(a, models=_find_models())
             est = wiz.session.cache.lines(a)
             text = wl.review_text(a, est, warnings)
-            if errors:
-                text = "PROBLEMS TO FIX (go Back):\n  - " + "\n  - ".join(errors) + "\n\n" + text
+            self.show_problems(["Go Back and fix: " + e for e in errors])
             self.text.setPlainText(text)
             try:
                 finish = getattr(W.QWizard, "FinishButton", None) or \
@@ -880,16 +1049,26 @@ def _classes():
     class Wizard(W.QWizard):
         def __init__(self, parent=None, answers=None):
             W.QWizard.__init__(self, parent)
-            self.setWindowTitle("{}: model one dam".format(TITLE))
+            self.setWindowTitle("{} — Model one dam".format(TITLE))
             # 3.9.0: `answers` from the Runner window (wizard_logic.initial_answers)
             self.answers = answers if answers is not None else wl.default_answers()
             self.session = EstimateSession()
             for page in (DamPage(), TerrainPage(), ScenarioPage(), ModelPage(), ReviewPage()):
                 self.addPage(page)
             try:
-                self.resize(760, 640)
-            except Exception:
+                from .ui_widgets import ellipsize
+                ellipsize(self)                   # 3.23.0: one '…' on every opener button
+            except Exception:                                    # noqa
                 pass
+            try:
+                from .ui_fit import fit_window, wrap_wizard
+                wrap_wizard(self)                 # 3.25.0: every page scrolls when it must
+                fit_window(self, (800, 780))      # the dam page's two groups
+            except Exception:                                    # noqa
+                try:
+                    self.resize(760, 640)
+                except Exception:
+                    pass
 
     _CLASSES.update({"Wizard": Wizard, "DamPage": DamPage, "TerrainPage": TerrainPage,
                      "ScenarioPage": ScenarioPage, "ModelPage": ModelPage,

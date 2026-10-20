@@ -2,7 +2,8 @@
 """The suite settings grid - one table of every engineer-chosen value, HEC-RAS style.
 
 Byte-identical in ND Dam Hazard Classification Helper, ND Dam Breach Runner and ND Dam Breach
-Screening (written by suite/suite_shared/make_styles.py; edit it there). Each plugin's popup
+Screening. Canonical copy: shared/ui/suite_settings.py;
+edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). Each plugin's popup
 shows it on its Settings tab: one sub-tab per family of parameters, rows = the parameters with
 their Value, Unit and Starting value, a Find box, "show only YOUR values" (the engineer-chosen
 thresholds), "show only changed", the description of the selected row, and Reset / Load / Save.
@@ -22,11 +23,13 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .damsuite import settings as DS
+from .tokens import TOKENS
 
 COLUMNS = ("#", "Parameter", "Value", "Unit", "Starting value")
 C_NUM, C_LABEL, C_VALUE, C_UNIT, C_DEFAULT = range(5)
 FILE_FILTER = "Settings workbook (*.xlsx);;Settings table (*.csv)"
 YOUR_MARK = "  [YOUR value]"
+MAX_VALUE_WIDTH = 260          # px; the full choice shows when the drop-down opens
 
 
 def _qt(name, member):
@@ -54,6 +57,29 @@ CHECKED, UNCHECKED = _qt("CheckState", "Checked"), _qt("CheckState", "Unchecked"
 FLAGS_FIXED = _flags("ItemIsSelectable", "ItemIsEnabled")
 FLAGS_EDIT = _flags("ItemIsSelectable", "ItemIsEnabled", "ItemIsEditable")
 FLAGS_CHECK = _flags("ItemIsSelectable", "ItemIsEnabled", "ItemIsUserCheckable")
+
+
+def tab_title(text):
+    """A tab title as Qt must be given it: a lone '&' marks a keyboard shortcut and is drawn as
+    an underline ("Review & QA" showed as "Review _QA"), so it is doubled."""
+    return str(text).replace("&&", "&").replace("&", "&&")
+
+
+def fit_label_column(table):
+    """The Parameter column takes the width the other columns leave (its long labels elide, the
+    full text is in the tooltip), so Value, Unit and Starting value are always in view; sized to
+    its contents, one long label pushed them off the right edge."""
+    header = table.horizontalHeader()
+    for c in (C_VALUE, C_UNIT, C_DEFAULT):          # a long drop-down list stays a sane width
+        if table.columnWidth(c) > MAX_VALUE_WIDTH:
+            table.setColumnWidth(c, MAX_VALUE_WIDTH)
+    mode = getattr(getattr(header, "ResizeMode", header), "Stretch", None)
+    if mode is None:
+        return
+    header.setSectionResizeMode(C_LABEL, mode)
+    elide = _qt("TextElideMode", "ElideRight")
+    if elide is not None:
+        table.setTextElideMode(elide)
 
 
 def _set_flags(item, flags):
@@ -122,6 +148,8 @@ class SettingsGrid(QWidget):
         bar.addWidget(self.find_edit)
         self.only_your = QCheckBox("show only YOUR values")
         self.only_your.setToolTip("The thresholds the engineer chooses - the suite has no standard for them.")
+        # simplification change 2: open on the engineer's own values, not every parameter
+        self.only_your.setChecked(True)
         self.only_your.toggled.connect(lambda _c: self.apply_filter())
         self.only_changed = QCheckBox("show only changed")
         self.only_changed.toggled.connect(lambda _c: self.apply_filter())
@@ -133,7 +161,7 @@ class SettingsGrid(QWidget):
         lay.addLayout(bar)
         self.tabs = QTabWidget()
         for title, widget in self.extra_tabs:
-            self.tabs.addTab(widget, title)
+            self.tabs.addTab(widget, tab_title(title))
         for g in self.groups:
             t = QTableWidget()
             t.setColumnCount(len(COLUMNS))
@@ -147,27 +175,42 @@ class SettingsGrid(QWidget):
             t.currentCellChanged.connect(lambda r, c, pr, pc, tbl=t: self._show_help(tbl, r))
             t.cellClicked.connect(lambda r, c, tbl=t: self._show_help(tbl, r))
             self.tables[g] = t
-            self.tabs.addTab(t, g)
+            self.tabs.addTab(t, tab_title(g))
         lay.addWidget(self.tabs, 1)
+        # the legend explains the table's notation; the units line under it is a quieter footnote
         legend = QLabel("bold = changed from the starting value.  [YOUR value] = an engineer-chosen threshold, "
-                        "not a standard.  Cell sizes stay in metres (the DEM's unit); every other distance is "
-                        "in feet, areas in acres, volumes in acre-feet.")
+                        "not a standard.")
         legend.setWordWrap(True)
         lay.addWidget(legend)
+        units = QLabel("Cell sizes stay in metres (the DEM's unit); every other distance is in feet, areas in "
+                       "acres, volumes in acre-feet.")
+        units.setWordWrap(True)
+        units.setStyleSheet("color: {};".format(TOKENS["muted"]))
+        lay.addWidget(units)
+        self.legend_label, self.units_label = legend, units
         self.help_label = QLabel("")
         self.help_label.setWordWrap(True)
-        self.help_label.setMinimumHeight(48)
+        self.help_label.setVisible(False)
         lay.addWidget(self.help_label)
+        # a rejected value is reported here (no message box per entry)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        try:
+            self.status_label.setStyleSheet("color: {};".format(TOKENS["error"]))
+        except Exception:                                        # noqa
+            pass
+        self.status_label.setVisible(False)
+        lay.addWidget(self.status_label)
         row = QHBoxLayout()
         self.reset_tab_btn = QPushButton("Reset this tab")
         self.reset_tab_btn.clicked.connect(lambda _c=False: self.reset_tab())
         self.reset_all_btn = QPushButton("Reset all")
         self.reset_all_btn.clicked.connect(lambda _c=False: self.reset_all())
-        self.load_btn = QPushButton("Load...")
+        self.load_btn = QPushButton("Load\u2026")
         self.load_btn.clicked.connect(lambda _c=False: self.load())
         self.save_btn = QPushButton("Save")
         self.save_btn.clicked.connect(lambda _c=False: self.save())
-        self.save_as_btn = QPushButton("Save as...")
+        self.save_as_btn = QPushButton("Save as\u2026")
         self.save_as_btn.clicked.connect(lambda _c=False: self.save_as())
         for b in (self.reset_tab_btn, self.reset_all_btn, self.load_btn, self.save_btn, self.save_as_btn):
             row.addWidget(b)
@@ -191,9 +234,9 @@ class SettingsGrid(QWidget):
                     changed = typed is not None and not DS._same(typed, s.default, s)
                     num = QTableWidgetItem(str(i + 1))
                     _set_flags(num, FLAGS_FIXED)
-                    label = QTableWidgetItem(s.label + (YOUR_MARK if s.your else "") +
-                                             ("" if not s.tool_title else ""))
-                    label.setToolTip("{} - {} ({})".format(s.tool_title or s.tool, s.key, s.help or "").strip())
+                    label = QTableWidgetItem(s.label + (YOUR_MARK if s.your else ""))
+                    label.setToolTip("{}\n{} - {} ({})".format(s.label, s.tool_title or s.tool, s.key,
+                                                             s.help or "").strip())
                     _set_flags(label, FLAGS_FIXED)
                     unit = QTableWidgetItem(s.unit)
                     _set_flags(unit, FLAGS_FIXED)
@@ -234,6 +277,7 @@ class SettingsGrid(QWidget):
                 t.blockSignals(False)
                 try:
                     t.resizeColumnsToContents()
+                    fit_label_column(t)
                 except Exception:                                # noqa
                     pass
         finally:
@@ -275,6 +319,12 @@ class SettingsGrid(QWidget):
             return
         self.set_value(sid, index, from_widget=True)
 
+    def _status(self, text):
+        lbl = getattr(self, "status_label", None)
+        if lbl is not None:
+            lbl.setText(text or "")
+            lbl.setVisible(bool(text))        # an empty line leaves no gap under the legend
+
     def set_value(self, sid, raw, from_widget=False):
         """Store a value (text as typed, an enum index, or a bool); empty = back to the default.
         Returns the problem text ('' when accepted)."""
@@ -288,7 +338,8 @@ class SettingsGrid(QWidget):
             typed, problem = DS.coerce(raw, s)
             if problem:
                 if from_widget:
-                    QMessageBox.information(self, "Settings", "{}: {}".format(s.label, problem))
+                    self._status("Not accepted - {}: {} (the previous value is kept)".format(
+                        s.label, problem))
                 self._refresh_row(s)
                 return problem
             if s.kind == "enum":
@@ -296,6 +347,8 @@ class SettingsGrid(QWidget):
             else:
                 self.settings.set(*s.id, value=typed)
         self._refresh_row(s)
+        if from_widget:
+            self._status("")
         self._update_file_label()
         if self.on_change:
             self.on_change(self.settings)
@@ -361,6 +414,12 @@ class SettingsGrid(QWidget):
                 t.setRowHidden(i, hide)
             except Exception:                                    # noqa
                 pass
+            try:                 # a combo of a hidden row is not hidden with it before the
+                w = t.cellWidget(i, C_VALUE)      # table is first shown: it drew over row 1
+                if w is not None:
+                    w.setVisible(not hide)
+            except Exception:                                    # noqa
+                pass
 
     def visible_ids(self):
         """[setting id] of the rows the filter shows (for tests)."""
@@ -379,8 +438,10 @@ class SettingsGrid(QWidget):
                 self.help_label.setText("Row {} - {} - {}: {}{}".format(
                     i + 1, s.tool_title or s.tool, s.key, s.help or s.label,
                     "" if not s.your else "  YOUR value: the starting value is a working guess, not a standard."))
+                self.help_label.setVisible(True)
                 return
         self.help_label.setText("")
+        self.help_label.setVisible(False)
 
     # ------------------------------------------------------------------- reset --
     def current_group(self):

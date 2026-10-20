@@ -11,16 +11,30 @@ window, which is where the per-layer rows, the USB copy and the service check li
 import datetime
 import os
 
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .packsource import MODES_3DHP
 from .qtcompat import (BB_CANCEL, BB_SAVE, HEADER_STRETCH, HEADER_TO_CONTENTS, ITEM_IS_EDITABLE,
                        NO_EDIT_TRIGGERS, NO_SELECTION)
 from .sources import SOURCE_INFO
+from .ui_fit import fit_window, scroll_page
+
+
+def _window_title():
+    """'ND Data Updater 1.7.0': the suite's '<plugin name> <version>' (docs/gui-grammar.md)."""
+    import re
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.txt"),
+                  encoding="utf-8") as f:
+            m = re.search(r"^version=(.+)$", f.read(), re.M)
+        return "ND Data Updater {}".format(m.group(1).strip()) if m else "ND Data Updater"
+    except Exception:                                            # noqa
+        return "ND Data Updater"
 
 NSI_MODE_LABELS = (
     ("merged", "2026 and 2022 merged (2026 wins where both have a structure)"),
@@ -62,9 +76,14 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.plugin = plugin
-        self.setWindowTitle("ND Data Updater")
+        self.setWindowTitle(_window_title())
         self.setMinimumWidth(640)
-        layout = QVBoxLayout(self)
+        # 1.7.0: the form scrolls inside the window (it was 1,044 px tall, taller than a 1080p
+        # screen less the taskbar, so Save and Cancel were off the bottom); the buttons stay put
+        outer = QVBoxLayout(self)
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # --- where and when
         general = QGroupBox("Local data")
@@ -226,12 +245,17 @@ class SettingsDialog(QDialog):
         status_layout.addLayout(run_row)
         layout.addWidget(status_box)
 
+        scroll_page(body)
+        outer.addWidget(body)
         buttons = QDialogButtonBox(BB_SAVE | BB_CANCEL)
+        for b in buttons.buttons():                  # no icons on action buttons (docs/gui-grammar.md)
+            b.setIcon(QIcon())
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        outer.addWidget(buttons)
 
         self.refresh_status()
+        fit_window(self, (720, 640))
 
     def _browse(self):
         """Choose the folder - and hand it to the three dam plugins in the same breath."""
