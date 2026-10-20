@@ -17,6 +17,7 @@ from qgis.core import QgsProject, QgsRasterLayer
 from .compat import MSG_INFO, MSG_WARNING, MSG_CRITICAL, WINDOW_MODAL
 from .helpers import log_message, CancelledByUser, plugin_group, dam_display_name
 from .ui_check_panel import CheckPanel
+from .tokens import TOKENS
 
 from .constants import (
     PLUGIN_NAME, PLUGIN_VERSION, OUTPUT_FOLDER_NAME,
@@ -39,11 +40,11 @@ from . import facility_review_tab as FT
 from .settings import save_state, load_state, widget_value, set_widget_value
 
 def _scroll_tab(w):
-    """Wrap a tab widget in a QScrollArea so tall pages are reachable on small screens."""
-    sa = QScrollArea()
-    sa.setWidgetResizable(True)
-    sa.setWidget(w)
-    return sa
+    """Wrap a tab page in a scroll area so tall pages are reachable on small screens. 2.33.0:
+    ui_fit's FitScroll, whose minimum size stays small, so the window can shrink to a 1080p
+    screen whatever the widest page holds (the plain QScrollArea asked for the page's width)."""
+    from .ui_fit import _scroll
+    return _scroll(w)
 
 
 def _escape_tab_mnemonics(widget):
@@ -121,7 +122,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     # ------------------------------------------------------------------ UI --
     def setup_ui(self):
-        self.setWindowTitle("{} v{}".format(PLUGIN_NAME, PLUGIN_VERSION))
+        self.setWindowTitle("{} {}".format(PLUGIN_NAME, PLUGIN_VERSION))
         self.setMinimumSize(900, 700)
         try:
             from qgis.PyQt.QtWidgets import QApplication
@@ -289,13 +290,19 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         main_layout.addWidget(self.tab_widget)
 
         self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("padding: 8px; background-color: #f5f5f5;")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("padding: 8px; background-color: {};".format(TOKENS["subtle"]))
         main_layout.addWidget(self.status_label)
 
         self.log_text = QTextEdit()
         self.log_text.setMaximumHeight(150)
         self.log_text.setReadOnly(True)
         main_layout.addWidget(self.log_text)
+        try:
+            from .ui_widgets import ellipsize
+            ellipsize(self)                       # 2.33.0: one '…' on every opener button
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
 
     def _on_edit_sources(self, *args):
         from .constants import write_sources_file, SOURCE_OVERRIDES
@@ -674,10 +681,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     # ------------------------------------------------------------ STATUS/LOG
     def _update_status(self, message, is_success=True):
-        color = "#2e7d32" if is_success else "#c62828"
+        color = TOKENS["success"] if is_success else TOKENS["error"]
         self.status_label.setText(message)
         self.status_label.setStyleSheet(
-            "padding: 8px; background-color: #f5f5f5; color: {};".format(color))
+            "padding: 8px; background-color: {}; color: {};".format(TOKENS["subtle"], color))
 
     def _log(self, message):
         self.log_text.append(str(message))
@@ -917,9 +924,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     @staticmethod
     def _checks_html(results):
-        colors = {"ERROR": "#c62828", "WARNING": "#e65100", "OK": "#2e7d32"}
+        colors = {"ERROR": TOKENS["error"], "WARNING": TOKENS["warn"], "OK": TOKENS["success"]}
         return "<br>".join("<span style='color:{}'><b>{}</b></span> {}".format(
-            colors.get(lvl, "#000"), lvl, html.escape(t)) for lvl, t in results)
+            colors.get(lvl, TOKENS["muted"]), lvl, html.escape(t)) for lvl, t in results)
 
     def _classify_simple(self, *args):
         """Find the Runner rasters if the boxes are empty, then check and classify."""

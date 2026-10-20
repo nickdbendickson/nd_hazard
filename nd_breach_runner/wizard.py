@@ -880,12 +880,17 @@ def _classes():
     class Wizard(W.QWizard):
         def __init__(self, parent=None, answers=None):
             W.QWizard.__init__(self, parent)
-            self.setWindowTitle("{}: model one dam".format(TITLE))
+            self.setWindowTitle("{} — Model one dam".format(TITLE))
             # 3.9.0: `answers` from the Runner window (wizard_logic.initial_answers)
             self.answers = answers if answers is not None else wl.default_answers()
             self.session = EstimateSession()
             for page in (DamPage(), TerrainPage(), ScenarioPage(), ModelPage(), ReviewPage()):
                 self.addPage(page)
+            try:
+                from .ui_widgets import ellipsize
+                ellipsize(self)                   # 3.23.0: one '…' on every opener button
+            except Exception:                                    # noqa
+                pass
             try:
                 self.resize(760, 640)
             except Exception:

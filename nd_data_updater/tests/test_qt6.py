@@ -49,7 +49,7 @@ def test_metadata_declares_qt6():
     g = cp["general"]
     assert g.get("supportsQt6", "").strip() == "True"
     assert g.get("qgisMaximumVersion", "").strip() == "4.99"
-    assert g["version"].strip() == "1.6.0"
+    assert g["version"].strip() == "1.7.0"
 
 
 @test

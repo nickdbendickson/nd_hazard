@@ -25,6 +25,13 @@ def suite_messages(versions=None):
     return vs.check("ndscreen", versions=versions)
 
 
+def _plugin_icon():
+    """The plugin's icon.svg for its menu entry (every ND dam plugin has one)."""
+    import os
+    from qgis.PyQt.QtGui import QIcon
+    return QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg"))
+
+
 class NDDamScreeningPlugin:
     def __init__(self, iface):
         self.iface = iface
@@ -78,7 +85,7 @@ class NDDamScreeningPlugin:
                 from qgis.PyQt.QtGui import QAction
             except ImportError:               # Qt5 (QGIS 3.x): QtWidgets
                 from qgis.PyQt.QtWidgets import QAction
-            self.action = QAction(MENU_NAME, self.iface.mainWindow())
+            self.action = QAction(_plugin_icon(), MENU_NAME, self.iface.mainWindow())
             self.action.setObjectName("NDDamScreeningAction")
             self.action.triggered.connect(self.run_plugin)
             self.iface.addPluginToMenu(MENU_NAME, self.action)

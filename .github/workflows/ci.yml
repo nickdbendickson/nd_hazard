@@ -59,4 +59,7 @@ jobs:
             echo "-- $t --"
             python "$t" || fail=1
           done
+          # opens every window offscreen and checks it against docs/gui-grammar.md
+          echo "== gui_lint =="
+          python tools/gui_lint.py || fail=1
           exit $fail
