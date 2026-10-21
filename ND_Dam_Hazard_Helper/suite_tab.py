@@ -25,6 +25,7 @@ from qgis.PyQt.QtWidgets import (
 
 from .helpers import log_message
 from .compat import MSG_WARNING
+from .tool_dialog import exec_tool_dialog
 
 # button attribute -> (label, Processing algorithm, tooltip)
 TOOLS = (
@@ -188,7 +189,7 @@ class SuiteTabMixin(object):
         params = self._suite_defaults(alg)
         try:
             import processing
-            processing.execAlgorithmDialog(aid, params)
+            exec_tool_dialog(processing, aid, params, parent=self)
             self._log(">>> Opened {} ({})".format(aid, ", ".join(
                 "{}={}".format(k, v) for k, v in sorted(params.items())) or "no values filled"))
             return True

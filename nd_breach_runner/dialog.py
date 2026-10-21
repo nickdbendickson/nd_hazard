@@ -46,6 +46,7 @@ from qgis.PyQt.QtWidgets import (
 
 from . import popup_logic as pl
 from .tokens import TOKENS
+from .tool_dialog import exec_tool_dialog
 from .ui_widgets import Collapsible, EngineChip, InfoBanner, StageStrip
 
 try:                                    # Qt5 and Qt6 (QGIS 4) spell the answer differently
@@ -600,7 +601,7 @@ class NDBreachRunnerDialog(QDialog):
             pass
         s = self.settings()
         resolution_idx = self.dem_resolution.currentIndex()
-        result = processing.execAlgorithmDialog("nddam:downloaddem", {
+        result = exec_tool_dialog(processing, "nddam:downloaddem", {
             "SOURCE": self.dem_source.currentIndex(),
             "SCOPE": self.dem_scope.currentIndex(),
             "DAM_POINT": self.dem_point.text().strip(),
@@ -615,7 +616,7 @@ class NDBreachRunnerDialog(QDialog):
             # ignore them)
             "DAMS_FOLDER": s["dams_folder"] if folder == self._auto_out and self._auto_out else "",
             "DAM_ID": s["dam_id"],
-        })
+        }, parent=self)
         # QGIS's execAlgorithmDialog returns the results of the last run (empty when cancelled)
         if isinstance(result, dict) and result.get("VRT"):
             cell_m = 10.0 if resolution_idx == 0 else 1.0
@@ -1281,7 +1282,7 @@ class NDBreachRunnerDialog(QDialog):
                 import processing
             except ImportError:
                 from qgis import processing
-            processing.execAlgorithmDialog(aid, params)
+            exec_tool_dialog(processing, aid, params, parent=self)
         except Exception as e:                                   # noqa
             self._log("!!! {} could not be opened: {}".format(aid, e))
             QMessageBox.information(

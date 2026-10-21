@@ -32,6 +32,7 @@ from .core import resume as rs              # 0.28.0: what an interrupted run go
 from .core import runplan as rp             # 0.28.0: the cell size and the time estimate
 from .damsuite import settings as DS
 from .tokens import TOKENS
+from .tool_dialog import exec_tool_dialog
 from .ui_widgets import Collapsible, InfoBanner, StageStrip
 from .damsuite import priority as PR         # 0.28.0: the statewide review list
 
@@ -1173,7 +1174,7 @@ class NDDamScreeningDialog(QDialog):
                 dam_id, os.path.join(dam_folder, "data")))
         if folder:
             params["OUT"] = folder
-        processing.execAlgorithmDialog("nddam:downloaddem", params)
+        exec_tool_dialog(processing, "nddam:downloaddem", params, parent=self)
         return params
 
     def _build_settings_tab(self):
@@ -2088,7 +2089,7 @@ class NDDamScreeningDialog(QDialog):
                 import processing
             except ImportError:
                 from qgis import processing
-            processing.execAlgorithmDialog(aid, params)
+            exec_tool_dialog(processing, aid, params, parent=self)
         except Exception as e:                                   # noqa
             self._log("!!! {} could not be opened: {}".format(aid, e))
             QMessageBox.information(
