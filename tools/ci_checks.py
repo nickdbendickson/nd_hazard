@@ -113,10 +113,106 @@ def check_compile(problems):
     print("  compiled {} .py files".format(n))
 
 
+# ---- Qt6 enum hygiene -------------------------------------------------------
+# PyQt6 / QGIS 4.x removed unscoped enum members from the class namespace, and QgsField no
+# longer accepts a bare int / QVariant type. These exact unscoped spellings raise
+# AttributeError / TypeError on Qt6 (the sibling DamSafety suite hit this in #131 and #134).
+# The scoped form (Class.EnumType.Member) and compat constants (FT_*, WKB_*, ...) do NOT match,
+# so ported code passes. compat modules, the qgis_mock test doubles and this gate's own files
+# are skipped; an intentional Qt5-fallback line can carry "# qt6-ok".
+_QT6_FORBIDDEN = [
+    ("QImage unscoped format (use QImage.Format.Format_*)",
+     re.compile(r"\bQImage\.Format_[A-Za-z0-9_]+")),
+    ("QIODevice unscoped open mode (use QIODevice.OpenModeFlag.*)",
+     re.compile(r"\bQIODevice\.(?:ReadOnly|WriteOnly|ReadWrite|Append|Truncate|Text|Unbuffered"
+                r"|NewOnly|ExistingOnly)\b")),
+    ("QPainter unscoped render hint (use QPainter.RenderHint.*)",
+     re.compile(r"\bQPainter\.(?:Antialiasing|TextAntialiasing|SmoothPixmapTransform"
+                r"|HighQualityAntialiasing|LosslessImageRendering|NonCosmeticDefaultPen"
+                r"|VerticalSubpixelPositioning)\b")),
+    ("QPainter unscoped composition mode (use QPainter.CompositionMode.*)",
+     re.compile(r"\bQPainter\.CompositionMode_[A-Za-z0-9_]+")),
+    ("QNetworkRequest unscoped attribute (use QNetworkRequest.Attribute.*)",
+     re.compile(r"\bQNetworkRequest\.(?!Attribute\b)[A-Z][A-Za-z0-9_]*Attribute\b")),
+    ("QNetworkReply unscoped error (use QNetworkReply.NetworkError.*)",
+     re.compile(r"\bQNetworkReply\.(?!NetworkError\b)[A-Za-z]+Error\b")),
+    ("Qt unscoped item-data role (use Qt.ItemDataRole.*)",
+     re.compile(r"\bQt\.(?:UserRole|DisplayRole|EditRole|DecorationRole|ToolTipRole"
+                r"|CheckStateRole|BackgroundRole|ForegroundRole|FontRole|TextAlignmentRole"
+                r"|SizeHintRole|WhatsThisRole|StatusTipRole|InitialSortOrderRole)\b")),
+    ("QgsField with a bare-int type (use a QMetaType.Type or compat FT_*)",
+     re.compile(r"\bQgsField\(\s*[^,()]+,\s*\d+\s*[),]")),
+    ("QgsField with a QVariant type (use a QMetaType.Type or compat FT_*)",
+     re.compile(r"\bQgsField\([^,()]+,\s*QVariant\.")),
+]
+_QT6_SKIP_FILES = {"compat.py", "qtcompat.py", "ci_checks.py", "test_ci_checks.py"}
+
+
+def _mask_strings_comments(src):
+    """src with every string/comment token blanked to spaces (line structure preserved) so the
+    regexes see only code, not prose in a docstring or comment. On any tokenize error the source
+    is returned unchanged."""
+    import io
+    import tokenize
+    lines = src.split("\n")
+    fstring = tuple(getattr(tokenize, n) for n in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
+                    if hasattr(tokenize, n))
+    blank_types = (tokenize.STRING, tokenize.COMMENT) + fstring
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except Exception:
+        return src
+    for t in toks:
+        if t.type not in blank_types:
+            continue
+        (sr, sc), (er, ec) = t.start, t.end
+        sr, er = sr - 1, er - 1
+        if sr == er:
+            lines[sr] = lines[sr][:sc] + " " * (ec - sc) + lines[sr][ec:]
+        else:
+            lines[sr] = lines[sr][:sc] + " " * (len(lines[sr]) - sc)
+            for r in range(sr + 1, er):
+                lines[r] = " " * len(lines[r])
+            lines[er] = " " * ec + lines[er][ec:]
+    return "\n".join(lines)
+
+
+def scan_qt6_enums(root):
+    """[(rel_path, line_no, label, text)] of unscoped Qt6-broken enum spellings under root.
+    Strings/comments are masked and a line guarded by hasattr(...) or '# qt6-ok' is skipped."""
+    hits = []
+    for base, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "qgis_mock")]
+        for fn in files:
+            if not fn.endswith(".py") or fn in _QT6_SKIP_FILES:
+                continue
+            path = os.path.join(base, fn)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    src = f.read()
+            except Exception:
+                continue
+            raw = src.split("\n")
+            code = _mask_strings_comments(src).split("\n")
+            for i, line in enumerate(code, 1):
+                if "hasattr(" in raw[i - 1] or "# qt6-ok" in raw[i - 1]:
+                    continue
+                for label, rx in _QT6_FORBIDDEN:
+                    if rx.search(line):
+                        hits.append((os.path.relpath(path, root), i, label, raw[i - 1].strip()))
+    return hits
+
+
+def check_qt6_enums(problems):
+    for rel, i, label, text in scan_qt6_enums(ROOT):
+        _fail(problems, "qt6 enums: {}:{}: {} -> {}".format(rel, i, label, text))
+
+
 def main():
     problems = []
     for name, fn in (("damsuite pin", check_damsuite_pin), ("versions", check_versions),
                      ("shared/ui drift", check_ui_drift), ("window colours", check_window_colours),
+                     ("qt6 enums", check_qt6_enums),
                      ("compile", check_compile)):
         print("[ci] " + name)
         try:
