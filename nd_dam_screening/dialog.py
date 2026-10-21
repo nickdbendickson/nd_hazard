@@ -2730,6 +2730,9 @@ class NDDamScreeningDialog(QDialog):
         stayed empty). Each row keeps its run folder (Qt.UserRole of the Dam ID cell)."""
         try:
             from qgis.PyQt.QtCore import Qt
+            user_role = getattr(Qt, "UserRole", None)        # Qt6 scopes the enum
+            if user_role is None:
+                user_role = Qt.ItemDataRole.UserRole
             from qgis.core import QgsVectorLayer
             runs = [("", work)] + list(wf.one_dam_runs(work))
             rows = []
@@ -2775,7 +2778,7 @@ class NDDamScreeningDialog(QDialog):
                 for c, v in enumerate(r[:len(DAM_COLUMNS)]):
                     item = QTableWidgetItem(v)
                     if c == 0:
-                        item.setData(Qt.UserRole, r[6])
+                        item.setData(user_role, r[6])
                         item.setToolTip("one-dam run {}".format(r[7]) if r[7] else "the work folder's screening")
                     if c == 5 and v:                             # 0.28.0: the flags, in red
                         item.setToolTip(r[8])

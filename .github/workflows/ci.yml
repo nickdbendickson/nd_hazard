@@ -25,8 +25,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Fast checks (damsuite pin parity, versions, compile)
+      - name: Fast checks (damsuite pin parity, versions, qt6 enums, compile)
         run: python3 tools/ci_checks.py
+      - name: Fast-gate self-tests (qt6 enum lint)
+        run: python3 tools/test_ci_checks.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 ND_Dam_Hazard_Helper/tests/test_fingerprint_vrt.py
 
