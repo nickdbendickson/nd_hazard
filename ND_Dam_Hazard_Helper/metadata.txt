@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.34.0
+version=2.34.1
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.34.1 (2026-10-21; tool dialogs stay in front)
+      * With ND Dam Breach Runner 3.25.1 and ND Dam Breach Screening 0.32.1. Tool dialogs opened from the window (the Dam suite tab) are owned by the window and modal: before, QGIS owned them from its main window and did not make them modal, so a click on the plugin window raised it over the tool, and from the Runner wizard the download tool could not be clicked at all (the wizard popped up in front). Nothing in the classification changed.
     2.34.0 (2026-10-20; GUI grammar, part 2: the main window)
       * With ND Dam Breach Runner 3.24.0 and ND Dam Breach Screening 0.32.0. The window follows docs/gui-grammar.md: the shared banner at the top; Check inputs, the bold Classify and the check panel sit under the tabs at the bottom right (shown with Setup & Run), so the button that runs the classification is always in view; the gear on the tab bar opens Suite settings, the README, the self-test and the data-source file; the log is folded under the status line; Close at the bottom right. Every tab, option and number is unchanged.
     2.33.0 (2026-10-20; GUI grammar, part 1)

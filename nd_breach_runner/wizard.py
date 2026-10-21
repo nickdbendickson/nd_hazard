@@ -29,6 +29,7 @@ import time
 import traceback
 
 from . import wizard_logic as wl
+from .tool_dialog import exec_tool_dialog
 from .core import breach as brmod
 from .core import nd_data
 from .core import nd_counties as cty
@@ -824,7 +825,7 @@ def _classes():
             t0 = time.time()
             self.dem_download.setEnabled(False)
             try:
-                result = processing.execAlgorithmDialog(wl.DEM_DOWNLOAD_ALG, params)
+                result = exec_tool_dialog(processing, wl.DEM_DOWNLOAD_ALG, params, parent=self)
             finally:
                 self.dem_download.setEnabled(True)
             path, notes = wl.finish_dem_download(a, result, cell_m, translate=_gdal_translate,

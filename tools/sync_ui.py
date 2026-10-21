@@ -33,6 +33,7 @@ SHARED = {
     "suite_settings_tools.py": _HRS,
     "suite_styles.py": _HRS,
     "suite_home.py": _HRS,
+    "tool_dialog.py": _HRS,
 }
 
 
