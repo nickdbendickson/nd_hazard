@@ -3141,7 +3141,8 @@ def _history_step(run, gov, governing, dam_name, vintage=None):
                                governing=gov.name, plugin_version=PLUGIN_VERSION,
                                vintage=vintage or (), cfg=run.cfg,
                                outputs=os.path.basename(run.out),
-                               note="quick re-run" if run.cfg.get("quick_rerun") else "")
+                               note="quick re-run" if run.cfg.get("quick_rerun") else "",
+                               flood_cut_off=getattr(run, "flood_cut_off", None))
         governing["history_entries"] = entries
         governing["history_entry"] = entry
         lines = HIS.history_lines(entries, entry)

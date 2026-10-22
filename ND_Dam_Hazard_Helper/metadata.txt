@@ -5,10 +5,22 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.34.1
+version=2.34.2
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.34.2 (2026-10-22; suite chain, cut-off floods, shorter field-check sheet)
+      * Suite chain (Run the suite's steps in order for one dam): step 2 now runs ND Dam Breach
+        Screening's whole chain for the dam ("nddam:runchain", in <dam folder>/screening, the
+        DWR structure number from dam.json as its dam). Before, it called the quick screen
+        ("nddam:triage"), which cannot take a dam folder, so a chain with the screening ticked
+        always stopped at step 2. The dam id is now also read from a dam record's fields.
+      * Classification history: a flood the ND Dam Breach Runner cut off is recorded as
+        "incomplete: flood cut off (reason)", as the summary's class line says; before, the
+        history called that run complete.
+      * Field-check sheet: a structure whose only reason was losing its road access no longer
+        gets a page (Absaraka: 844 of 933 pages were dry houses in town). "only_flagged=False"
+        still lists them. No classification number moves.
     2.34.1 (2026-10-21; tool dialogs stay in front)
       * With ND Dam Breach Runner 3.25.1 and ND Dam Breach Screening 0.32.1. Tool dialogs opened from the window (the Dam suite tab) are owned by the window and modal: before, QGIS owned them from its main window and did not make them modal, so a click on the plugin window raised it over the tool, and from the Runner wizard the download tool could not be clicked at all (the wizard popped up in front). Nothing in the classification changed.
     2.34.0 (2026-10-20; GUI grammar, part 2: the main window)

@@ -272,10 +272,17 @@ def history_path(dam_folder):
 
 
 def make_entry(nd, tm11, dam_name="", governing="", plugin_version="", vintage=(), cfg=None,
-               counts=None, outputs="", note="", when=None):
+               counts=None, outputs="", note="", when=None, flood_cut_off=None):
     """One run's summary, JSON-ready. `vintage`: the data-vintage lines of the run (the
-    pipeline's QA table), kept as text because that is what a reader needs to judge the row."""
+    pipeline's QA table), kept as text because that is what a reader needs to judge the row.
+    `flood_cut_off`: the Runner's cut-off record (modelchain.read_flood_cut_off), kept in
+    "incomplete" as the summary's class line says it, so a later reader of the history sees
+    that the class was a floor."""
     nd, tm11 = nd or {}, tm11 or {}
+    incomplete = list(nd.get("incomplete") or ())
+    if flood_cut_off:
+        incomplete.append("flood cut off ({})".format(
+            str(flood_cut_off.get("reason") or "reason not given").strip()))
     cnt = dict(counts or (nd.get("counts") or {}))
     keep = {}
     for k in SETTING_KEYS:
@@ -286,7 +293,7 @@ def make_entry(nd, tm11, dam_name="", governing="", plugin_version="", vintage=(
             "dam": str(dam_name or ""), "nd": nd.get("cls"), "tm11": tm11.get("cls"),
             "lij": round(float(tm11.get("lij") or 0.0), 1),
             "provisional": bool(nd.get("provisional")),
-            "incomplete": list(nd.get("incomplete") or ()),
+            "incomplete": incomplete,
             "governing": str(governing or ""), "plugin_version": str(plugin_version or ""),
             "vintage": [str(v) for v in list(vintage or ())[:_VINTAGE_MAX]],
             "counts": {k: cnt.get(k) for k in sorted(cnt)}, "outputs": str(outputs or ""),
