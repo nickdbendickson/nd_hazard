@@ -198,7 +198,7 @@ print("OK (8: the statewide priority list and its spreadsheet)")
 cfg = configparser.ConfigParser(interpolation=None)         # a changelog with a '%' in it
 cfg.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
 ver = cfg["general"]["version"]
-assert ver == "0.32.1", ver
+assert ver == "0.32.2", ver
 log = cfg["general"]["changelog"].lstrip()
 assert log.startswith(ver + ":") and "0.28.0:" in log, log[:40]
 # the release notes must say which results move, and in which direction - the suite's own rule

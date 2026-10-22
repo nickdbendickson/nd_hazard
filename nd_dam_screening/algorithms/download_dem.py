@@ -57,6 +57,9 @@ class DownloadDem(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(
             "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 10.0, minValue=1.0))
         self.addParameter(QgsProcessingParameterString(
+            "BEARING_DEG", "Downstream bearing (deg from north; blank = centered on the dam)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterString(
             "COUNTY", "County (area County)", optional=True))
         # 0.24.0: resolution choice instead of a free-form cell size
         self.addParameter(QgsProcessingParameterEnum(
@@ -139,7 +142,8 @@ class DownloadDem(QgsProcessingAlgorithm):
 
         # USGS 3DEP branch
         if scope == 0:
-            extent = dd.point_box(lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context))
+            extent = dd.point_box(lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context),
+                                  bearing_deg=_bearing(self, parameters, context, feedback))
             vrt_stem = dd.output_stem(0, cell_m, dam_id, point=(lon, lat))
         elif scope == 1:
             box = dd.COUNTIES.get(county)
@@ -162,6 +166,21 @@ class DownloadDem(QgsProcessingAlgorithm):
         feedback.pushInfo("DEM: {}".format(tif_path))
         _record(rec, tif_path, "USGS 3DEP {} m by tool 20".format(int(cell_m)), feedback)
         return {"VRT": tif_path, "OUT": out}
+
+
+def _bearing(alg, parameters, context, feedback=None):
+    """The downstream bearing parameter as a float (compass deg from north), or None when blank
+    or unparseable (then the DEM box is centred on the dam, as before)."""
+    raw = (alg.parameterAsString(parameters, "BEARING_DEG", context) or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw) % 360.0
+    except ValueError:
+        if feedback is not None:
+            feedback.pushWarning("Downstream bearing {!r} is not a number; centring the DEM on "
+                                 "the dam.".format(raw))
+        return None
 
 
 def _dam_point(alg, parameters, context, feedback, rec):

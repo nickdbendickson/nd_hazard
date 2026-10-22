@@ -75,10 +75,25 @@ def to_5070(west, south, east, north):
     return box_in(_epsg(5070), west, south, east, north)       # 0.17.0: densified edges
 
 
-def point_box(lon, lat, buffer_mi):
-    x0, y0, x1, y1 = to_5070(lon, lat, lon, lat)
+# When a downstream bearing is given, the box is shifted so the dam sits near the upstream edge
+# (a quarter of the half-buffer upstream of it) and the rest reaches downstream, instead of the
+# dam-centred square. The box keeps the same size, so the download is no larger.
+_UPSTREAM_MARGIN_FRAC = 0.25
+
+
+def point_box(lon, lat, buffer_mi, bearing_deg=None):
+    """EPSG:5070 box for a dam point and a per-side buffer (miles). bearing_deg (compass degrees
+    clockwise from north, the downstream direction) shifts the box downstream; None centres it."""
+    x0, y0, _x1, _y1 = to_5070(lon, lat, lon, lat)
     b = buffer_mi * MI
-    return (x0 - b, y0 - b, x1 + b, y1 + b)
+    if bearing_deg is None:
+        return (x0 - b, y0 - b, x0 + b, y0 + b)
+    import math
+    br = math.radians(float(bearing_deg))
+    ux, uy = math.sin(br), math.cos(br)            # downstream unit vector (east=+x, north=+y)
+    shift = b * (1.0 - _UPSTREAM_MARGIN_FRAC)       # move the centre downstream
+    cx, cy = x0 + ux * shift, y0 + uy * shift
+    return (cx - b, cy - b, cx + b, cy + b)
 
 
 def cell_tag(cell_m):
