@@ -23,6 +23,27 @@ from ..damsuite.keepawake import keep_awake
 
 ARRIVAL_TOL_M = 0.001    # LISFLOOD-FP writes depth to 3 decimals
 
+# The line LISFLOOD-FP prints when it does not have the arrival-depth patch (it then ignores
+# the inittm_depth keyword and records arrival at the first wetting, about 1 mm).
+PATCH_MISSING_MARKER = "Unknown parameter ignored: inittm_depth"
+PATCH_MISSING_MSG = (
+    "This LISFLOOD-FP build does not have the arrival-depth patch (it ignored "
+    "'inittm_depth'), so arrival times would mark the first millimetre of water "
+    "instead of the arrival depth. Rebuild it with scripts/build_lisflood_macos.sh "
+    "(or scripts/patch_lisflood.py) and set the new executable in Processing > "
+    "Options > Providers > ND Dam Breach Runner, or tick 'Accept an unpatched "
+    "LISFLOOD-FP build' there to run anyway with unreliable arrival times.")
+PATCH_MISSING_WARNING = (
+    "LISFLOOD-FP has no arrival-depth patch and 'Accept an unpatched build' is on: "
+    "arrival times mark the first wetting (about 1 mm), NOT the arrival depth, so any "
+    "hazard warning time from this run is unreliable. Build a patched LISFLOOD-FP for a "
+    "defensible run.")
+
+
+def patch_missing(logtxt):
+    """True when a LISFLOOD-FP log shows it ignored the arrival-depth keyword."""
+    return PATCH_MISSING_MARKER in (logtxt or "")
+
 # v3.4.0: the floodplain solver keyword written to the .par file. "acceleration" is the
 # local-inertial solver used everywhere by default; "fv1" is the first-order finite-volume
 # (shallow-water, shock-capturing) solver of LISFLOOD-FP 8, whose velocities near the breach
@@ -107,7 +128,7 @@ class LisfloodSettings:
                  arrival_depth_m=0.3048, sim_time_s=6 * 3600.0, massint_s=300.0,
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
-                 solver=SOLVER_ACC, closed_edges=()):
+                 solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -135,6 +156,13 @@ class LisfloodSettings:
         # more point sources: [{"name", "xy", "t_s", "q_cms", optional "line"}], e.g. ambient
         # river flow entering the domain
         self.extra_sources = extra_sources or []
+        # v3.26.0: accept a LISFLOOD-FP build WITHOUT the arrival-depth patch (it ignores
+        # inittm_depth). Off by default so _run() refuses such a build; on, the run proceeds
+        # with a loud warning and `unpatched_used` is set, because arrival times then mark the
+        # first wetting (~1 mm) rather than the arrival depth. For users who cannot build a
+        # patched LISFLOOD-FP (e.g. a locked-down Mac).
+        self.allow_unpatched = allow_unpatched
+        self.unpatched_used = False
 
 
 class Envelopes:
@@ -413,13 +441,13 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     if proc.returncode != 0:
         raise ModelError("LISFLOOD-FP stopped with code {}:\n{}".format(proc.returncode,
                                                                       logtxt[-1500:]))
-    if "Unknown parameter ignored: inittm_depth" in logtxt:
-        raise ModelError(
-            "This LISFLOOD-FP build does not have the arrival-depth patch (it ignored "
-            "'inittm_depth'), so arrival times would mark the first millimetre of water "
-            "instead of the arrival depth. Rebuild it with scripts/build_lisflood_macos.sh "
-            "(or scripts/patch_lisflood.py) and set the new executable in Processing > "
-            "Options > Providers > ND Dam Breach Runner.")
+    if patch_missing(logtxt):
+        if getattr(st, "allow_unpatched", False):
+            st.unpatched_used = True
+            if log:
+                log("WARNING: " + PATCH_MISSING_WARNING)
+        else:
+            raise ModelError(PATCH_MISSING_MSG)
     if log:
         log("LISFLOOD-FP finished in {:.1f} min".format((time.time() - t0) / 60.0))
     return time.time() - t0

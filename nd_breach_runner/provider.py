@@ -5,7 +5,7 @@ from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
 from .algorithms import ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ANUGA, SET_LISFLOOD, SET_THREADS, \
-    SET_BUILTIN
+    SET_BUILTIN, SET_ALLOW_UNPATCHED
 from .algorithms_tools import _ToolBase
 from .core import damjson, nd_data
 from . import popup_logic as pl
@@ -118,6 +118,11 @@ class Provider(QgsProcessingProvider):
             ProcessingConfig.addSetting(Setting(
                 self.name(), SET_THREADS, "Threads for the models (0 = all cores)", 0,
                 valuetype=Setting.INT))
+            # 3.26.0
+            ProcessingConfig.addSetting(Setting(
+                self.name(), SET_ALLOW_UNPATCHED, "Accept a LISFLOOD-FP build without the "
+                "arrival-depth patch (arrival times then mark the first wetting, ~1 mm, NOT the "
+                "arrival depth, so warning times are unreliable; off by default)", False))
             ProcessingConfig.readSettings()
         except Exception:   # settings are optional; parameters can carry the paths
             pass
@@ -127,7 +132,7 @@ class Provider(QgsProcessingProvider):
     def unload(self):
         try:
             from processing.core.ProcessingConfig import ProcessingConfig
-            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN):
+            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED):
                 ProcessingConfig.removeSetting(k)
         except Exception:
             pass

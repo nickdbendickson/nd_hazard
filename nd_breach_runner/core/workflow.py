@@ -159,6 +159,7 @@ class RunSettings:
         self.lisflood_exe = ""
         self.anuga_python = ""
         self.threads = 0
+        self.allow_unpatched = False     # 3.26.0: run a LISFLOOD-FP without the arrival-depth patch
         self.anuga_fine_area_m2 = 100.0
         self.anuga_coarse_area_m2 = 1000.0
         self.anuga_near_field_mi = 1.0
@@ -1051,7 +1052,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                      initial_depth=init, gauges=gl, snapshot_s=snap,
                                      extra_sources=extra_sources(sim_s),
                                      solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
-                                     closed_edges=closed_edges())
+                                     closed_edges=closed_edges(),
+                                     allow_unpatched=getattr(st, "allow_unpatched", False))
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
             for _i, fp in lfmod.snapshot_files(wd):
@@ -1062,6 +1064,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                         pass
         par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
         runtime = lfmod.run(wd, par, lst, prog, cancel, log)
+        if getattr(lst, "unpatched_used", False):
+            if lfmod.PATCH_MISSING_WARNING not in warnings:
+                warnings.append(lfmod.PATCH_MISSING_WARNING)
+            report["lisflood_unpatched"] = True
         env = lfmod.read_results(wd, dem, lst, hyd)
         return env, dem, init, runtime, wd, lst
 
