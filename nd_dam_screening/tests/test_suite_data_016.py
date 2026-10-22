@@ -243,7 +243,7 @@ def fake_download(extent, cell, out, stem, feedback=None):
     return p
 
 
-dd.download, dd.point_box = fake_download, (lambda lon, lat, mi: (lon, lat, lon + 1, lat + 1))
+dd.download, dd.point_box = fake_download, (lambda lon, lat, mi, bearing_deg=None: (lon, lat, lon + 1, lat + 1))
 # 0.24.0 reprojects the downloaded VRT to a local GeoTIFF; the raster mock cannot warp a VRT, so
 # stub warp_to_local to emit the dest .tif (dam.json recording is still exercised). Real GDAL
 # covers the warp/standardisation in test_dem_local_024.py.

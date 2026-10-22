@@ -721,6 +721,16 @@ def _classes():
             form.addRow("", self.coverage)
             form.addRow("", dl)
             form.addRow("", self.dem_note)
+            # optional downstream bearing: shifts the downloaded box downstream instead of
+            # centring it on the dam (blank = centred). You know the dam's downstream heading.
+            self.dem_bearing = W.QLineEdit()
+            self.dem_bearing.setPlaceholderText("deg from north; blank = centered on the dam")
+            self.dem_bearing.setToolTip("Compass bearing (degrees clockwise from north) of the "
+                                        "downstream direction. Blank downloads a square centred "
+                                        "on the dam; a bearing shifts the same-size box so the "
+                                        "dam sits near the upstream edge and the DEM reaches "
+                                        "downstream.")
+            form.addRow("Downstream bearing", self.dem_bearing)
             form.addRow("DEM elevation units", self.z)
             outer.addLayout(form)
             # roughness: optional, folded; the header shows the values so nothing hides
@@ -815,6 +825,9 @@ def _classes():
             if _algorithm_missing(wl.DEM_DOWNLOAD_ALG):
                 self.dem_note.setText(wl.DEM_NOT_INSTALLED)
                 return
+            bearing = self.dem_bearing.text().strip()
+            if bearing:
+                params["BEARING_DEG"] = bearing
             os.makedirs(params["OUT"], exist_ok=True)
             self.dem_note.setText("Downloading the {} DEM for {} into {}. The progress is in "
                                   "the tool's window; the wizard waits for it.".format(
