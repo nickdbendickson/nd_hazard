@@ -100,11 +100,14 @@ def why_listed(rec):
 
 
 def is_flagged(rec):
-    """The structures a visit after a screening High is for."""
+    """The structures a visit after a screening High is for. A structure whose only reason is
+    that it loses its road access is not one of them: the access screening is a network count,
+    not a building's depth, and on a town's flood it lists hundreds of dry houses (Absaraka on
+    2.32.0: 844 of 933 pages). `only_flagged=False` still lists them."""
     if rec.get("habitable") == "No":
         return False
     return bool(rec.get("zone") in (1, 2) or rec.get("habitable") == "Unverified"
-                or rec.get("near") or rec.get("cut_off"))
+                or rec.get("near"))
 
 
 def sheet_rows(structs, address_fn=None, only_flagged=True, lonlat_fn=None):

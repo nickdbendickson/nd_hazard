@@ -4,7 +4,8 @@ built in the Model Designer and run headless (qgis_process) for a statewide batc
 
   ndhazard:buildpack    1. Build / update the offline data pack (build_nd_pack.py - the same
                         builder the "Suite data and servers" window uses)
-  ndhazard:screendam    2. Screen one dam        -> ND Dam Breach Screening's "nddam:triage"
+  ndhazard:screendam    2. Screen one dam        -> ND Dam Breach Screening's "nddam:runchain"
+                        (its whole chain for the one dam, the headless "Run one dam")
   ndhazard:runbreach    3. Run the breach model  -> ND Dam Breach Runner's "ndbreach:rundam"
   ndhazard:classify     4. Classify (processing_provider.ClassifyAlgorithm, since v2.0)
   ndhazard:suitechain   all four in order for one dam folder
@@ -23,8 +24,9 @@ Decisions:
     names the dam and the step, and nothing downstream runs on a half-finished model.
   * Nothing here changes a hazard result: step 4 is the existing classify algorithm with the
     existing defaults.
-  * Not run inside a real QGIS (no QGIS in the build container): the parameter handling and the
-    chain's step list are unit-tested through the pure helpers at the bottom.
+  * The parameter handling and the chain's step list are unit-tested through the pure helpers.
+    2.32.1: run in a real QGIS on Absaraka Dam (DWR 2801) from a dam folder that "Get data for
+    this dam" filled - screen, model and classify in one qgis_process command.
 """
 
 import json
@@ -43,12 +45,16 @@ GROUP = ("Dam suite chain", "damsuitechain")
 STEPS = (
     ("pack", "Build / update the offline data pack", "ndhazard:buildpack",
      "ND Dam Hazard Classification Helper (this plugin)"),
-    ("screen", "Screen the dam", "nddam:triage", "ND Dam Breach Screening"),
+    ("screen", "Screen the dam", "nddam:runchain", "ND Dam Breach Screening"),
     ("breach", "Run the breach model", "ndbreach:rundam", "ND Dam Breach Runner"),
     ("classify", "Classify the dam", "ndhazard:classify",
      "ND Dam Hazard Classification Helper (this plugin)"),
 )
 STEP_KEYS = tuple(k for k, _l, _a, _p in STEPS)
+# 2.32.1: Screening's work folder inside the dam folder (step 2 used to call "nddam:triage", the
+# quick screen, which reads the layers of Screening's tools 4 and 5 and cannot take a dam folder,
+# so a chain with the screening ticked always stopped at step 2)
+SCREEN_WORK = "screening"
 FILE_FOLDER = _first(lambda: Qgis.ProcessingFileParameterBehavior.Folder,
                      lambda: QgsProcessingParameterFile.Behavior.Folder,
                      lambda: QgsProcessingParameterFile.Folder)
@@ -93,6 +99,22 @@ def parse_parameters(text):
     return out
 
 
+def _dam_fields(dam_folder):
+    """dam.json's values: the dam record's "fields" (damsuite.dam_record), or the top level of
+    an older flat file; {} when there is none or it cannot be read."""
+    try:
+        path = os.path.join(dam_folder or "", "dam.json")
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8-sig") as fh:
+                rec = json.load(fh) or {}
+            if isinstance(rec, dict):
+                fields = rec.get("fields")
+                return fields if isinstance(fields, dict) else rec
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
 def dam_id_of(dam_folder, given=""):
     """The dam id of a dam folder: what was given, else dam.json's id, else the folder name
     (the suite's convention - one folder per dam, named after the dam id)."""
@@ -100,23 +122,48 @@ def dam_id_of(dam_folder, given=""):
     if given:
         return given
     folder = dam_folder or ""
-    try:
-        path = os.path.join(folder, "dam.json")
-        if os.path.isfile(path):
-            with open(path, encoding="utf-8") as fh:
-                rec = json.load(fh) or {}
-            for key in ("dam_id", "id", "nid_id"):
-                if str(rec.get(key) or "").strip():
-                    return str(rec[key]).strip()
-    except (OSError, ValueError):
-        pass
+    rec = _dam_fields(folder)
+    for key in ("dam_id", "id", "nid_id"):
+        if str(rec.get(key) or "").strip():
+            return str(rec[key]).strip()
     return os.path.basename(os.path.normpath(folder)) if folder else ""
+
+
+def screen_parameters(dam_folder, dam_id, extra=None):
+    """The parameters of step 2, Screening's "nddam:runchain" for one dam: its work folder
+    <dam folder>/screening, the dam folder in its settings (so its tools fill their empty inputs
+    from the dam folder's data, as "Get data for this dam" left them) and the dam as its DAM_ID
+    filter - the DWR structure number when dam.json has one, because Screening's dam inventory is
+    the DWR's. `extra` (the step's own PARAMETERS) wins over all of these."""
+    rec = _dam_fields(dam_folder)
+    dwr = str(rec.get("dwr_structure_id") or "").strip()
+    params = {"WORK": os.path.join(dam_folder, SCREEN_WORK),
+              "SETTINGS": json.dumps({"dam_folder": dam_folder}),
+              "DAM_ID": dwr or dam_id, "FAIL_ON_ERROR": True}
+    params.update(extra or {})
+    return params
 
 
 def chain_steps(pack=False, screen=True, breach=True, classify=True):
     """The steps of a chain run, in order: [(key, label, algorithm id, plugin)]."""
     want = {"pack": pack, "screen": screen, "breach": breach, "classify": classify}
     return [s for s in STEPS if want.get(s[0])]
+
+
+def step_parameters(key, dam_folder, dam_id, extra=None):
+    """The parameters a chain step's algorithm is run with: the pack's (empty = the suite's),
+    Screening's (screen_parameters), else the dam folder and the dam id the Runner and the
+    classification take. The step's own PARAMETERS win."""
+    extra = dict(extra or {})
+    if key == "pack":
+        extra.setdefault("PACK", "")
+        return extra
+    if key == "screen":
+        return screen_parameters(dam_folder, dam_id, extra)
+    extra.setdefault("DAM_FOLDER", dam_folder)
+    extra.setdefault("DAM_ID", dam_id)
+    extra.setdefault("DAMS_FOLDER", os.path.dirname(os.path.normpath(dam_folder)))
+    return extra
 
 
 def missing_message(step):
@@ -280,10 +327,7 @@ class _DelegatingAlgorithm(_ChainBase):
         if not folder or not os.path.isdir(folder):
             raise QgsProcessingException("The dam folder does not exist: {}".format(folder))
         dam_id = dam_id_of(folder, self._text(parameters, context, "DAM_ID"))
-        params = dict(self._params(parameters, context))
-        params.setdefault("DAMS_FOLDER", os.path.dirname(os.path.normpath(folder)))
-        params.setdefault("DAM_FOLDER", folder)
-        params.setdefault("DAM_ID", dam_id)
+        params = step_parameters(step[0], folder, dam_id, self._params(parameters, context))
         if feedback is not None:
             feedback.pushInfo("{}: {} for dam '{}'".format(step[1], step[2], dam_id))
         out = run_algorithm(step[2], params, context, feedback)
@@ -301,11 +345,14 @@ class ScreenDamAlgorithm(_DelegatingAlgorithm):
         return "2 - Screen one dam (ND Dam Breach Screening)"
 
     def shortHelpString(self):
-        return ("Runs ND Dam Breach Screening's quick screen ('{}') for one dam folder, so "
-                "screening, modelling and classification can be one model or one headless "
-                "command. The screening plugin must be installed and enabled; its own "
-                "parameters go in PARAMETERS (JSON or KEY=VALUE lines) and reach it "
-                "unchanged.".format("nddam:triage"))
+        return ("Runs ND Dam Breach Screening's whole chain ('{}', the headless 'Run one "
+                "dam') for one dam folder, in <dam folder>/{}, so screening, modelling and "
+                "classification can be one model or one headless command. Its tools fill their "
+                "empty inputs from the dam folder's data ('Get data for this dam' first); the "
+                "dam is the DWR structure number in dam.json, else the dam id. The screening "
+                "plugin must be installed and enabled; its own parameters (SETTINGS, PREFLIGHT, "
+                "INCLUDE ...) go in PARAMETERS (JSON or KEY=VALUE lines) and win.".format(
+                    "nddam:runchain", SCREEN_WORK))
 
 
 class RunBreachAlgorithm(_DelegatingAlgorithm):
@@ -383,13 +430,7 @@ class SuiteChainAlgorithm(_ChainBase):
                 feedback.setProgress(100.0 * i / len(steps))
                 feedback.pushInfo("Step {} of {}: {} ({}) for dam '{}'".format(
                     i + 1, len(steps), label, alg, dam_id))
-            params = dict(extra.get(key) or {})
-            if key == "pack":
-                params.setdefault("PACK", "")
-            else:
-                params.setdefault("DAM_FOLDER", folder)
-                params.setdefault("DAM_ID", dam_id)
-                params.setdefault("DAMS_FOLDER", os.path.dirname(os.path.normpath(folder)))
+            params = step_parameters(key, folder, dam_id, extra.get(key))
             try:
                 out = run_algorithm(alg, params, context, feedback) or {}
             except QgsProcessingException:

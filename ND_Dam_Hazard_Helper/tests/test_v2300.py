@@ -473,6 +473,33 @@ def the_marked_up_sheet_becomes_engineer_review_decisions():
     assert done["applied"] == 0 and len(done["unmatched"]) == 3
 
 
+@test
+def a_structure_that_only_loses_its_road_access_gets_no_field_page():
+    """2.32.1: on a town's flood the access screening cut off hundreds of dry houses and each got
+    a page (Absaraka: 844 of 933); a visit does not settle the class for them."""
+    dry = {"id": 9, "habitable": "Yes", "zone": None, "outcome": "Not inundated",
+           "max_depth": None, "cut_off": True, "sources": ()}
+    assert not FC.is_flagged(dry)
+    assert [r["id"] for r in FC.sheet_rows(_fc_structs() + [dry])] == [3, 4]
+    assert 9 in [r["id"] for r in FC.sheet_rows(_fc_structs() + [dry], only_flagged=False)]
+    # cut off AND in a zone that decides the class: still listed
+    wet = dict(dry, id=10, zone=2, max_depth=2.0, outcome="Judgment zone")
+    assert 10 in [r["id"] for r in FC.sheet_rows([wet])]
+
+
+@test
+def the_history_keeps_a_flood_the_runner_cut_off():
+    """2.32.1: the summary said "incomplete: flood cut off" while the history said complete."""
+    cut = {"reason": "domain-run limit", "detail": "Stopped after 6 runs"}
+    e = HIS.make_entry({"cls": "High", "incomplete": ["roads"]}, {"cls": "High", "lij": 15.8},
+                       dam_name="Absaraka Dam", flood_cut_off=cut)
+    assert e["incomplete"] == ["roads", "flood cut off (domain-run limit)"]
+    assert HIS.make_entry({"cls": "High"}, {"cls": "High"})["incomplete"] == []
+    assert "INCOMPLETE (flood cut off (domain-run limit))" in "\n".join(
+        HIS.history_lines([], HIS.make_entry({"cls": "High"}, {"cls": "High"},
+                                             flood_cut_off=cut)))
+
+
 # ------------------------------------------------- 12. the suite chain algorithms --
 @test
 def the_chain_algorithms_pass_the_dam_through_and_name_a_missing_plugin():
@@ -490,10 +517,39 @@ def the_chain_algorithms_pass_the_dam_through_and_name_a_missing_plugin():
     keys = [k for k, _l, _a, _p in CA.chain_steps()]
     assert keys == ["screen", "breach", "classify"]        # the pack is off by default
     assert [k for k, _l, _a, _p in CA.chain_steps(pack=True)][0] == "pack"
-    assert [s[2] for s in CA.STEPS] == ["ndhazard:buildpack", "nddam:triage",
+    assert [s[2] for s in CA.STEPS] == ["ndhazard:buildpack", "nddam:runchain",
                                         "ndbreach:rundam", "ndhazard:classify"]
     msg = CA.missing_message(CA.STEPS[2])
     assert "ndbreach:rundam" in msg and "ND Dam Breach Runner" in msg and "release set" in msg
+
+
+@test
+def the_chain_screens_the_dam_folder_with_screenings_own_chain():
+    """2.32.1: step 2 was Screening's quick screen (nddam:triage), which reads the layers of
+    Screening's tools 4 and 5 and cannot take a dam folder, so every chain with the screening
+    ticked stopped there (Absaraka, 2026-10-19)."""
+    dam = os.path.join(tempfile.mkdtemp(), "ND00199")
+    os.makedirs(dam)
+    with open(os.path.join(dam, "dam.json"), "w", encoding="utf-8") as fh:
+        json.dump({"format": "nd_dam_suite/dam_record", "format_version": 1,
+                   "fields": {"dam_id": "ND00199", "nid_id": "ND00199",
+                              "dwr_structure_id": "2801"}}, fh)
+    assert CA.dam_id_of(dam) == "ND00199"          # a dam record keeps its values in "fields"
+    p = CA.step_parameters("screen", dam, "ND00199")
+    assert p["WORK"] == os.path.join(dam, CA.SCREEN_WORK) and p["DAM_ID"] == "2801"
+    assert json.loads(p["SETTINGS"]) == {"dam_folder": dam} and p["FAIL_ON_ERROR"] is True
+    assert "DAM_FOLDER" not in p and "DAMS_FOLDER" not in p
+    # the step's own parameters win
+    p = CA.step_parameters("screen", dam, "ND00199", {"PREFLIGHT": False, "DAM_ID": "x"})
+    assert p["PREFLIGHT"] is False and p["DAM_ID"] == "x"
+    # no DWR number: the dam id
+    os.remove(os.path.join(dam, "dam.json"))
+    assert CA.step_parameters("screen", dam, "ND00199")["DAM_ID"] == "ND00199"
+    # the Runner and the classification still get the dam folder, the dam id and the Dams folder
+    b = CA.step_parameters("breach", dam, "ND00199", {"CELL": 20})
+    assert b == {"CELL": 20, "DAM_FOLDER": dam, "DAM_ID": "ND00199",
+                 "DAMS_FOLDER": os.path.dirname(dam)}
+    assert CA.step_parameters("pack", dam, "ND00199") == {"PACK": ""}
 
 
 @test
@@ -541,7 +597,10 @@ def _window_takes_a_hand_off(NDDamHazardDialog):
         assert "Find rasters" in btn.toolTip()
     assert "Cannot run yet" in dlg.status_label.text()
     assert "No classification run yet" in dlg.result_label.text()
-    # the hand-off finds the rasters and offers the whole run in one click
+    # the hand-off finds the rasters and offers the whole run in one click. The suite's own
+    # set-up items (suite folder, offline pack) come from this machine's settings, so they are
+    # left out here: the_suite_set_up_items_come_after_the_windows_own_inputs covers them
+    dlg._suite_blocking = lambda: []
     dam = tempfile.mkdtemp()
     for n in ("Depth (Max).tif", "Velocity (Max).tif", "Arrival Time.tif"):
         with open(os.path.join(dam, n), "wb") as fh:
