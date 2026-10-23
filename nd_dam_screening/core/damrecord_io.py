@@ -183,11 +183,14 @@ def tool8_values(attrs, class_field=None):
         if vol is not None and vol > 0:
             v["storage_acft"] = round3(vol / AF_M3)
             break
-    area = _num(attrs.get("est_area_m2"))
-    if area is None or area <= 0:
-        area = _num(attrs.get("inv_area_m2"))
-    if area is not None and area > 0:
-        v["surface_area_ac"] = round3(area / AC_M2)
+    # surface_area_ac is the area at the TOP OF DAM: the Runner turns it into its storage-area
+    # exponent (area * height / storage). The screening's est_area_m2 / inv_area_m2 are the
+    # normal-pool (mapped water) area, which on a dry flood-control dam is near zero and forces
+    # the exponent to its floor of 1, about a third low on the peak breach flow (Absaraka
+    # DWR-2801). The tool-7b / runchain handoff already leaves it out for this reason
+    # (core/handoff.py area_for_runner, "normal-pool areas are not passed"); do the same here,
+    # so a dam modelled from the Runner window off dam.json gets the depth-squared default
+    # (exponent 2) instead of a pool area read as the top-of-dam area.
     crest = _num(attrs.get("crest_len_m"))
     if crest is not None and crest > 0:
         v["dam_length_ft"] = round3(crest / FT)

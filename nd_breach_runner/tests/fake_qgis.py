@@ -267,6 +267,10 @@ class QgsCoordinateReferenceSystem:
     def isValid(self):
         return bool(self.s)
 
+    def isGeographic(self):
+        # the stand-in only needs the geographic EPSG codes the Runner checks against
+        return self.s.upper() in ("EPSG:4326", "EPSG:4269", "OGC:CRS84")
+
     def authid(self):
         return self.s
 

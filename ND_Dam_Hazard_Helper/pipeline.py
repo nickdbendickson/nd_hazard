@@ -2651,7 +2651,8 @@ def _boundary_check(run, sc, layers):
     try:
         res = BND.check(depth, run.clip_crs, run.ctx,
                         boundary_layer=cfg.get("model_boundary_layer"), base_sampler=base,
-                        arr_sampler=arr, min_incr_ft=float(cfg["incremental_ft"]))
+                        arr_sampler=arr, min_incr_ft=float(cfg["incremental_ft"]),
+                        depth_path=sc.depth if isinstance(sc.depth, str) else None)
     except Exception as e:
         run.log(">>> WARNING: {}: model extent check failed: {}".format(sc.name, e))
         return {"error": str(e), "flagged": True, "method": None, "wet": 0, "points": []}

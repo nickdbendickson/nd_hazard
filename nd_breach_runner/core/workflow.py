@@ -54,7 +54,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.25.2"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.26.0"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -107,6 +107,7 @@ CUT_OFF_DURATION = "duration cap"
 CUT_OFF_RUNS = "domain-run limit"
 CUT_OFF_EXTENT = "largest domain side"
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
+OUTFLOW_WARN_PCT = 5.0     # warn when at least this share of the breach volume leaves the model
 STATE_FILE = "state.json"
 # 3.18.0: the run report of a finished run (REPORT_REL in damjson); written only after every
 # pass is done, so its presence tells a finished run from a cancelled one that left pass rasters
@@ -1293,6 +1294,20 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     state.save(iterations=iterations, lisflood_done=True, final_bounds=list(bounds),
                final_sim_time=sim_time, warnings=warnings)
     report["lisflood_runs"] = iterations
+    out_pct = lf_env.stats.get("boundary_outflow_pct")
+    out_acft = lf_env.stats.get("boundary_outflow_acft")
+    if out_pct is not None:
+        report["boundary_outflow_pct"] = out_pct
+        report["boundary_outflow_acft"] = out_acft
+        if out_pct >= OUTFLOW_WARN_PCT:
+            msg = ("{:.0f}% of the breach volume ({:,.0f} ac-ft) left the model through its "
+                   "edges. The domain grows only while an edge is deeper than {:.1f} ft, so a "
+                   "wide, shallow sheet can leave under that rule: the flood area and the "
+                   "downstream consequences are minimums. Extend the model downstream, or "
+                   "confirm nothing that would change the classification lies beyond it."
+                   .format(out_pct, out_acft or 0.0, st.edge_tolerance_ft))
+            if msg not in warnings:
+                warnings.append(msg)
     snap_npz = os.path.join(model_dir, "depth_snapshots.npz")
     if frames > 0 and lst is not None and lst.snapshot_s:
         try:
@@ -1891,6 +1906,9 @@ def render_report(r):
              "| Latest arrival | {} h after breach initiation |".format(s["latest_arrival_hr"]),
              "| Domain | {} x {} mi after {} LISFLOOD-FP run(s) |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"])]
+    if r.get("boundary_outflow_pct") is not None:
+        lines.append("| Breach volume that left the model | {:.0f}% ({:,.0f} ac-ft) |".format(
+            r["boundary_outflow_pct"], r.get("boundary_outflow_acft") or 0.0))
     if s.get("receptors_flooded"):
         lines.append("| Reaches | {} |".format(s["receptors_flooded"]))
     if s.get("refine_near_dam"):

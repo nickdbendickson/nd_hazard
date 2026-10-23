@@ -537,9 +537,20 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     # v3.11.0: what the model holds against what was put in. A free FV1 edge can import water
     # (it grew to 6.5e10 m3 against 9.7e6 m3 injected at Elm River Dam 1); the near-dam refine
     # checks these before it merges anything. Only meaningful without ambient sources.
-    t_ser, v_ser, _qi, _qo = _read_series(os.path.join(res, name + ".mass"))
+    t_ser, v_ser, _qi, qo_ser = _read_series(os.path.join(res, name + ".mass"))
     if injected and len(v_ser):
         stats["max_domain_volume_ratio"] = round(float(v_ser.max()) / injected, 3)
+    # Water that left the model through its downstream edges: the cumulative boundary outflow
+    # (LISFLOOD-FP Qout). The domain-extension rule only looks at how DEEP the water is on each
+    # edge (> 1 ft); a wide, shallow sheet can carry a large share of the breach volume out
+    # while every edge stays under the depth rule, so the flood area and consequences are
+    # understated with nothing to say so. Reported here and flagged in workflow.run_dam.
+    if len(qo_ser) and len(t_ser) == len(qo_ser):
+        trap = getattr(np, "trapezoid", None) or np.trapz
+        out_vol = float(trap(np.clip(qo_ser, 0.0, None), t_ser))
+        stats["boundary_outflow_acft"] = round(out_vol / ACFT, 2)
+        if injected:
+            stats["boundary_outflow_pct"] = round(100.0 * out_vol / injected, 2)
     if not st.extra_sources:
         lv, lq, lt = late_inflow(os.path.join(res, name + ".mass"), float(hydrograph.duration_s))
         stats["late_boundary_inflow_acft"] = round(lv / ACFT, 2)
