@@ -111,8 +111,61 @@ def _polygon_edge_groups(sampler, geoms, rows_per_strip=512):
     return out, checked
 
 
+def runner_domain(depth_path, width=None, height=None):
+    """The model domain of an ND Dam Breach Runner result, from the run folder next to
+    the depth raster (<dam>/_breach_model): ("mesh", [(x, y), ...]) - the ANUGA mesh
+    boundary (anuga/mesh_boundary.csv, the raster's CRS) when ANUGA gave the final rasters;
+    ("grid", None) - LISFLOOD-FP gave them and its model grid (lisflood/run.dem.asc) has the
+    raster's size, so the raster edge IS the model edge and an edge cell without data is
+    dry; None - not a Runner result, or nothing to tell."""
+    import json
+    import os
+    if not depth_path or not isinstance(depth_path, str):
+        return None
+    model = os.path.join(os.path.dirname(os.path.abspath(depth_path)), "_breach_model")
+    try:
+        with open(os.path.join(model, "run_report.json"), encoding="utf-8") as fh:
+            rep = json.load(fh)
+    except Exception:
+        return None
+    final = str((rep.get("summary") or {}).get("final_model") or "").upper()
+    out = ((rep.get("outputs") or {}).get("final") or {}).get("depth") or ""
+    if out and os.path.basename(out) != os.path.basename(depth_path):
+        return None                                   # another raster than the Runner's final
+    if final.startswith("ANUGA"):
+        pth = os.path.join(model, "anuga", "mesh_boundary.csv")
+        try:
+            pts = []
+            with open(pth, encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.strip().split(",")
+                    if len(parts) >= 2:
+                        try:
+                            pts.append((float(parts[0]), float(parts[1])))
+                        except ValueError:
+                            continue                  # the header
+            if len(pts) >= 3:
+                return ("mesh", pts)
+        except OSError:
+            return None
+        return None
+    if final.startswith("LISFLOOD"):
+        try:
+            head = {}
+            with open(os.path.join(model, "lisflood", "run.dem.asc"), encoding="utf-8") as fh:
+                for _ in range(6):
+                    k, v = fh.readline().split()[:2]
+                    head[k.lower()] = v
+            if width is None or (int(head["ncols"]) == int(width)
+                                 and int(head["nrows"]) == int(height)):
+                return ("grid", None)
+        except Exception:
+            return None
+    return None
+
+
 def check(depth_sampler, analysis_crs, transform_ctx, boundary_layer=None,
-          base_sampler=None, arr_sampler=None, min_incr_ft=1.0):
+          base_sampler=None, arr_sampler=None, min_incr_ft=1.0, depth_path=None):
     """Wet cells on the model edge. Returns a dict:
     method, checked (edge cells looked at), wet, per_side {side: {n, max,
     arrival}}, max_depth, max_incr (None without baseline), n_incr (cells
@@ -137,12 +190,32 @@ def check(depth_sampler, analysis_crs, transform_ctx, boundary_layer=None,
             raise ValueError("the model boundary layer has no polygon")
         groups, res["checked"] = _polygon_edge_groups(depth_sampler, geoms)
     else:
-        res["method"] = "edge of the depth raster"
-        for side, cols, rows, vals in _edge_cells(depth_sampler):
-            ok = np.isfinite(vals)
-            res["checked"] += int(ok.sum())
-            xs, ys = depth_sampler.cell_centres(cols[ok], rows[ok])
-            groups.append((side, xs, ys, vals[ok]))
+        # a Runner result knows its own model domain (the raster's outer ring can be no-data
+        # around the ANUGA mesh, or around the UTM-rotated LISFLOOD grid reprojected to the
+        # DEM's CRS, so the raster-edge check can see 0 cells while the model edge is wet)
+        dom = runner_domain(depth_path, depth_sampler.xsize, depth_sampler.ysize)
+        if dom is not None and dom[0] == "mesh":
+            res["method"] = "Runner ANUGA mesh boundary (_breach_model/anuga/mesh_boundary.csv)"
+            ring = [QgsPointXY(x, y) for x, y in dom[1]]
+            geoms = [_valid(QgsGeometry.fromPolygonXY([ring]))]
+            groups, res["checked"] = _polygon_edge_groups(depth_sampler, geoms)
+        else:
+            grid = dom is not None and dom[0] == "grid"
+            res["method"] = ("edge of the depth raster (the LISFLOOD-FP model grid)" if grid
+                             else "edge of the depth raster")
+            ring_cells = 0
+            for side, cols, rows, vals in _edge_cells(depth_sampler):
+                ok = np.isfinite(vals)
+                ring_cells += int(vals.size)
+                res["checked"] += int(ok.sum())
+                xs, ys = depth_sampler.cell_centres(cols[ok], rows[ok])
+                groups.append((side, xs, ys, vals[ok]))
+            if grid:
+                res["checked"] = ring_cells          # no data on the model grid = dry
+            elif res["checked"] == 0 and ring_cells:
+                # nothing on the outer ring has data: the raster is larger than the model
+                # domain, so this check cannot see the model edge - say so (judgment item)
+                res["unchecked"] = True
     back = QgsCoordinateTransform(depth_sampler.crs, analysis_crs, transform_ctx) \
         if depth_sampler.crs is not None else None
     pts = []
@@ -184,6 +257,8 @@ def check(depth_sampler, analysis_crs, transform_ctx, boundary_layer=None,
             res["flagged"] = res["n_incr"] > 0
         else:
             res["flagged"] = True
+    if res.get("unchecked") and not pts:
+        res["flagged"] = True
     # most important cells first, thinned to BOUNDARY_MAX_POINTS
     pts.sort(key=lambda p: -(p[5] if p[5] is not None else p[3]))
     if len(pts) > BOUNDARY_MAX_POINTS:
@@ -210,10 +285,15 @@ def describe(res):
             "model".format(res["error"])
     if not res or res.get("method") is None:
         return "Model extent not checked (no depth raster)"
+    if res.get("unchecked") and not res["wet"]:
+        return ("Model extent NOT checked: the depth raster's outer rows and columns hold no "
+                "data, so the edge of the model cannot be seen there (0 edge cells) - give the "
+                "model boundary polygon (2D flow area / mesh), or check by hand whether the "
+                "flood reaches the model edge")
     if not res["wet"]:
         line = "The flood does not reach the {} ({} edge cells checked)".format(
             res["method"], res["checked"])
-        if res["method"].startswith("edge of the depth raster"):
+        if res["method"] == "edge of the depth raster":     # not the Runner's own grid
             line += (" - the 2D flow area may end inside the raster; give the model boundary "
                      "polygon for a complete check")
         return line
@@ -235,7 +315,7 @@ def describe(res):
 
 
 def judgment_text(res):
-    if res.get("error"):
+    if res.get("error") or (res.get("unchecked") and not res.get("wet")):
         return describe(res)
     return (describe(res) + ". Consequences beyond the model are not evaluated: extend the "
             "model downstream, or document why the remaining flood is not significant "

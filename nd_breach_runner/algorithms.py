@@ -807,7 +807,17 @@ class _Base(QgsProcessingAlgorithm):
             raise QgsProcessingException("No DEM")
         work = self.parameterAsCrs(parameters, "WORK_CRS", context) \
             if self.parameterDefinition("WORK_CRS") is not None else QgsCoordinateReferenceSystem("")
-        if not work.isValid():
+        dem_crs = dem.crs()
+        dem_unit = gdal_io.linear_unit_m(dem_crs.toWkt()) if dem_crs.isValid() else None
+        # The flood grid stays in the DEM's horizontal CRS when it is projected in metres, so
+        # the results are not reprojected afterwards. A 3DEP download is metres in EPSG:5070;
+        # reprojecting back to it from a UTM model grid left no-data triangles on every raster
+        # edge, so the hazard model-extent check saw 0 edge cells and wrongly reported "the
+        # flood does not reach the edge". A named working CRS is used only when the DEM has no
+        # projected metre CRS.
+        if dem_crs.isValid() and not dem_crs.isGeographic() and dem_unit == 1.0:
+            work = dem_crs
+        elif not work.isValid():
             to_geo = QgsCoordinateTransform(sample_point_crs,
                                             QgsCoordinateReferenceSystem("EPSG:4269"),
                                             context.transformContext())

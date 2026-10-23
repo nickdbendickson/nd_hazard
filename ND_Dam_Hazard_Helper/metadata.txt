@@ -5,10 +5,19 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.34.2
+version=2.34.3
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.34.3 (2026-10-23; model-extent check sees the Runner's own grid)
+      * Model-extent check: it now recognises an ND Dam Breach Runner result's own model
+        domain next to the depth raster (_breach_model/run_report.json), so a LISFLOOD-FP grid
+        edge without data counts as dry and an ANUGA mesh boundary is used directly. Before, a
+        Runner result whose rasters had been reprojected (a UTM model grid written back to the
+        DEM's CRS leaves no-data on every raster edge) made the check see 0 edge cells and
+        report "the flood does not reach the edge" even while the model edges were wet. When
+        the raster's outer ring is all no-data and the domain is not known, it now says the
+        extent was NOT checked (a judgment item) instead of calling the flood contained.
     2.34.2 (2026-10-22; suite chain, cut-off floods, shorter field-check sheet)
       * Suite chain (Run the suite's steps in order for one dam): step 2 now runs ND Dam Breach
         Screening's whole chain for the dam ("nddam:runchain", in <dam folder>/screening, the
