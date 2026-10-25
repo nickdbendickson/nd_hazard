@@ -42,7 +42,8 @@ DamSafety set in **separate QGIS profiles**; they register the same Processing i
 2. **LISFLOOD-FP gauge sections clipped to the grid (ND Runner 3.26.2, DWR Runner 3.10.80).**
    The virtual gauge line ran off the model grid and LISFLOOD-FP's own clip checks the wrong
    axis, so the reported gauge discharge could be garbage (1e297, or a negative shown as 0).
-   Flood depth, velocity and extent were not affected; gauge discharges of earlier runs may be wrong.
+   Gauges are written only when GAUGE_POINTS is given or by the cascade tool, so ordinary runs
+   (depth, velocity, arrival, peak flow, hazard class) were never affected.
 3. **Stale model tests fixed and run in CI (nd_hazard #16, DWR_Plugins #180).** Tests and CI
    only. A new `model-tests` CI job now runs the real LISFLOOD-FP and ANUGA model tests on every
    PR; that job is what found fix 2.
@@ -69,7 +70,7 @@ DamSafety set in **separate QGIS profiles**; they register the same Processing i
 - Dry flood-control dams screened on ND Screening 0.32.2 or older and then modelled: re-screen
   (tool 8) and re-run the Runner. Peak flows go up.
 - Any HEC-RAS results imported before today: re-export and reclassify.
-- Gauge discharges from earlier LISFLOOD-FP runs: do not rely on them; re-run if you need them.
+- Only runs with gauge points, or cascade runs, need a re-run for the gauge fix.
 
 ## Offline pack
 
