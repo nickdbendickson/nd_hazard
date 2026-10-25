@@ -31,7 +31,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
                    batchqueue)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .core.anuga_model import check_anuga
-from .core.units import FT, MILE
+from .core.units import ARRIVAL_DEPTH_FT, FT, MILE
 from .damsuite import solvegate as SG
 
 ALL_FILES = "All files (*)"     # 3.10.0: any file name, with or without an extension
@@ -559,8 +559,9 @@ class _Base(QgsProcessingAlgorithm):
         self._text("NLCD_N", "NLCD: your own n for some classes, JSON like {\"82\": 0.05}",
                    advanced=True)
         self._num("ARRIVAL_FT", "Arrival depth (ft): arrival time is when the depth first "
-                  "exceeds this (starting value 1 is the engineer's, a screening value you "
-                  "choose)", 1.0, minimum=0.01)
+                  "exceeds this (starting value 0.1 is the ND hazard wet depth, so every wet "
+                  "structure gets an arrival time; a screening value you choose)",
+                  ARRIVAL_DEPTH_FT, minimum=0.01)
         self._num("EDGE_TOL_FT", "Extend the domain while the flood leaves an edge deeper "
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.01)

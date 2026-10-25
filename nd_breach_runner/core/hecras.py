@@ -49,7 +49,7 @@ import re
 import numpy as np
 
 from .grid import Grid
-from .units import ACFT, CFS, FT
+from .units import ACFT, ARRIVAL_DEPTH_FT, CFS, FT
 
 RAS_INTERVALS_MIN = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
                      1440)
@@ -634,7 +634,7 @@ def _unit_factor(u):
     return 1.0 / FT if u == "si" else 1.0
 
 
-def read_mesh(hdf, area=None, units=None, arrival_depth_ft=1.0, t0_hr=0.0, wet_ft=0.01,
+def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01,
               want_arrival=True):
     """The maximum results of a 2D flow area as a Mesh (fields depth, wse, velocity,
     arrival in ft, ft, ft/s, hours; time_of_max in hours when the file has it).
@@ -1028,7 +1028,7 @@ FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
 # 3.26.1: depth on the terrain of each grid cell (not the HEC cell's minimum)
 # ============================================================================
 def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
-                  arrival_depth_ft=1.0, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
+                  arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
                   want_arrival=True, reach=0.75):
     """The HEC-RAS maxima on a regular grid with depth from the terrain under each GRID cell.
 
@@ -1186,7 +1186,7 @@ def _cell_acres(grid):
 
 
 def reexport_results(hdf, terrain=None, out_dir=None, dam_folder=None, like=None, area=None,
-                     units=None, arrival_depth_ft=1.0, t0_hr=0.0, terrain_z=None,
+                     units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, terrain_z=None,
                      overwrite=False, log=None):
     """Re-make the HEC-RAS rasters of a finished plan HDF (no HEC-RAS run) with depth = the
     nearest cell's max WSE minus the terrain averaged onto each grid cell (terrain_depth), the

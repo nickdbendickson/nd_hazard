@@ -51,10 +51,10 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .units import FT, MILE, ACFT, CFS
+from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.26.2"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.26.3"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -147,7 +147,7 @@ class RunSettings:
         self.planning_cell_m = 30.0
         self.manning_n = 0.06
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
-        self.arrival_depth_ft = 1.0
+        self.arrival_depth_ft = ARRIVAL_DEPTH_FT
         self.edge_tolerance_ft = 1.0
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0

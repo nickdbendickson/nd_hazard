@@ -9,6 +9,12 @@ ACFT = 1233.48183754752        # m3 per acre-foot
 CFS = 0.028316846592           # m3/s per ft3/s
 G = 9.80665                    # m/s2
 
+# Default arrival depth (ft): arrival time is when the depth first exceeds this, and it is
+# also the 'flooded' depth of the run summary. 0.1 ft is the ND hazard wet threshold, so every
+# wet structure gets an arrival time (REG_05.2026 5.4(c)); it was 1 ft before Runner 3.26.3.
+# Same value as DWR_Plugins Runner 3.10.45 (#131).
+ARRIVAL_DEPTH_FT = 0.1
+
 
 def ft_to_m(v):
     return None if v is None else float(v) * FT

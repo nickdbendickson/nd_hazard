@@ -282,7 +282,7 @@ def hecras_reexport_cli_is_registered():
     ns = cli.build_parser().parse_args(["hecras-reexport", "/x.p01.hdf", "--out", "/y",
                                         "--dam-folder", "/d", "--t0-hr", "1.5"])
     assert ns.func is cli.cmd_hecras_reexport and ns.hdf == "/x.p01.hdf" and ns.out == "/y"
-    assert ns.dam_folder == "/d" and ns.t0_hr == 1.5 and ns.arrival_depth_ft == 1.0
+    assert ns.dam_folder == "/d" and ns.t0_hr == 1.5 and ns.arrival_depth_ft == 0.1
 
 
 @test

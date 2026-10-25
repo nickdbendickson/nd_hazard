@@ -19,7 +19,7 @@ import os
 import numpy as np
 
 from . import conditioning as cond
-from .units import FT, MILE, CFS
+from .units import FT, MILE, CFS, ARRIVAL_DEPTH_FT
 
 # v3.2.0: one EAP map - ND Dam Hazard's map book; this tool's SVG is a preview
 EAP_PREVIEW_NAME = "EAP Inundation Map (preview).svg"
@@ -778,7 +778,7 @@ def write_html_report(report, model_dir, res):
     return out
 
 
-def products_from_rasters(folder, dam_id, dam_xy, arrival_depth_ft=1.0, contours_hr=(0.5, 1, 2, 4, 8),
+def products_from_rasters(folder, dam_id, dam_xy, arrival_depth_ft=ARRIVAL_DEPTH_FT, contours_hr=(0.5, 1, 2, 4, 8),
                           name="", out_folder=None, eap_map=EAP_AUTO):
     """Flood polygons, arrival zones, GeoPackage and EAP map made from the
     'Depth (Max).tif', 'Arrival Time.tif' (and optionally velocity, WSE) in a
