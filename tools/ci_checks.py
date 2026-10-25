@@ -8,7 +8,7 @@ QGIS/GDAL install, so they can gate every PR cheaply:
                        damsuite SUITE_VERSION is identical across every copy
      release table   — the vendored damsuite RELEASE is identical across every copy and equals
                        each plugin's metadata.txt version
-  3. compile        — py_compile every .py in the suite (catches a syntax error from a bad merge
+  3. compile         — py_compile every .py in the suite (catches a syntax error from a bad merge
                        across all plugins in seconds, without importing anything)
   4. shared/ui       — every plugin copy of the shared window files matches shared/ui/, and no
                        window code writes a #rrggbb colour outside tokens.py (docs/gui-grammar.md)
