@@ -559,8 +559,9 @@ class _Base(QgsProcessingAlgorithm):
         self._text("NLCD_N", "NLCD: your own n for some classes, JSON like {\"82\": 0.05}",
                    advanced=True)
         self._num("ARRIVAL_FT", "Arrival depth (ft): arrival time is when the depth first "
-                  "exceeds this (starting value 0.1 is the ND hazard wet depth, so every wet "
-                  "structure gets an arrival time; a screening value you choose)",
+                  "exceeds this; also the depth counted as flooded in the run summary and "
+                  "receptors flooded (starting value 0.1 is the ND hazard wet depth, so every "
+                  "wet structure gets an arrival time; a screening value you choose)",
                   ARRIVAL_DEPTH_FT, minimum=0.01)
         self._num("EDGE_TOL_FT", "Extend the domain while the flood leaves an edge deeper "
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",

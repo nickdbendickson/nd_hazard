@@ -1,12 +1,16 @@
 """3.26.3: the arrival depth (ARRIVAL_FT) defaults to 0.1 ft, the ND hazard wet depth, not 1 ft.
 
-Same change as DWR_Plugins Runner 3.10.45 (#131). One constant, core/units.ARRIVAL_DEPTH_FT,
-feeds every default: RunSettings, hecras.read_mesh / terrain_depth / reexport_results, Breach
-products from rasters, the LISFLOOD-FP and ANUGA settings, the CLI JSON template and
-'hecras-reexport --arrival-depth-ft', and the Run a dam, HEC-RAS import and Breach products tools.
-A structure flooded 0.1-1 ft deep now gets an arrival time (it had none at 1 ft)."""
+Same change as DWR_Plugins Runner 3.10.53 (#131, numbered 3.10.45 on its branch). One constant,
+core/units.ARRIVAL_DEPTH_FT, feeds every default: RunSettings, hecras.read_mesh / terrain_depth /
+reexport_results, Breach products from rasters, the LISFLOOD-FP and ANUGA settings, the CLI JSON
+template and 'hecras-reexport --arrival-depth-ft', and the Run a dam, HEC-RAS import and Breach
+products tools. A structure flooded 0.1-1 ft deep now gets an arrival time (it had none at 1 ft)."""
+import csv
 import inspect
+import json
 import os
+import shutil
+import tempfile
 
 import numpy as np
 
@@ -105,3 +109,82 @@ def v3263_shallow_cells_get_an_arrival_time_at_the_default():
     m = hecras.read_mesh(src)
     assert m.info["arrival_depth_ft"] == 0.1
     assert np.isfinite(m.fields["arrival"][np.isfinite(m.fields["depth"])]).all()
+
+
+@test
+def v3263_lisflood_workflow_shallow_cells_and_structures_get_an_arrival_time():
+    """The LISFLOOD-FP workflow (run_dam) at the default and at the old 1 ft, with the model
+    stubbed: lf.run writes nothing and lf.read_results returns a flood whose arrival, as
+    LISFLOOD-FP's .inittm does, is the first time the depth reaches the .par's inittm_depth.
+    Depth falls from 2 ft at the dam to 0 at 1,200 m, so the cells and structures 590-1,140 m
+    out are flooded 0.1-1 ft. At the default they get an arrival time and are counted in
+    receptors_flooded; at 1 ft they are not."""
+    from nd_breach_runner.core import breach as br, impacts
+    from nd_breach_runner.tests.synthetic import SyntheticTerrain, npy_writer
+    seen = {}
+
+    def fake_run(wd, par, st, progress=None, cancel=None, log=None, name="run"):
+        seen["par"] = open(par, encoding="utf-8").read()
+        return 60.0
+
+    def fake_read(wd, dem, st, hydrograph, name="run"):
+        X, Y = np.meshgrid(dem.x_centers(), dem.y_centers())
+        depth = np.where((X > 0) & (np.abs(Y) < 300), 0.6 * (1.0 - X / 1200.0), np.nan)
+        depth = np.where(depth > 0.001, depth, np.nan)
+        h = st.arrival_depth_m                    # the inittm_depth the workflow wrote
+        arr = np.where(depth >= h, X / 3600.0 + 0.5 * h / depth, np.nan)
+        stats = {"cells": int(dem.data.size), "cell_size_m": dem.dx, "sim_time_hr": 4.0,
+                 "max_volume_error_pct": 0.1}
+        wet = np.isfinite(depth)
+        return lisflood.Envelopes(
+            dem.like(depth, np.nan), dem.like(np.where(wet, 1.0, np.nan), np.nan),
+            dem.like(arr, np.nan), dem.like(np.where(wet, dem.data + depth, np.nan), np.nan),
+            stats, [], {})
+
+    shallow_xy = [(700.0, 0.0), (850.0, 100.0), (1000.0, -100.0)]  # 0.82, 0.57, 0.33 ft
+    deep_xy = [(200.0, 0.0)]                                         # 1.64 ft
+
+    def run(folder, **k):
+        rec = impacts.Receptors()
+        rec.add_points(shallow_xy + deep_xy, ids=["S1", "S2", "S3", "D1"])
+        st = workflow.RunSettings(cell_size_m=20.0, initial_length_mi=1.0, half_width_mi=0.5,
+                                  max_iterations=1, sim_time_hr=4.0,
+                                  lisflood_exe=lisflood.BUILTIN_EXE, **k)
+        st.receptors = rec
+        dam = br.DamData(dam_id="T1", dam_height_ft=25.0, storage_top_acft=500.0,
+                         top_of_dam_ft=1850.0, surface_area_top_ac=60.0)
+        r = workflow.run_dam(dam, (0.0, 0.0), st, SyntheticTerrain(), npy_writer, folder)
+        arr = np.load(os.path.splitext(r.final["arrival"])[0] + ".npy")
+        g = json.load(open(os.path.splitext(r.final["arrival"])[0] + ".json"))
+        at = [arr[int((g["y0"] - y) // g["dx"]), int((x - g["x0"]) // g["dx"])]
+              for x, y in shallow_xy]
+        return r, np.array(at), seen["par"]
+
+    old = (lisflood.run, lisflood.read_results)
+    lisflood.run, lisflood.read_results = fake_run, fake_read
+    d = tempfile.mkdtemp(prefix="v3263_")
+    try:
+        r, at, par = run(os.path.join(d, "new"))
+        r1, at1, par1 = run(os.path.join(d, "old"), arrival_depth_ft=1.0)
+    finally:
+        lisflood.run, lisflood.read_results = old
+    assert "inittm_depth {:.4f}".format(0.1 * FT) in par, par
+    assert "inittm_depth {:.4f}".format(1.0 * FT) in par1, par1
+    # the arrival raster: the shallow cells have a time at the default, none at 1 ft
+    assert np.isfinite(at).all(), at
+    assert np.isnan(at1).all(), at1
+    # receptors_flooded and the structure count: all four at the default, only the deep one
+    assert r.summary["receptors_flooded"] == "4 structures", r.summary.get("receptors_flooded")
+    assert r1.summary["receptors_flooded"] == "1 structure", r1.summary.get("receptors_flooded")
+    rec = json.load(open(r.report_json))["receptors"]
+    assert rec[impacts.KIND_STRUCTURE]["flooded"] == 4, rec
+    rows = {row["id"]: row for row in csv.DictReader(open(r.receptor_csv))}
+    assert set(rows) == {"S1", "S2", "S3", "D1"}, rows
+    assert all(rows[i]["arrival_hr"] != "" for i in ("S1", "S2", "S3")), rows
+    assert all(float(rows[i]["depth_ft"]) < 1.0 for i in ("S1", "S2", "S3")), rows
+    rows1 = {row["id"] for row in csv.DictReader(open(r1.receptor_csv))}
+    assert rows1 == {"D1"}, rows1
+    # the run summary's flooded area at the arrival depth grows with it
+    assert r.summary["flooded_acres_over_arrival_depth"] > \
+        r1.summary["flooded_acres_over_arrival_depth"], (r.summary, r1.summary)
+    shutil.rmtree(d, ignore_errors=True)

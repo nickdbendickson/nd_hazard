@@ -12,7 +12,7 @@ G = 9.80665                    # m/s2
 # Default arrival depth (ft): arrival time is when the depth first exceeds this, and it is
 # also the 'flooded' depth of the run summary. 0.1 ft is the ND hazard wet threshold, so every
 # wet structure gets an arrival time (REG_05.2026 5.4(c)); it was 1 ft before Runner 3.26.3.
-# Same value as DWR_Plugins Runner 3.10.45 (#131).
+# Same value as DWR_Plugins Runner 3.10.53 (#131, numbered 3.10.45 on its branch).
 ARRIVAL_DEPTH_FT = 0.1
 
 

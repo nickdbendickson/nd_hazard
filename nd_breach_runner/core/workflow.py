@@ -1133,6 +1133,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         over = [e for e in terrain.EDGES if edges[e] > tol_m]
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
+        # arrival at the arrival depth (0.1 ft by default since 3.26.3, was 1 ft), not
+        # EDGE_TOL_FT: a thin front still creeping late keeps the run going
         still_moving = arr_max > 0.9 * sim_time / 3600.0
         rec = {"run": it, "bounds": [round(b, 1) for b in bounds],
                "size_mi": [round((bounds[2] - bounds[0]) / MILE, 2),
