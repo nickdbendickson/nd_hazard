@@ -5,10 +5,15 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.34.3
+version=2.34.4
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.34.4 (2026-10-25; HEC-RAS plan import: arrival per pixel)
+      * HEC-RAS plan import: Arrival_hr is now per pixel - the cell's water-surface series
+        minus the pixel's terrain, interpolated between output steps, time of the maximum as
+        fallback - and only where depth >= the arrival depth (default 0.1 ft). Plans
+        converted before are converted again.
     2.34.3 (2026-10-23; model-extent check sees the Runner's own grid)
       * Model-extent check: it now recognises an ND Dam Breach Runner result's own model
         domain next to the depth raster (_breach_model/run_report.json), so a LISFLOOD-FP grid
