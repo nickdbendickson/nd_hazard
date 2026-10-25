@@ -5,6 +5,119 @@ with **LISFLOOD-FP** and, optionally, **ANUGA**, following the North Dakota Dam 
 Standards Policy (REG_05.2026). It writes the rasters the ND hazard classification plugin
 reads:
 
+## New in 3.26.1: HEC-RAS results imported before 3.26.1 are too deep and too wide, so re-export them
+
+**Who needs this.** Anyone who turned a HEC-RAS 2D plan into rasters with *Import HEC-RAS 2D
+results as rasters* (`ndbreach:hecrasimport`) before 3.26.1, or who runs it in 3.26.1 without
+the new Terrain input. That covers `<dam folder>/_hecras/HECRAS Depth (Max).tif` and the other
+`HECRAS *.tif` rasters, plus any depth, flooded area, structure count or hazard class worked out
+from them, including the benchmark against the Runner's own run. LISFLOOD-FP and ANUGA results
+aren't affected.
+
+**What was wrong.** HEC-RAS works on large cells (150 ft on DWR-2801), and each cell has one
+water surface. The import tool turns those cells into pixels on the dam folder's grid. Before
+3.26.1, each pixel's depth was the cell's highest water surface minus the *lowest* ground point
+anywhere in that cell (HEC-RAS's "Cells Minimum Elevation"). So when a cell held a ditch, a
+stream channel or a culvert outlet, every pixel in it got the ditch's depth, even where the
+ground was a few feet higher. The wet area and the arrival time used that same depth. As a result:
+- **Depths were too high** across most cells that hold a low spot.
+- **The flooded area was too large**, because pixels on higher ground counted as wet or at 1 ft
+  or more.
+- **Structures, roads and rail looked deeper than they were**, so they could land in a worse
+  danger zone or count as flooded when they weren't.
+- **Arrival came too early** on higher ground inside such a cell.
+
+The HEC-RAS model itself was fine. The error was only in how its results were read.
+
+**An example: DWR-2801** (from the DWR Runner, which had the same error and got the same fix in
+DWR_Plugins #173), over the area both models cover (51,387 ac):
+
+| | Before the fix | With the fix | ANUGA |
+|---|---|---|---|
+| Area at ≥ 1 ft | 5,060 ac | **1,923 ac** | 1,960 ac |
+| Area at ≥ 0.1 ft | 17,420 ac | 8,843 ac | 6,718 ac |
+| Wet area | 18,727 ac | 10,657 ac | 8,290 ac |
+
+The 2 lethal and 16 judgment structures behind HEC-RAS's ACER TM 11 High class there came from
+this error. The fix doesn't remove real differences between the models. On DWR-2801, HEC-RAS
+still arrives earlier at Casselton and loses more volume.
+
+**What 3.26.1 does.**
+- **Depth from the terrain.** Give the import tool the terrain the HEC-RAS model used. Each
+  pixel then gets the highest water surface of its nearest HEC-RAS cell, minus that terrain
+  averaged onto the pixel. Depth never goes below 0. A pixel inside the mesh with no terrain
+  falls back to the old lowest-point depth, and a note gives the number of pixels.
+- **Wet area on the same depth.** A pixel is wet at 0.01 ft or more, and the depth, water
+  surface, velocity and time-of-max rasters are blank where it is dry.
+- **Arrival per pixel, on the same depth.** Arrival is the first time the cell's water surface
+  over time, minus that pixel's terrain, reaches the arrival depth. It's interpolated between
+  output times and counted from the time of breach initiation. Only pixels whose maximum depth
+  reaches the arrival depth get an arrival time. A pixel that reaches it only between two output
+  times gets the cell's time of the maximum instead, and a note gives the number of pixels. The
+  arrival depth is the tool's *Arrival depth* (`ARRIVAL_FT`) or the re-export's
+  `--arrival-depth-ft`, 0.1 ft by default in both (1 ft before 3.26.3).
+- **The method is recorded** as `depth_basis`: `terrain` (from the terrain) or `cell_min` (the old
+  lowest-point depth).
+
+**The import tool's new Terrain input.** *Import HEC-RAS 2D results as rasters* has a new
+optional **Terrain** input ("Terrain the HEC-RAS model used", `TERRAIN`). Give it the model's
+terrain GeoTIFF, normally `<HEC-RAS project>/Terrain/<name> Terrain.tif`. Don't use HEC-RAS's
+processed `Terrain.<name>.tif` copies. Leave it empty and the results are the same as before
+3.26.1, and the log adds the warning "Check: No terrain given: depth is the water surface minus
+each cell's minimum elevation, so a ditch deepens its whole cell."
+
+**Check which method a result used.**
+- **A re-export** (below): open `reexport.json` in its folder and look at `depth_basis`. It's
+  `"terrain"` when the depth came from the terrain. The command line also prints
+  `Depth basis: terrain`. From a terminal:
+  `python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['depth_basis'])" "DAM_FOLDER/_hecras/reexport_<UTC>/reexport.json"`
+- **An import tool run**: the import tool writes no file with `depth_basis`, so check its log. With
+  the Terrain input given there is no "No terrain given" warning. With that warning, the result is
+  `cell_min`.
+- **`_hecras/HECRAS *.tif` made before 3.26.1**, or any you can't trace to a terrain import or a
+  re-export, use the old lowest-point depth. Re-import them with Terrain, or re-export them.
+
+**Re-export an old result (HEC-RAS doesn't run again).** The re-export reads the finished plan HDF
+(`.p##.hdf`) and the model terrain again and writes new rasters.
+- **Command line:**
+  `python3 nd_breach_runner/scripts/ndbreach_cli.py hecras-reexport PLAN.hdf --dam-folder DAM_FOLDER`
+- **Python** (QGIS Python console, or any Python with numpy, h5py and GDAL):
+  `from nd_breach_runner.core import hecras; hecras.reexport_results("PLAN.p01.hdf", dam_folder="DAM_FOLDER")`
+- **The grid.** It needs a grid to write on: the dam folder's `Depth (Max).tif`, else its
+  `_hecras/HECRAS Depth (Max).tif`, else a raster given with `--grid` (`like=` in Python). With
+  just `PLAN.hdf` and no dam folder or grid, it stops and asks for one. The HDF, the terrain and
+  the grid must use the same coordinate system.
+- **The terrain.** By default it takes the first `Terrain/*.tif` in the HDF's folder or the folder
+  above it, skipping HEC-RAS's `Terrain.*.tif` copies. Give `--terrain` (`terrain=`) to choose one.
+- **What it writes.** It writes `HECRAS Depth (Max).tif`, `HECRAS Velocity (Max).tif`,
+  `HECRAS Arrival Time.tif`, `HECRAS WSE (Max).tif`, `HECRAS Time of Max WSE.tif` (each where the
+  HDF has the data) and `reexport.json` to a new folder,
+  `DAM_FOLDER/_hecras/reexport_<UTC time>`. With no dam folder, that folder goes next to the HDF.
+  `reexport.json` records the inputs, `depth_basis`, the pixels without terrain
+  (`no_terrain_cells`) and the areas both ways (`areas_old_cell_min` and `areas_new`: wet,
+  ≥ 0.1 ft and ≥ 1 ft, in acres). The command also prints the wet area both ways.
+- **It doesn't touch your existing results.** The rasters already in the dam folder and in
+  `_hecras` stay as they are. If the output folder already holds any of these files, it stops,
+  unless you add `--overwrite` (`overwrite=True`).
+- **Options:** `--out DIR` (the output folder), `--terrain`, `--grid`, `--area` (the 2D flow
+  area, default the first), `--units us|si`, `--terrain-z` (the terrain's elevation unit: `auto`,
+  `feet`, `us_feet` or `meters`, default read from the raster), `--t0-hr` (the plan hour that
+  arrival counts from, as the import tool's time of breach initiation) and `--arrival-depth-ft`
+  (default 1 ft).
+
+**Rerun Hazard afterwards.** Run the ND hazard classification (this plugin's *ND hazard
+classification (Section 5.2)* or the ND Dam Hazard Classification Helper) again on the new
+rasters. Point its depth, velocity and arrival inputs at the files in the `reexport_<UTC time>`
+folder, or at the re-import. Treat any classification, structure count, benchmark or map made
+from the old HEC-RAS rasters as out of date.
+
+**Hazard Helper's own HEC-RAS plan import** (`ND_Dam_Hazard_Helper/rasimport.py`, the HEC-RAS
+plan tab) is a separate fix, Hazard 2.34.4 (nd_hazard #14). With a terrain it already took depth
+from the terrain, but its arrival came from each cell's lowest point. In 2.34.4, arrival is per
+pixel from the terrain, interpolated, with the time-of-max fallback, and plans converted before
+are converted again. Without a terrain raster, its depth still comes from each cell's lowest
+point, so give it the terrain.
+
 ## New in 3.20.0
 
 Everything the 2026-10 walk-through and review asked for. **No number in an existing run
@@ -437,14 +550,14 @@ DEM*, *Manning's n from NLCD*, *Preview the DEM conditioning*.
 
 **Exchange with HEC-RAS**: *Compare with a reference model*, *Export to HEC-RAS*
 (hydrograph as a `.u##` block plus the breach table), *Import HEC-RAS results* (2D plan HDF
-to rasters).
+to rasters; give it the model's terrain, see "New in 3.26.1").
 
 **Trust**: *Verify a run manifest*, *Verification against analytical solutions* (Ritter, Stoker,
 Manning normal depth, mass balance, radial symmetry), *Validation record (Word)*, *Check the
 model installation*, *Self-test in this QGIS*.
 
 **Without QGIS**: `scripts/ndbreach_cli.py` (`run`, `batch`, `hydrograph`, `estimate`, `check`,
-`selftest`, `template`) runs the same workflow from a JSON configuration.
+`selftest`, `template`, `hecras-reexport`) runs the same workflow from a JSON configuration.
 `scripts/install_macos.sh` checks for and installs the pieces on a Mac.
 
 ## How a run works
