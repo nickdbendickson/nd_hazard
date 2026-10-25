@@ -6,7 +6,8 @@
 or `python3 ND_Dam_Hazard_Helper/tests/run_tests.py` from anywhere. A real PyQGIS on the
 interpreter is used when it imports (QT_QPA_PLATFORM=offscreen helps); otherwise
 tests/fake_qgis.py stands in. Every tests/test_*.py registers its tests through
-tests/registry.py; the exit code is the number of failures (0 = all passed)."""
+tests/registry.py; a test that cannot run here raises registry.Skip ('skip', not 'ok'); the
+exit code is the number of failures (0 = all passed)."""
 import importlib
 import os
 import pkgutil
@@ -20,7 +21,7 @@ if os.path.dirname(PLUGIN_DIR) not in sys.path:
 PACKAGE = os.path.basename(PLUGIN_DIR)
 
 from ND_Dam_Hazard_Helper.tests import fake_qgis  # noqa: E402
-from ND_Dam_Hazard_Helper.tests.registry import TESTS  # noqa: E402
+from ND_Dam_Hazard_Helper.tests.registry import TESTS, Skip  # noqa: E402
 
 
 def _load_test_modules():
@@ -38,16 +39,20 @@ def main(argv=None):
     _load_test_modules()
     only = [a for a in argv if not a.startswith("-")]
     todo = [fn for fn in TESTS if not only or any(o in fn.__name__ for o in only)]
-    failed = 0
+    failed = skipped = 0
     for fn in todo:
         try:
             fn()
             print("ok    ", fn.__name__)
+        except Skip as e:                       # 2.34.5: ran nothing here - not 'ok'
+            skipped += 1
+            print("skip  ", fn.__name__, "({})".format(e))
         except Exception:
             failed += 1
             print("FAIL  ", fn.__name__)
             traceback.print_exc()
-    print("\n{} tests, {} failed".format(len(todo), failed))
+    print("\n{} tests, {} failed{}".format(len(todo), failed, ", {} skipped".format(skipped)
+                                            if skipped else ""))
     return failed
 
 

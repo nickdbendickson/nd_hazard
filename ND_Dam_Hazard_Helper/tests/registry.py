@@ -3,6 +3,11 @@
 TESTS = []
 
 
+class Skip(Exception):
+    """2.34.5: raised by a test that cannot run here (e.g. it needs a real PyQGIS) - the runner
+    reports it as 'skip', never 'ok'."""
+
+
 def test(fn):
     TESTS.append(fn)
     return fn

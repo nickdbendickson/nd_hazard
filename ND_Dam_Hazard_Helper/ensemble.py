@@ -476,15 +476,18 @@ def dam_settings(dam_folder, base_cfg=None, config_json=None, downloads=False):
         local = dict(kw.get("local_data") or {})
         multi = []
         # 2.34.5: every file of a role, in one shape ([[path, category], ...]); a gone or
-        # unreadable entry is a note
+        # unreadable entry is a note; a record without the inputs_format marker (either fork)
+        # is put as the run read it first, from the whole record (a gone file is not replaced)
         from .datafolder import MULTI_SOURCE_ROLES
-        old_record = REP._version_tuple(rec.get("plugin_version")) < (2, 34, 5)
+        as_run = REP.inputs_as_run(rec)
         for role, spec in (rec.get("inputs") or {}).items():
             if role in local:
                 continue
             items, problems = REP._input_items(spec)
             for prob in problems:
                 notes.append("Data '{}' of the dam's run: {} - not used".format(role, prob))
+            if not as_run:
+                items = REP._old_inputs_as_run(role, items, notes)
             keep = []
             for pth, cat in items:
                 if pth and os.path.exists(REP.split_source(pth)[0]):
@@ -492,8 +495,6 @@ def dam_settings(dam_folder, base_cfg=None, config_json=None, downloads=False):
                 else:
                     notes.append("Data '{}' the dam's run read is gone: {} - not used".format(
                         role, pth))
-            if role == "aadt" and old_record and len(keep) > 1:
-                keep = REP._traffic_as_run(keep, notes)
             if not keep:
                 notes.append("Data '{}' the dam's run read is gone - not used".format(role))
                 continue

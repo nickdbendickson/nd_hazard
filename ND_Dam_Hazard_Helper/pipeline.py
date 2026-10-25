@@ -2232,17 +2232,26 @@ def _used_inputs(cfg, got, loc):
         if path:
             used.setdefault(role, []).append((path, cat) if cat else path)
     try:
-        # 2.34.5: the traffic counts and crossings in the order the run reads them, and
-        # only those it reads (_traffic_layers: the newest HPMS year that answered, else
-        # NDDOT, plus the county roads) - a reproduction hands them over as they are
+        # 2.34.5: the data-folder layers first - the run reads them before its downloads (a
+        # role is downloaded only without them; the lifelines are read from both)
+        from . import datafolder as DF
+        for role, v in (cfg.get("local_data") or {}).items():
+            for uri, cat in DF.local_items(v)[0]:                # 2.34.5: any shape
+                add(role, DF._file_of_uri(uri) if isinstance(uri, str) else "", cat)
+        # 2.34.5: the traffic counts, crossings and lifelines in the order the run reads
+        # them, and only those it reads (_traffic_layers: the newest HPMS year that answered,
+        # else NDDOT, plus the county roads; _collect_facilities: NBI before OSM, the agency
+        # lifelines in lifeline_downloads() order before OSM) - a reproduction hands them
+        # over as they are (reproduce.INPUTS_FORMAT)
         ordered = [k for k in got if k.startswith("hpms_") and got[k] and got[k][0] is not None]
         ordered = sorted(ordered, reverse=True)[:1]
         nd = got.get("nddot")
         if not ordered and nd and nd[0] is not None and (len(nd) < 2 or nd[1]):
             ordered.append("nddot")
         ordered += ["county", "nbi", "xosm"]
-        skip = {"nddot", "county", "nbi", "xosm"}
-        for key in ordered + [k for k in got if k not in skip and not k.startswith("hpms_")]:
+        ordered += ["life_" + k for k, _l, _u, _c in lifeline_downloads()] + ["life_osm"]
+        for key in ordered + [k for k in got if k not in ordered and k != "nddot"
+                              and not k.startswith("hpms_")]:
             val = got.get(key)
             if not val or val[0] is None:
                 continue
@@ -2254,10 +2263,6 @@ def _used_inputs(cfg, got, loc):
             elif key.startswith("life_"):
                 cats = {k: c for k, _l, _u, c in lifeline_downloads()}
                 add("lifelines", path, cats.get(key[5:]))
-        from . import datafolder as DF
-        for role, v in (cfg.get("local_data") or {}).items():
-            for uri, cat in DF.local_items(v)[0]:                # 2.34.5: any shape
-                add(role, DF._file_of_uri(uri) if isinstance(uri, str) else "", cat)
     except Exception:                                    # noqa: BLE001 - a record only
         pass
     return used

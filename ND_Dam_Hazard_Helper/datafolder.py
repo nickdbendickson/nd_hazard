@@ -1471,7 +1471,8 @@ def open_config_all(local_data):
     """2.34.5: open EVERY layer of a local_data dict (to_config(), a reproduction's inputs
     lists, an old package's record - any shape local_items() takes): ({role: [(layer,
     category)]}, notes). A malformed entry, a file that no longer exists or does not open,
-    an unknown role or a role of which no file opened is a note - the caller logs each one
+    an unknown role or a role of which none of several files opened is a note (one note per
+    problem: a one-file role that fails has its file's note only) - the caller logs each one
     as a WARNING; nothing is left out silently."""
     layers, notes = {}, []
     for role, value in (local_data or {}).items():
@@ -1500,11 +1501,10 @@ def open_config_all(local_data):
             opened.append((lyr, cat))
         if opened:
             layers[role] = opened
-        elif items or problems:
+        elif len(items) + len(problems) > 1:     # one entry: its own note says it all
             n = len(items) + len(problems)
-            notes.append("{} ({}): none of its {} entr{} could be used - the role is NOT "
-                         "read from the data folder".format(role, label, n,
-                                                            "y" if n == 1 else "ies"))
+            notes.append("{} ({}): none of its {} entries could be used - the role is NOT "
+                         "read from the data folder".format(role, label, n))
     return layers, notes
 
 

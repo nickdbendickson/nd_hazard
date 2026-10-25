@@ -17,6 +17,11 @@ result comes out. Three parts:
                      sets the run actually read (download cache files in
                      outputs/_downloads, project layers' files). Roles:
                      INPUT_ROLES;
+     "inputs_format" 2 (INPUTS_FORMAT): "inputs" holds each role's files in the
+                     order the run read them, and only those (both forks:
+                     DamSafety Hazard 2.18.62, ND Hazard 2.34.5 and later); a
+                     record without it lists every download in the order the
+                     downloads finished (_old_inputs_as_run);
      "files"         other files the result depends on: the review decisions
                      (review_file; also when none existed: "exists" False),
                      the damage curves, the HCOM tables, the peak raster;
@@ -61,7 +66,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from . import history as HIS
-from .constants import PLUGIN_NAME, PLUGIN_VERSION, SUBDIR_QA
+from .constants import PLUGIN_NAME, PLUGIN_VERSION, SUBDIR_QA, LIFELINE_SOURCES
 
 RUN_SETTINGS_FILE = "Run_Settings.json"
 PACKAGE_SETTINGS_FILE = "Run_Settings_package.json"
@@ -69,6 +74,9 @@ CHECK_FILE = "Reproduction_Check.csv"
 CHECK_TEXT = "Reproduction_Check.txt"
 RUN_SETTINGS_FORMAT = "ND_Dam_Hazard_Helper/run_settings"
 FORMAT_VERSION = 1
+# 2.34.5: "inputs_format" of a record whose "inputs" are as the run read them (both forks write
+# it; a record without it - of either fork - is put in run order when it is read)
+INPUTS_FORMAT = 2
 HASH_MAX_BYTES = 1 << 30           # 1 GB: bigger files get size + date only
 DATA_DIR = "data"
 RECORD_DIR = "02_Method_and_record"
@@ -302,6 +310,7 @@ def run_settings_dict(cfg, used_inputs=None, profile=None, scenarios=None, hash_
     cfg = dict(cfg or {})
     out = {"format": RUN_SETTINGS_FORMAT, "format_version": FORMAT_VERSION,
            "plugin": PLUGIN_NAME, "plugin_version": PLUGIN_VERSION, "created": _now_iso(),
+           "inputs_format": INPUTS_FORMAT,
            "dam_name": cfg.get("dam_name") or os.path.basename(os.path.normpath(
                cfg.get("dam_folder") or cfg.get("output_folder") or "")) or "Dam",
            "settings": {}, "layers": {}, "point_sources": "auto", "scenarios": [],
@@ -776,11 +785,12 @@ _HPMS_RE = re.compile(r"^HPMS_ND_(\d{4})(?:_|$)", re.I)
 
 
 def _traffic_as_run(files, notes):
-    """2.34.5: the 'aadt' files of a record made before 2.34.5 hold EVERY traffic download
+    """2.34.5: the 'aadt' files of a record without INPUTS_FORMAT hold EVERY traffic download
     (NDDOT counts, the county roads, each HPMS year that answered) in download order, but the
     run read only the newest HPMS year (else NDDOT) plus the county roads, in that order
     (pipeline._traffic_layers). Hand over what the run read, in its order; files with other
-    names (a data folder's own) stay, after them."""
+    names (a data folder's own) stay, after them. `files`: the RECORDED files - a file the run
+    read that is gone now is then missing, never replaced by an older year."""
     def kind(p):
         b = os.path.basename(split_source(p)[0])
         m = _HPMS_RE.match(b)
@@ -804,7 +814,7 @@ def _traffic_as_run(files, notes):
         keep += [[p, c] for k, p, c in kinds if k[0] == "nddot"]
     keep += [[p, c] for k, p, c in kinds if k[0] == "county"]
     keep += [[p, c] for k, p, c in kinds if k[0] == "other"]
-    if drop or [k[1] for k in keep] != [p for p, _c in files]:
+    if drop or [k[0] for k in keep] != [p for p, _c in files]:
         notes.append("input 'aadt': handed over as the run read it (newest HPMS year, else "
                      "NDDOT counts, then the county roads){}".format(
                          "; recorded but not read by the run: " + ", ".join(
@@ -813,11 +823,66 @@ def _traffic_as_run(files, notes):
     return keep
 
 
-def _version_tuple(v):
+def _base_lower(path):
+    return os.path.basename(split_source(path)[0]).lower()
+
+
+def _bridge_rank(path):
+    """pipeline._collect_facilities reads the NBI download before the OSM crossings."""
+    b = _base_lower(path)
+    return 0 if b.startswith("nbi_bridges") else 1 if b.startswith("osm_crossings") else 2
+
+
+def _lifeline_rank(path):
+    """pipeline._collect_facilities reads the data-folder lifelines first, then the agency
+    downloads (lifeline_<key>_..., in LIFELINE_SOURCES order), then OpenStreetMap."""
+    b = _base_lower(path)
+    if b.startswith("osm_lifelines"):
+        return len(LIFELINE_SOURCES) + 1
+    for i, src in enumerate(LIFELINE_SOURCES):
+        if b.startswith("lifeline_{}_".format(src[0].lower())):
+            return i + 1
+    return 0
+
+
+def _order_as_run(role, files, rank, order, notes):
+    """[[path, category]] of `files` by rank(path) (equal ranks as recorded); a note when the
+    order changed."""
+    keep = [[p, c] for p, c in sorted(files, key=lambda pc: rank(pc[0]))]   # stable
+    if [k[0] for k in keep] != [p for p, _c in files]:
+        notes.append("input '{}': handed over in the order the run read it ({})".format(
+            role, order))
+    return keep
+
+
+def inputs_as_run(rec):
+    """2.34.5: True when the record's "inputs" are each role's files as the run read them, in
+    its order (INPUTS_FORMAT, written by both forks); False for any record without it, of
+    either fork (_old_inputs_as_run)."""
     try:
-        return tuple(int(x) for x in str(v).split("."))
+        return int((rec or {}).get("inputs_format") or 0) >= INPUTS_FORMAT
     except (TypeError, ValueError):
-        return ()
+        return False
+
+
+def _old_inputs_as_run(role, files, notes):
+    """2.34.5: the recorded files of one role of a record without INPUTS_FORMAT, put as the
+    run read them. Such a record lists the downloads in the order they FINISHED
+    (download.parallel_map), and the data-folder lifelines after them; the run reads the
+    traffic as _traffic_as_run, the NBI bridges before the OSM crossings and the lifelines
+    data folder - agency - OSM, and facilities.dedupe keeps the first of two duplicates.
+    Other roles as recorded."""
+    if len(files) < 2:
+        return files
+    if role == "aadt":
+        return _traffic_as_run(files, notes)
+    if role == "bridges":
+        return _order_as_run(role, files, _bridge_rank,
+                             "the NBI bridges, then the OpenStreetMap crossings", notes)
+    if role == "lifelines":
+        return _order_as_run(role, files, _lifeline_rank, "the data-folder layers, then the "
+                             "agency downloads, then OpenStreetMap", notes)
+    return files
 
 
 def _local_data_supported():
@@ -915,14 +980,18 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
     # ---- the data sets the run read
     # 2.34.5: ONE shape for every role - [[path, category or None], ...] - from any recorded
     # shape (old records: a path, or a list of paths and pairs); every file of a role is
-    # handed over (AADT, bridges, ... may come from several); an unreadable entry is missing
-    old_record = _version_tuple(rec.get("plugin_version")) < (2, 34, 5)
+    # handed over (AADT, bridges, ... may come from several); an unreadable entry is missing.
+    # A record without INPUTS_FORMAT (either fork) is put as the run read it first, from the
+    # whole record: a file the run read that is gone is missing, nothing takes its place
+    as_run = inputs_as_run(rec)
     local = {}
     for role, spec in sorted((rec.get("inputs") or {}).items()):
         what = "input '{}'".format(role)
         items, problems = _input_items(spec)
         for prob in problems:
             missing.append("{} - unreadable record entry: {}".format(what, prob))
+        if not as_run:
+            items = _old_inputs_as_run(role, items, notes)
         got = []
         for p, cat in items:
             full = R.source(p, what)
@@ -930,13 +999,12 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
                 missing.append("{} ({})".format(what, p))
                 continue
             got.append([full, cat])
-        if role == "aadt" and old_record and len(got) > 1:
-            got = _traffic_as_run(got, notes)
         if got:
             local[role] = got
         elif items or problems:
-            missing.append("{} - none of its {} file(s) is available: the role is NOT "
-                           "reproduced".format(what, len(items)))
+            n = len(items) + len(problems)
+            missing.append("{} - none of its {} entr{} is available: the role is NOT "
+                           "reproduced".format(what, n, "y" if n == 1 else "ies"))
     cfg["local_data"] = local
     if as_layers is None:
         as_layers = not _local_data_supported()

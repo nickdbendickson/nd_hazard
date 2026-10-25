@@ -13,11 +13,20 @@ changelog=
       * Reproduce: a role recorded as one file (roads, rail, NSI, USA Structures, ...) was
         skipped without a word, and a role with several files (AADT: HPMS + county roads;
         bridges: NBI + OSM) opened only its first. Now one shape for every role, old and
-        new packages alike, and every file is handed to the run. Old records' traffic is
-        reduced to what the run read (newest HPMS, else NDDOT, then the county roads).
+        new packages alike, and every file is handed to the run.
+      * Run_Settings.json says its inputs are as the run read them ("inputs_format": 2,
+        written by both forks - DamSafety Hazard 2.18.62 too): traffic, crossings and
+        lifelines in the order the run reads them. A record without it (either fork, e.g.
+        DamSafety Hazard 2.18.61) lists every download in the order it finished: reproduce
+        and the ensemble hand over what the run read - newest HPMS, else NDDOT, then the
+        county roads; NBI before the OSM crossings; data-folder, agency, then OSM lifelines
+        (the first of two duplicates is kept) - decided from the whole record, so a file the
+        run read that is gone is missing, never replaced by an older HPMS year.
       * AADT, bridges, NSI, address points, USA Structures, outlines and lifelines read
         every data-folder file. A missing, unreadable or malformed file is a WARNING in the
-        run log and the reproduction check ('Loaded' / 'Not loaded'), never a silent skip.
+        run log and the reproduction check ('Loaded' / 'Not loaded'), never a silent skip;
+        a one-file role is one warning. The review-package checklist (C13) names the
+        package data not loaded.
     2.34.4 (2026-10-25; HEC-RAS plan import: arrival per pixel)
       * HEC-RAS plan import: Arrival_hr is now per pixel - the cell's water-surface series
         minus the pixel's terrain, interpolated between output steps, time of the maximum as
