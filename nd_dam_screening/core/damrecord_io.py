@@ -169,11 +169,13 @@ AC_M2 = 4046.8564224
 STORAGE_KEYS = ("td_vw_m3", "cal_total_m3", "est_total_m3", "inv_max_m3")
 
 
-def tool8_values(attrs, class_field=None):
+def tool8_values(attrs, class_field=None, area_top_m2=None):
     """The dam record values of a screened dam. 0.26.0: besides the identity and the height, what
     ND Dam Breach Runner needs to start from the record alone (storage at the top of dam, surface
     area, crest length) and the dam point (attrs "_x", "_y", "_crs" when tool 8 adds them), so a
-    dam screened alone can be modelled from the Runner window without typing anything."""
+    dam screened alone can be modelled from the Runner window without typing anything.
+    area_top_m2 (0.32.4): the surface area at the top of dam from the tool-3 curve, worked out
+    exactly as tool 7b's hand-off does (core/handoff.area_for_runner); None writes no area."""
     v = identity(attrs, class_field)
     h = _num(attrs.get("height_m"))
     if h is not None and h > 0:
@@ -191,6 +193,10 @@ def tool8_values(attrs, class_field=None):
     # (core/handoff.py area_for_runner, "normal-pool areas are not passed"); do the same here,
     # so a dam modelled from the Runner window off dam.json gets the depth-squared default
     # (exponent 2) instead of a pool area read as the top-of-dam area.
+    # 0.32.4: the top-of-dam area from the tool-3 curve IS what the Runner wants, so it is written
+    # when tool 8 has it - the same number tool 7b sends as AREA_AC.
+    if area_top_m2 is not None and area_top_m2 > 0:
+        v["surface_area_ac"] = round3(area_top_m2 / ACRE_M2)
     crest = _num(attrs.get("crest_len_m"))
     if crest is not None and crest > 0:
         v["dam_length_ft"] = round3(crest / FT)
@@ -355,6 +361,29 @@ def estimate_notes(attrs):
     return out
 
 
+# 0.32.4: fields this tool may leave out on a later run because it no longer has a sound value.
+# Screening 0.32.2 and older wrote the normal-pool area as surface_area_ac; without this, a dam
+# screened again keeps that stale area and the Runner still reads it as the top-of-dam area.
+OWN_OPTIONAL = ("surface_area_ac",)
+
+
+def _drop_stale(rec, values):
+    """Remove an OWN_OPTIONAL field this tool wrote before and does not write now. A value from
+    another tool or the engineer is never touched. Returns log lines."""
+    log = []
+    for name in OWN_OPTIONAL:
+        if values.get(name) not in (None, ""):
+            continue
+        src = rec.sources.get(name) or {}
+        if name in rec.fields and src.get("tool") == TOOL:
+            old = rec.fields.pop(name)
+            rec.sources.pop(name, None)
+            log.append("dam.json: {} {!r} from screening {} removed (no top-of-dam value from "
+                       "this run; a normal-pool area is not the top-of-dam area)".format(
+                           name, old, src.get("version") or "?"))
+    return log
+
+
 def write(folder, values, result, version=None, create=True, data=None, field_notes=None):
     """Update <folder>/dam.json. Returns (path or None, [log lines]). create=False: nothing
     happens when the folder does not exist. 0.16.0: `data` {data role: path} - the files used,
@@ -375,6 +404,7 @@ def write(folder, values, result, version=None, create=True, data=None, field_no
                 if any(c.get("field") == name for c in rec.conflicts):
                     refused.append(name)
     refused += rec.set_many(values, TOOL, version, note="screening")
+    log += _drop_stale(rec, values)
     for name in refused:
         c = next((c for c in reversed(rec.conflicts) if c.get("field") == name), {})
         src = (c.get("old_source") or {}).get("tool") or "the engineer / unknown"
