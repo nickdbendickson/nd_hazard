@@ -9,6 +9,7 @@
     python3 ndbreach_cli.py run config.json            one dam, the same outputs as in QGIS
     python3 ndbreach_cli.py batch dams.csv config.json a table of dams, one at a time
     python3 ndbreach_cli.py selftest                   what works on this computer
+    python3 ndbreach_cli.py hecras-reexport PLAN.hdf   re-make HEC-RAS rasters on the terrain
 
 Run it with any Python that has numpy. GeoTIFF and other GDAL-readable DEMs need GDAL's Python
 bindings (`osgeo`), which QGIS's own Python has:
@@ -1474,6 +1475,28 @@ def cmd_selftest(args):
     return st.main(args.rest)
 
 
+def cmd_hecras_reexport(args):
+    """Re-make the HEC-RAS rasters of a finished plan HDF with depth from the terrain under
+    each grid cell (no HEC-RAS run)."""
+    hec = importlib.import_module(PKG + ".core.hecras")
+    try:
+        rep = hec.reexport_results(
+            args.hdf, terrain=args.terrain or None, out_dir=args.out or None,
+            dam_folder=args.dam_folder or None, like=args.grid or None,
+            area=args.area or None, units=args.units or None,
+            arrival_depth_ft=args.arrival_depth_ft, t0_hr=args.t0_hr,
+            terrain_z=args.terrain_z or None, overwrite=args.overwrite, log=say)
+    except hec.HecRasError as e:
+        raise CliError(str(e))
+    a, b = rep["areas_old_cell_min"], rep["areas_new"]
+    say("Depth basis: {}".format(rep["depth_basis"]))
+    say("Wet area: {:.1f} ac (was {:.1f} ac with the cell minimum)".format(
+        b["wet_ac"], a["wet_ac"]))
+    for n in rep.get("notes") or []:
+        say("Note: " + n)
+    return 0
+
+
 # -- batch -----------------------------------------------------------------------------
 def read_dams_table(path):
     """(headers, rows) of the dams CSV."""
@@ -1727,6 +1750,23 @@ def build_parser():
     p = sub.add_parser("selftest", help="test GDAL, the models and a small run on this computer")
     p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/selftest.py")
     p.set_defaults(func=cmd_selftest)
+    p = sub.add_parser("hecras-reexport", help="re-make the HEC-RAS rasters of a finished "
+                       "plan HDF with depth from the terrain (no HEC-RAS run)")
+    p.add_argument("hdf", metavar="PLAN.hdf")
+    p.add_argument("--terrain", default="", help="the model's terrain GeoTIFF (default "
+                   "<project>/Terrain/*.tif next to the HDF)")
+    p.add_argument("--dam-folder", default="", help="its Depth (Max).tif sets the grid; "
+                   "output goes to <dam folder>/_hecras/reexport_<UTC>")
+    p.add_argument("--grid", default="", help="raster whose grid to write on")
+    p.add_argument("--out", default="", help="output folder (default a new one)")
+    p.add_argument("--area", default="", help="the 2D flow area (default the first)")
+    p.add_argument("--units", default="", choices=["", "us", "si"])
+    p.add_argument("--terrain-z", default="", help="terrain elevation unit (default from "
+                   "the raster: auto, feet, us_feet, meters)")
+    p.add_argument("--t0-hr", type=float, default=0.0, help="arrival counted from this hour")
+    p.add_argument("--arrival-depth-ft", type=float, default=1.0)
+    p.add_argument("--overwrite", action="store_true", help="replace existing rasters in --out")
+    p.set_defaults(func=cmd_hecras_reexport)
     return ap
 
 

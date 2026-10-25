@@ -40,6 +40,8 @@ System'); the default, when none is found, is US customary. Everything returned 
 ft/s and hours.
 """
 import csv
+import datetime
+import json
 import math
 import os
 import re
@@ -62,6 +64,11 @@ BASIS_ASSUME = "Plugin assumption"
 BASIS_BLANK = "Blank: you enter it"
 BASIS_NONE = "Not given by this method"
 BASIS_REF = "Reference only"
+
+
+# 3.26.1: what the depth is measured from (info['depth_basis'])
+DEPTH_BASIS_TERRAIN = "terrain"     # WSE minus the terrain under each grid cell (terrain_depth)
+DEPTH_BASIS_CELL_MIN = "cell_min"   # WSE minus the HEC cell's minimum elevation (read_mesh)
 
 
 class HecRasError(ValueError):
@@ -606,6 +613,11 @@ class Mesh:
         self.info = info
         self.crs_wkt = crs_wkt
         self._nn = None
+        # 3.26.1: per-cell values before the cell wet mask (US units): 'wse' (max WSE),
+        # 'min_elev' (Cells Minimum Elevation), 'velocity', 'time_of_max' when known.
+        # terrain_depth uses them with the terrain under each grid cell.
+        self.raw = {}
+        self._series = None           # (dataset, times h, file->ft factor) while the file is open
 
     @property
     def n(self):
@@ -630,7 +642,12 @@ def read_mesh(hdf, area=None, units=None, arrival_depth_ft=1.0, t0_hr=0.0, wet_f
     units: None to read them from the file (default US when absent), 'us' or 'si'.
     Cells drier than `wet_ft` are NaN in every field. Arrival is the first time the depth
     reaches `arrival_depth_ft` (interpolated between output steps) minus `t0_hr`, from the
-    Water Surface time series; without it there is no arrival."""
+    Water Surface time series; without it there is no arrival.
+
+    The depth here is per CELL: the water surface minus the cell's MINIMUM elevation (its
+    lowest subgrid point), so a large cell with a ditch has the ditch's depth everywhere.
+    For mapped results use terrain_depth (3.26.1), which measures from the terrain under
+    each grid cell; this per-cell depth stays for cell diagnostics and as its fallback."""
     f, close = _open_hdf(hdf)
     try:
         return _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival)
@@ -720,45 +737,66 @@ def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival):
                      "Cell Indexes', or a per-cell maximum velocity); no velocity raster.")
 
     # time of the maximum, and the arrival time from the time series
+    tmax = None
     if t_max_raw is not None:
-        fields["time_of_max"] = masked(_clean(t_max_raw[:n]) * _time_factor_hr(
-            cat, lay["max_wse"][0], lay["max_wse"][1]))
-    if want_arrival and lay["ts_wse"] is not None and lay["ts_time"] is not None:
+        tmax = _clean(t_max_raw[:n]) * _time_factor_hr(cat, lay["max_wse"][0], lay["max_wse"][1])
+        fields["time_of_max"] = masked(tmax)
+    series = None
+    if lay["ts_wse"] is not None and lay["ts_time"] is not None:
         tobj = lay["ts_time"]
         t_hr = np.asarray(_read(tobj[1]), dtype=np.float64).reshape(-1) * _time_factor_hr(
             cat, tobj[0], tobj[1])
         sh = lay["ts_wse"][1].shape
         if len(sh) == 2 and sh[0] == len(t_hr) and sh[1] >= n:
-            thr = float(arrival_depth_ft) / _unit_factor(u_wse)
-            arr = _first_reach(lay["ts_wse"][1], t_hr, elev_raw * _unit_factor(u_elev)
-                               / _unit_factor(u_wse), thr, n) - float(t0_hr)
-            fields["arrival"] = masked(np.clip(arr, 0.0, None))
-            used["arrival"] = lay["ts_wse"][0]
-        else:
+            series = (lay["ts_wse"][1], t_hr, _unit_factor(u_wse))
+            used["series"] = lay["ts_wse"][0]
+        elif want_arrival:
             notes.append("The Water Surface time series has shape {} for {} times and {} "
                          "cells; no arrival time.".format(sh, len(t_hr), n))
-    elif want_arrival:
+    if want_arrival and series is not None:
+        ts, t_hr, fac = series
+        thr = float(arrival_depth_ft) / fac
+        arr = _first_reach(ts, t_hr, elev / fac, thr, n) - float(t0_hr)
+        fields["arrival"] = masked(np.clip(arr, 0.0, None))
+        used["arrival"] = lay["ts_wse"][0]
+    elif want_arrival and (lay["ts_wse"] is None or lay["ts_time"] is None):
         notes.append("No Water Surface time series in the file: no arrival time (the time "
                      "of the maximum is written instead when it exists).")
     info = {"area": lay["area"], "areas": lay["areas"], "n_cells": n, "units": u_wse,
             "used": used, "notes": notes, "arrival_depth_ft": float(arrival_depth_ft),
-            "t0_hr": float(t0_hr)}
+            "t0_hr": float(t0_hr), "depth_basis": DEPTH_BASIS_CELL_MIN}
     crs = None
     for k, v in cat.group_attrs.get("", {}).items():
         if _norm(k) in ("projection", "projection wkt", "crs"):
             crs = _text(v) or None
-    return Mesh(x, y, fields, info, crs)
+    mesh = Mesh(x, y, fields, info, crs)
+    mesh.raw = {"wse": wse, "min_elev": elev}
+    if vel is not None:
+        mesh.raw["velocity"] = vel
+    if tmax is not None:
+        mesh.raw["time_of_max"] = tmax
+    mesh._series = series
+    return mesh
 
 
-def _first_reach(ts, t_hr, elev, thr, n):
+def _first_reach(ts, t_hr, elev, thr, n, cols=None, rows=None):
     """Per cell the first time (hours) the depth (water surface minus `elev`) reaches `thr`,
-    interpolated between output steps; NaN when it never does. Reads a few rows at a time."""
+    interpolated between output steps; NaN when it never does. Reads a few rows at a time.
+
+    3.26.1: with `cols` (cell index per point), per POINT instead: the series of cell
+    cols[i] minus elev[i] (the terrain under a grid cell), so `elev` has len(cols) values."""
     nt = ts.shape[0]
-    out = np.full(n, np.nan)
-    rows = max(2, int(4_000_000 // max(n, 1)))
+    pick = None if cols is None else np.asarray(cols, dtype=np.int64)
+    out = np.full(n if pick is None else len(pick), np.nan)
+    if not len(out):
+        return out
+    rows = rows or max(2, int(4_000_000 // max(n, 1)))
     prev_d, prev_t = None, None
     for i in range(0, nt, rows):
-        blk = _clean(np.asarray(ts[i:i + rows, :n], dtype=np.float64)) - elev[None, :]
+        blk = _clean(np.asarray(ts[i:i + rows, :n], dtype=np.float64))
+        if pick is not None:
+            blk = blk[:, pick]
+        blk = blk - elev[None, :]
         tt = t_hr[i:i + rows]
         if prev_d is not None:
             blk = np.vstack([prev_d[None, :], blk])
@@ -771,17 +809,19 @@ def _first_reach(ts, t_hr, elev, thr, n):
             hit = d >= thr
         any_hit = hit.any(axis=0)
         if any_hit.any():
-            cols = np.flatnonzero(any_hit)
-            j = hit[:, cols].argmax(axis=0)
-            d1 = d[j, cols]
+            # 3.26.1: not `cols` (the per-point argument): reusing that name broke the column
+            # pick of the next read block when the series spans more than one block
+            hit_cols = np.flatnonzero(any_hit)
+            j = hit[:, hit_cols].argmax(axis=0)
+            d1 = d[j, hit_cols]
             t1 = tt[j]
             jm = np.maximum(j - 1, 0)
-            d0 = d[jm, cols]
+            d0 = d[jm, hit_cols]
             t0 = tt[jm]
             with np.errstate(invalid="ignore", divide="ignore"):
                 frac = np.where(np.isfinite(d0) & (d1 > d0) & (j > 0), (thr - d0) / (d1 - d0),
                                 1.0)
-            out[un[cols]] = np.where(j > 0, t0 + np.clip(frac, 0.0, 1.0) * (t1 - t0), t1)
+            out[un[hit_cols]] = np.where(j > 0, t0 + np.clip(frac, 0.0, 1.0) * (t1 - t0), t1)
         prev_d, prev_t = blk[-1].copy(), tt[-1]
     return out
 
@@ -926,7 +966,18 @@ def grid_spec(mesh, cell_size=None, extent=None):
 def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
     """Fields of the mesh on a regular grid by nearest cell centre. A grid cell farther than
     `reach` x the spacing of the nearest cell (the cell's distance to its own nearest
-    neighbour) from every centre is outside the mesh: NaN. Returns {name: (ny, nx)}.
+    neighbour) from every centre is outside the mesh: NaN. Returns {name: (ny, nx)}."""
+    cell = cell_index(mesh, x0, ytop, dx, nx, ny, reach=reach, block=block)
+    ok = cell >= 0
+    ci = np.maximum(cell, 0)
+    names = [k for k in (names or list(mesh.fields)) if k in mesh.fields]
+    return {k: np.where(ok, mesh.fields[k][ci], np.nan) for k in names}
+
+
+def cell_index(mesh, x0, ytop, dx, nx, ny, reach=0.75, block=400000):
+    """(ny, nx) index of the nearest mesh cell centre for each grid cell, -1 outside the mesh
+    (farther than `reach` x that cell's own neighbour spacing). Raises HecRasError when the
+    mesh does not overlap the grid.
 
     Two passes keep empty parts of the grid cheap: first every cell within 1.5 x the typical
     reach, then, for what is left, only the cells whose own reach is larger (coarse cells)."""
@@ -940,8 +991,7 @@ def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
         tiers.append((big, min(float(radius[big].max()), cap)))
     hashes = [SpatialHash(mesh.x[ids], mesh.y[ids], 2.0 * float(np.median(nn[ids])))
               for ids, _ in tiers]
-    names = [k for k in (names or list(mesh.fields)) if k in mesh.fields]
-    out = {k: np.full((ny, nx), np.nan) for k in names}
+    out = np.full((ny, nx), -1, dtype=np.int64)
     xs = x0 + (np.arange(nx) + 0.5) * dx
     rows = max(1, block // max(nx, 1))
     covered = 0
@@ -960,11 +1010,8 @@ def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
             todo = todo[~ok]
             if not len(todo):
                 break
-        ok = cell >= 0
-        covered += int(ok.sum())
-        for k in names:
-            v = np.where(ok, mesh.fields[k][np.maximum(cell, 0)], np.nan)
-            out[k][r0:r1_, :] = v.reshape(r1_ - r0, nx)
+        covered += int((cell >= 0).sum())
+        out[r0:r1_, :] = cell.reshape(r1_ - r0, nx)
     if not covered:
         raise HecRasError("The mesh does not overlap the grid (mesh x {:.1f} to {:.1f}, y "
                           "{:.1f} to {:.1f}; grid x {:.1f} to {:.1f}, y {:.1f} to {:.1f}). "
@@ -975,6 +1022,95 @@ def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
 
 
 FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
+
+
+# ============================================================================
+# 3.26.1: depth on the terrain of each grid cell (not the HEC cell's minimum)
+# ============================================================================
+def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
+                  arrival_depth_ft=1.0, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
+                  want_arrival=True, reach=0.75):
+    """The HEC-RAS maxima on a regular grid with depth from the terrain under each GRID cell.
+
+    `terrain_ft` (ny, nx): the ground (ft) of each grid cell, e.g. the HEC-RAS terrain
+    averaged onto the grid (hecras_engine.terrain_on_grid). Each grid cell takes the water
+    surface of its nearest HEC-RAS cell centre (the cell's WSE held flat over the cell, as
+    RAS Mapper's default 'horizontal' surface), then
+
+        depth   = max(0, WSE_max(cell) - terrain(grid cell))
+        wet     = depth >= wet_ft             (every field is NaN where not wet)
+        arrival = first time WSE(cell, t) - terrain(grid cell) >= arrival_depth_ft, minus
+                  t0_hr (interpolated between output steps), from the Water Surface series
+
+    so a 150 ft cell with a ditch is deep only over the ditch: its dry high ground stays dry
+    (read_mesh's depth is WSE minus the cell's MINIMUM elevation, the ditch bottom, over the
+    whole cell). Where the terrain has no data inside the mesh the cell's minimum elevation
+    is used (counted in the notes). to_grid_xy maps the HEC-RAS cell centres into the grid's
+    CRS (None: the same). Returns ({name: (ny, nx)} in ft, ft, ft/s, h; info) with
+    info['old'] the cell-minimum depth on the same grid for comparison."""
+    terrain_ft = np.asarray(terrain_ft, dtype=np.float64)
+    if terrain_ft.shape != (ny, nx):
+        raise HecRasError("the terrain is {} but the grid is {}".format(
+            terrain_ft.shape, (ny, nx)))
+    f, close = _open_hdf(hdf)
+    try:
+        mesh = _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, False)
+        if to_grid_xy is not None:
+            xy = np.asarray(to_grid_xy(np.column_stack([mesh.x, mesh.y])), dtype=float)
+            mesh.x, mesh.y = xy[:, 0], xy[:, 1]
+            mesh._nn = None
+        cell = cell_index(mesh, x0, ytop, dx, nx, ny, reach=reach)
+        inside = cell >= 0
+        ci = np.maximum(cell, 0)
+        raw = mesh.raw
+        wse = np.where(inside, raw["wse"][ci], np.nan)
+        no_terrain = inside & ~np.isfinite(terrain_ft)
+        ground = np.where(no_terrain, raw["min_elev"][ci], terrain_ft)
+        with np.errstate(invalid="ignore"):
+            depth = np.clip(wse - ground, 0.0, None)
+            wet = np.isfinite(depth) & (depth >= wet_ft)
+            old = np.where(inside, np.clip(raw["wse"][ci] - raw["min_elev"][ci], 0.0, None),
+                           np.nan)
+        out = {"depth": np.where(wet, depth, np.nan), "wse": np.where(wet, wse, np.nan)}
+        for k in ("velocity", "time_of_max"):
+            if k in raw:
+                out[k] = np.where(wet, raw[k][ci], np.nan)
+        info = dict(mesh.info)
+        notes = list(info["notes"])
+        if want_arrival and mesh._series is not None:
+            ts, t_hr, fac = mesh._series
+            with np.errstate(invalid="ignore"):
+                reach_px = np.flatnonzero((wet & (depth >= float(arrival_depth_ft))).ravel())
+            arr = np.full(ny * nx, np.nan)
+            if len(reach_px):
+                t = _first_reach(ts, t_hr, ground.ravel()[reach_px] / fac,
+                                 float(arrival_depth_ft) / fac, mesh.n,
+                                 cols=ci.ravel()[reach_px])
+                # the max WSE is kept every computation step, the series only every output
+                # step: a pixel whose max depth reaches the arrival depth between two output
+                # steps takes the cell's time of the max, so arrival follows the depth mask
+                missed = ~np.isfinite(t)
+                if missed.any() and "time_of_max" in raw:
+                    t[missed] = raw["time_of_max"][ci.ravel()[reach_px][missed]]
+                    n_tmax = int(np.isfinite(t[missed]).sum())
+                    if n_tmax:
+                        notes.append("{:,} grid cells reach the arrival depth only between "
+                                     "output steps; their arrival is the cell's time of the "
+                                     "maximum.".format(n_tmax))
+                arr[reach_px] = np.clip(t - float(t0_hr), 0.0, None)
+            out["arrival"] = arr.reshape(ny, nx)
+            info["used"] = dict(info["used"], arrival=info["used"].get("series"))
+        elif want_arrival:
+            notes.append("No usable Water Surface time series in the file: no arrival time.")
+        if no_terrain.any():
+            notes.append("{:,} grid cells inside the mesh have no terrain; the HEC-RAS cell's "
+                         "minimum elevation was used there.".format(int(no_terrain.sum())))
+        info.update({"notes": notes, "depth_basis": DEPTH_BASIS_TERRAIN,
+                     "no_terrain_cells": int(no_terrain.sum()), "old": old,
+                     "inside_cells": int(inside.sum())})
+        return out, info
+    finally:
+        close()
 
 
 def to_grids(mesh, cell_size=None, extent=None, crs_wkt=None):
@@ -1005,3 +1141,127 @@ def import_as_reference(hdf_path, like_grid, area=None, **kw):
     arrays = rasterise(mesh, like_grid.x0, like_grid.y0, like_grid.dx, like_grid.nx,
                        like_grid.ny, names=("depth", "wse", "velocity", "arrival"))
     return arrays
+
+
+# ============================================================================
+# 3.26.1: the terrain on the output grid, and a re-export of a finished run
+# ============================================================================
+# the rasters of the import tool (algorithms_hecras.HecRasImportAlgorithm) and of the re-export
+IMPORT_NAMES = {"depth": "HECRAS Depth (Max).tif", "velocity": "HECRAS Velocity (Max).tif",
+                "arrival": "HECRAS Arrival Time.tif", "wse": "HECRAS WSE (Max).tif",
+                "time_of_max": "HECRAS Time of Max WSE.tif"}
+REEXPORT_JSON = "reexport.json"
+
+
+def terrain_on_grid(terrain, like_grid, z=None):
+    """The terrain HEC-RAS used (its GeoTIFF, ft or m elevations) averaged onto the grid of
+    `like_grid` (GDAL 'average'), in ft; NaN where it has no data. z: the elevation unit
+    (gdal_io.Z_CHOICES), default from the raster."""
+    from . import gdal_io
+    a = gdal_io.read_like(terrain, like_grid, alg="average")
+    f, _how = gdal_io.z_to_m_factor(terrain, z or gdal_io.Z_AUTO)
+    return a * (f / FT)
+
+
+def find_terrain(dirs):
+    """The model terrain GeoTIFF: <dir>/Terrain/*.tif (hecras_model writes
+    'Terrain/<name> Terrain.tif'), not HEC-RAS's processed 'Terrain.<name>.tif' copies."""
+    for d in dirs:
+        if not d:
+            continue
+        td = os.path.join(d, "Terrain")
+        if not os.path.isdir(td):
+            continue
+        tifs = sorted(n for n in os.listdir(td) if n.lower().endswith(".tif")
+                      and not n.lower().startswith("terrain."))
+        if tifs:
+            return os.path.join(td, tifs[0])
+    return None
+
+
+def _cell_acres(grid):
+    from . import gdal_io
+    unit = (gdal_io.linear_unit_m(grid.crs_wkt) if grid.crs_wkt else None) or 1.0
+    return (grid.dx * unit) ** 2 / 4046.8564224
+
+
+def reexport_results(hdf, terrain=None, out_dir=None, dam_folder=None, like=None, area=None,
+                     units=None, arrival_depth_ft=1.0, t0_hr=0.0, terrain_z=None,
+                     overwrite=False, log=None):
+    """Re-make the HEC-RAS rasters of a finished plan HDF (no HEC-RAS run) with depth = the
+    nearest cell's max WSE minus the terrain averaged onto each grid cell (terrain_depth), the
+    wet mask and arrival on that depth.
+
+    terrain: the model's terrain GeoTIFF (default <project>/Terrain/*.tif next to the HDF).
+    like: the raster whose grid to write on (default the dam folder's 'Depth (Max).tif',
+    else its '_hecras/HECRAS Depth (Max).tif'); the HDF, terrain and grid must share the
+    coordinate system (as the import tool assumes). Writes IMPORT_NAMES and reexport.json
+    (inputs, depth basis, old cell-minimum vs new areas) into out_dir, by default a NEW
+    folder <dam folder>/_hecras/reexport_<UTC stamp> (else next to the HDF); existing
+    rasters are never replaced unless overwrite=True. Returns the report dict."""
+    from . import gdal_io, workflow
+    say = log or (lambda m: None)
+    if not (hdf and os.path.exists(hdf)):
+        raise HecRasError("no HEC-RAS plan HDF at {!r}".format(hdf))
+    hdf = os.path.abspath(hdf)
+    hdf_dir = os.path.dirname(hdf)
+    if terrain is None:
+        terrain = find_terrain([hdf_dir, os.path.dirname(hdf_dir)])
+    if not (terrain and os.path.exists(terrain)):
+        raise HecRasError("no HEC-RAS terrain GeoTIFF found (looked for <project>/Terrain/"
+                          "*.tif next to the HDF); pass terrain=")
+    if like is None and dam_folder:
+        for p in (os.path.join(dam_folder, workflow.FINAL_NAMES["depth"]),
+                  os.path.join(dam_folder, "_hecras", IMPORT_NAMES["depth"])):
+            if os.path.exists(p):
+                like = p
+                break
+    if not like:
+        raise HecRasError("no grid to write on: give a dam folder with 'Depth (Max).tif' or "
+                          "like=")
+    if out_dir is None:
+        base = os.path.join(dam_folder, "_hecras") if dam_folder else hdf_dir
+        out_dir = os.path.join(base, "reexport_" +
+                               datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+    out_dir = os.path.abspath(out_dir)
+    clash = [n for n in list(IMPORT_NAMES.values()) + [REEXPORT_JSON]
+             if os.path.exists(os.path.join(out_dir, n))]
+    if clash and not overwrite:
+        raise HecRasError("{} already holds {}; choose another out_dir or pass "
+                          "overwrite=True".format(out_dir, ", ".join(clash)))
+    grid = gdal_io.read_grid(like)
+    crs = grid.crs_wkt
+    say("Terrain {} onto the grid of {}".format(terrain, like))
+    t_ft = terrain_on_grid(terrain, grid, z=terrain_z)
+    say("Reading {}".format(hdf))
+    arrays, info = terrain_depth(hdf, grid.x0, grid.y0, grid.dx, grid.nx, grid.ny, t_ft,
+                                 area=area, units=units, arrival_depth_ft=arrival_depth_ft,
+                                 t0_hr=t0_hr)
+    old = info.pop("old")
+    os.makedirs(out_dir, exist_ok=True)
+    writer = gdal_io.GeoTiffWriter(crs)
+    paths = {}
+    for k, a in arrays.items():
+        paths[k] = os.path.join(out_dir, IMPORT_NAMES[k])
+        writer(grid.like(a, np.nan), paths[k])
+    acre = _cell_acres(grid)
+
+    def areas(d):
+        with np.errstate(invalid="ignore"):
+            return {"wet_ac": float(np.sum(np.isfinite(d) & (d > 0.01)) * acre),
+                    "ge_0p1ft_ac": float(np.sum(d >= 0.1) * acre),
+                    "ge_1ft_ac": float(np.sum(d >= 1.0) * acre)}
+    rep = {"reexport": "hecras", "runner": getattr(workflow, "VERSION", None),
+           "when_utc": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+           "results_hdf": hdf, "terrain_tif": terrain, "grid": like,
+           "t0_hr": float(t0_hr), "arrival_depth_ft": float(arrival_depth_ft),
+           "depth_basis": info.get("depth_basis"),
+           "method": "nearest HEC-RAS cell WSE (flat over the cell) minus the terrain "
+                     "averaged onto each grid cell; wet and arrival on that depth",
+           "no_terrain_cells": info.get("no_terrain_cells"),
+           "areas_new": areas(arrays["depth"]), "areas_old_cell_min": areas(old),
+           "outputs": paths, "notes": info.get("notes", [])}
+    with open(os.path.join(out_dir, REEXPORT_JSON), "w", encoding="utf-8") as f:
+        json.dump(rep, f, indent=1)
+    say("Wrote {}".format(out_dir))
+    return rep

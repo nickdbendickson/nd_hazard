@@ -15,9 +15,7 @@ from .core import benchmark, gdal_io, hecras, hecras_model, workflow
 
 STEPS = [(hecras.ras_interval_label(m), m) for m in hecras.RAS_INTERVALS_MIN]
 STEP_DEFAULT = [m for _, m in STEPS].index(5)
-IMPORT_NAMES = {"depth": "HECRAS Depth (Max).tif", "velocity": "HECRAS Velocity (Max).tif",
-                "arrival": "HECRAS Arrival Time.tif", "wse": "HECRAS WSE (Max).tif",
-                "time_of_max": "HECRAS Time of Max WSE.tif"}
+IMPORT_NAMES = hecras.IMPORT_NAMES
 US_SI = ["Detect from the file (US customary when it says nothing)", "US customary (ft)",
          "SI metric (m)"]
 
@@ -89,8 +87,12 @@ class HecRasImportAlgorithm(_ToolBase):
     def shortHelpString(self):
         return ("Reads the maximum results of a HEC-RAS 2D plan HDF (.p##.hdf) and writes "
                 "GeoTIFFs 'HECRAS Depth (Max).tif', 'HECRAS Velocity (Max).tif', 'HECRAS "
-                "Arrival Time.tif' and 'HECRAS WSE (Max).tif' in ft, ft/s, hours and ft. Depth "
-                "is the maximum water surface minus the cell's minimum elevation. Velocity is "
+                "Arrival Time.tif' and 'HECRAS WSE (Max).tif' in ft, ft/s, hours and ft. Give the "
+                "terrain the model used: depth is then the cell's maximum water surface minus "
+                "the terrain under each grid cell, and the wet area and arrival time follow "
+                "that depth. Without a terrain, depth is the maximum water surface minus the "
+                "cell's minimum elevation, which gives a cell's ditch depth to the whole cell "
+                "(too deep and too wide on coarse cells). Velocity is "
                 "the per-cell maximum when the file has one, else the maximum face velocities "
                 "averaged onto the cells. Arrival is the first time the depth reaches the "
                 "arrival depth, from the water surface time series, counted from the "
@@ -107,6 +109,9 @@ class HecRasImportAlgorithm(_ToolBase):
         self._file("HDF", "HEC-RAS 2D plan results (.p##.hdf)", "hdf", optional=False)
         self._file("DAM_FOLDER", "Dam folder (its Depth (Max).tif sets the grid; outputs "
                    "go to <dam folder>/_hecras)", folder=True)
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "TERRAIN", "Terrain the HEC-RAS model used (depth = water surface minus this "
+            "terrain; empty = the cell's minimum elevation)", optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             "LIKE", "Grid of this raster (empty = the dam folder's, else set below)",
             optional=True))
@@ -171,15 +176,29 @@ class HecRasImportAlgorithm(_ToolBase):
                         ext = (r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum())
                 x0, ytop, dx, nx, ny = hecras.grid_spec(
                     mesh, self._opt(parameters, "CELL", context) or None, ext)
-            arrays = hecras.rasterise(mesh, x0, ytop, dx, nx, ny)
+            crs = (like_grid.crs_wkt if like_grid is not None else None) or mesh.crs_wkt
+            if not crs:
+                raise QgsProcessingException(
+                    "The HDF file records no projection; give a raster to match so the "
+                    "rasters can be georeferenced.")
+            from .core.grid import Grid
+            grid = Grid(np.zeros((ny, nx)), x0, ytop, dx, crs_wkt=crs)
+            terrain = self.parameterAsRasterLayer(parameters, "TERRAIN", context)
+            if terrain is not None:
+                # 3.26.1: depth, wet area and arrival from the terrain of each grid cell
+                t_ft = hecras.terrain_on_grid(terrain.source(), grid)
+                arrays, tinfo = hecras.terrain_depth(
+                    hdf, x0, ytop, dx, nx, ny, t_ft,
+                    area=self._str(parameters, "AREA", context) or None, **kw)
+                tinfo.pop("old", None)
+                mesh.info = tinfo
+            else:
+                arrays = hecras.rasterise(mesh, x0, ytop, dx, nx, ny)
+                mesh.info["notes"].append(
+                    "No terrain given: depth is the water surface minus each cell's minimum "
+                    "elevation, so a ditch deepens its whole cell.")
         except (hecras.HecRasError, OSError, ValueError, RuntimeError) as e:
             raise QgsProcessingException(str(e))
-        crs = (like_grid.crs_wkt if like_grid is not None else None) or mesh.crs_wkt
-        if not crs:
-            raise QgsProcessingException("The HDF file records no projection; give a raster to "
-                                         "match so the rasters can be georeferenced.")
-        from .core.grid import Grid
-        grid = Grid(np.zeros((ny, nx)), x0, ytop, dx, crs_wkt=crs)
         writer = gdal_io.GeoTiffWriter(crs)
         os.makedirs(out_dir, exist_ok=True)
         paths = {}
