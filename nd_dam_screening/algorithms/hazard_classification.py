@@ -711,8 +711,19 @@ class HazardClassification(QgsProcessingAlgorithm):
                     if status == "noflood":      # recorded as a triage clear with its reason
                         attrs["tri_result"] = "clear"
                         attrs["tri_reason"] = res["hz_reason"]
+                    area_top, area_note = None, ""     # 0.32.4: as tool 7b sends AREA_AC
+                    if curves_dir:
+                        try:
+                            area_top, area_note = ho.area_for_runner(
+                                os.path.join(curves_dir, "curve_{}.csv".format(dam_id)),
+                                cm.fval(f, names, "est_crest_m", float),
+                                cm.fval(f, names, "height_m", float))
+                        except Exception as e:          # noqa - the record is written without it
+                            area_note = "no top-of-dam area: the curve could not be read ({})".format(e)
+                    if area_note:
+                        feedback.pushInfo("dam {}: {}".format(dam_id, area_note))
                     try:
-                        jpath, jlog = dri.write(dfold, dri.tool8_values(attrs, f_dcls),
+                        jpath, jlog = dri.write(dfold, dri.tool8_values(attrs, f_dcls, area_top),
                                                 dri.screening_result(attrs, "tool 8"), version,
                                                 create=False, field_notes=dri.estimate_notes(attrs),
                                                 data={"dem": dem_record} if dem_record else None)
