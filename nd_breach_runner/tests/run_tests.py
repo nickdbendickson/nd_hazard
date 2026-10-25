@@ -955,6 +955,28 @@ def receptors_decide_whether_the_domain_keeps_growing():
     shutil.rmtree(d)
 
 
+@test
+def gauge_section_is_clipped_to_the_grid():
+    """A section longer than the grid is across must be clipped before LISFLOOD-FP sees it:
+    LISFLOOD-FP clips E/W sections against the column count (not the rows), so the 4160 m
+    section of an 82-row grid read past the flux arrays (discharge 1e297 in CI)."""
+    from nd_breach_runner.core.lisflood import _gauge_line
+    import math as _m
+    nx, ny, dx = 208, 82, 20.0
+    for direction in ("E", "W", "N", "S"):
+        x, y, _, length = _gauge_line(2020.0, 820.0, direction, 4160.0, nx, ny, dx)
+        cells = int(_m.ceil(length / dx))
+        if direction in ("E", "W"):
+            r0 = ny - 1 - int(_m.floor(y / dx))
+            assert 0 <= r0 and r0 + cells <= ny - 1 and y <= ny * dx, (direction, y, length)
+        else:
+            c0 = int(_m.floor(x / dx))
+            assert 0 <= c0 and c0 + cells <= nx - 1 and x >= 0, (direction, x, length)
+    # a section that fits is written unchanged (start at the top / left end)
+    assert _gauge_line(1000.0, 800.0, "E", 400.0, nx, ny, dx) == (1000.0, 1000.0, "E", 400.0)
+    assert _gauge_line(1000.0, 800.0, "N", 400.0, nx, ny, dx) == (800.0, 800.0, "N", 400.0)
+
+
 @model_test
 def gauge_records_the_flood_wave():
     from nd_breach_runner.core import workflow
