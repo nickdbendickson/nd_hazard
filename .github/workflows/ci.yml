@@ -70,3 +70,33 @@ jobs:
           echo "== gui_lint =="
           step python -X faulthandler tools/gui_lint.py
           exit $fail
+
+  model-tests:
+    # The Runner's --models suite: the fast tests plus every test that runs a real model, on
+    # the LISFLOOD-FP the plugin ships (bin/linux-x64) and ANUGA in its own conda env, as on a
+    # user's machine (NDBREACH_ANUGA_PYTHON).
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: ANUGA environment (conda-forge)
+        run: |
+          micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy
+          echo "NDBREACH_ANUGA_PYTHON=$(micromamba run -n anuga python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: Runner model suite (LISFLOOD-FP + ANUGA)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          chmod +x nd_breach_runner/bin/linux-x64/lisflood
+          export NDBREACH_LISFLOOD="$GITHUB_WORKSPACE/nd_breach_runner/bin/linux-x64/lisflood"
+          python -m nd_breach_runner.tests.run_tests --models

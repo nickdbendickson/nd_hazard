@@ -896,9 +896,11 @@ def workflow_no_breach_when_trigger_not_reached():
 
 
 def _road_valley(x, y):
-    """The valley with a tall road embankment across it at x = 2500 m."""
+    """The valley with a road embankment across it at x = 2500 m, 1.5 m below the top of dam.
+    A road above the reservoir's level would make the filled DEM spill back through the
+    reservoir, so the flow trace (and the domain) would run upstream."""
     z = valley(x, y)
-    return np.where(np.abs(x - 2500.0) < 12.0, np.maximum(z, TOP_M + 40.0), z)
+    return np.where(np.abs(x - 2500.0) < 12.0, np.maximum(z, TOP_M - 1.5), z)
 
 
 @model_test
@@ -951,6 +953,28 @@ def receptors_decide_whether_the_domain_keeps_growing():
     assert len(rep_on["lisflood_runs"]) >= 2
     assert rep_on["lisflood_runs"][0]["edge_decisions"]["E"]["extend"] is True
     shutil.rmtree(d)
+
+
+@test
+def gauge_section_is_clipped_to_the_grid():
+    """A section longer than the grid is across must be clipped before LISFLOOD-FP sees it:
+    LISFLOOD-FP clips E/W sections against the column count (not the rows), so the 4160 m
+    section of an 82-row grid read past the flux arrays (discharge 1e297 in CI)."""
+    from nd_breach_runner.core.lisflood import _gauge_line
+    import math as _m
+    nx, ny, dx = 208, 82, 20.0
+    for direction in ("E", "W", "N", "S"):
+        x, y, _, length = _gauge_line(2020.0, 820.0, direction, 4160.0, nx, ny, dx)
+        cells = int(_m.ceil(length / dx))
+        if direction in ("E", "W"):
+            r0 = ny - 1 - int(_m.floor(y / dx))
+            assert 0 <= r0 and r0 + cells <= ny - 1 and y <= ny * dx, (direction, y, length)
+        else:
+            c0 = int(_m.floor(x / dx))
+            assert 0 <= c0 and c0 + cells <= nx - 1 and x >= 0, (direction, x, length)
+    # a section that fits is written unchanged (start at the top / left end)
+    assert _gauge_line(1000.0, 800.0, "E", 400.0, nx, ny, dx) == (1000.0, 1000.0, "E", 400.0)
+    assert _gauge_line(1000.0, 800.0, "N", 400.0, nx, ny, dx) == (800.0, 800.0, "N", 400.0)
 
 
 @model_test
@@ -1086,7 +1110,7 @@ def sensitivity_runs_share_the_domain_and_make_an_envelope():
              sens.Case("TR-60", sens.GROUP_METHOD, method=br.METHOD_TR60)]
     out = os.path.join(d, "T1")
     r = sens.run_sensitivity(dam(crest_width_ft=12, us_slope_h=3, ds_slope_h=3), (0.0, 0.0), st,
-                             SyntheticTerrain(), npy_writer, out, cases=cases,
+                             SyntheticTerrain(), npy_writer, out, cases=cases, cell_check=False,
                              classify=lambda folder: "High" if os.path.exists(os.path.join(
                                  folder, "Depth (Max).tif")) else "?")
     assert [x["case"] for x in r.rows][0] == "Base" and len(r.rows) == 4
@@ -1375,7 +1399,7 @@ def sensitivity_and_estimate_and_check_algorithms():
     a.initAlgorithm()
     fb = fq.QgsProcessingFeedback()
     r = a.processAlgorithm(dict(common, SENS_WIDTH="0.7", SENS_TIME="", SENS_N="1.3",
-                                SENS_METHODS=False), fq.QgsProcessingContext(), fb)
+                                SENS_METHODS=False, SENS_CELL=False), fq.QgsProcessingContext(), fb)
     import csv as _csv
     rows = list(_csv.DictReader(open(r["SUMMARY"])))
     assert [x["case"] for x in rows] == ["Base", "Width x0.7", "Manning x1.3"], rows

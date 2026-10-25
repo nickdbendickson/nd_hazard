@@ -9,6 +9,7 @@ Arrival time needs the `inittm_depth` keyword added by the patch shipped
 with this plugin (scripts/lisflood-nd-breach.patch). Without it LISFLOOD-FP
 ignores the keyword and records arrival at its internal wet/dry depth (about
 1 mm); `check_lisflood()` tells the two apart."""
+import math
 import os
 import subprocess
 import sys
@@ -220,6 +221,25 @@ def gauge_section(center_xy, flow_dir, width_m):
     return {"xy": tuple(center_xy), "direction": direction, "width_m": float(width_m)}
 
 
+def _gauge_line(gx, gy, direction, width_m, nx, ny, dx):
+    """One .gauge line (x, y, direction, length), the section clipped to the grid. gx, gy are
+    the centre in grid coordinates (lower-left origin). E/W sections run south from (x, y),
+    N/S sections east. LISFLOOD-FP clips an E/W section against the column count and a N/S
+    one against the row count (swapped), so a section longer than the grid is across reads
+    past the flux arrays and the discharge is garbage (1e297): clip it here, ending at least
+    one cell short of the far edge as LISFLOOD-FP's own clip intends."""
+    half = 0.5 * width_m
+    if direction in ("E", "W"):
+        top = min(gy + half, (ny - 0.5) * dx)               # start inside the top row
+        r0 = ny - 1 - int(math.floor(top / dx))             # LISFLOOD-FP's start row
+        length = min(top - (gy - half), (ny - 1 - r0) * dx)
+        return gx, top, direction, max(length, 0.0)
+    left = max(gx - half, 0.5 * dx)
+    c0 = int(math.floor(left / dx))
+    length = min((gx + half) - left, (nx - 1 - c0) * dx)
+    return left, gy, direction, max(length, 0.0)
+
+
 def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflow_line=None):
     os.makedirs(workdir, exist_ok=True)
     cells = inflow_cells(dem_real, inflow_xy, inflow_line)
@@ -299,13 +319,8 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
             f.write("{}\n".format(len(st.gauges)))
             for g in st.gauges:
                 gx, gy = g["xy"][0] - dem_real.x0, g["xy"][1] - dem_real.yll
-                half = 0.5 * g["width_m"]
-                if g["direction"] in ("E", "W"):
-                    gy += half           # the section runs south from here
-                else:
-                    gx -= half           # the section runs east from here
-                f.write("{:.3f} {:.3f} {} {:.3f}\n".format(gx, gy, g["direction"],
-                                                          g["width_m"]))
+                f.write("{:.3f} {:.3f} {} {:.3f}\n".format(
+                    *_gauge_line(gx, gy, g["direction"], g["width_m"], dem.nx, dem.ny, dem.dx)))
         lines.append("gaugefile {}.gauge".format(name))
     lines += list(st.extra_par)
     par = os.path.join(workdir, name + ".par")
