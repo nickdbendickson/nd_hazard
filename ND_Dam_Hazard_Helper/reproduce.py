@@ -761,6 +761,65 @@ def _find_settings(package_folder):
                          package_folder))
 
 
+def _input_items(spec):
+    """2.34.5: ([(path, category or None)], [problem]) of one role's recorded inputs in any
+    shape (datafolder.local_items: a path, a list of paths, [path, category] pairs, one
+    unwrapped pair, nested lists) - the one normaliser the run itself uses."""
+    try:
+        from .datafolder import local_items
+    except Exception:                         # noqa: BLE001 - no QGIS: the record's own shape
+        return _input_paths(spec), []
+    return local_items(spec)
+
+
+_HPMS_RE = re.compile(r"^HPMS_ND_(\d{4})(?:_|$)", re.I)
+
+
+def _traffic_as_run(files, notes):
+    """2.34.5: the 'aadt' files of a record made before 2.34.5 hold EVERY traffic download
+    (NDDOT counts, the county roads, each HPMS year that answered) in download order, but the
+    run read only the newest HPMS year (else NDDOT) plus the county roads, in that order
+    (pipeline._traffic_layers). Hand over what the run read, in its order; files with other
+    names (a data folder's own) stay, after them."""
+    def kind(p):
+        b = os.path.basename(split_source(p)[0])
+        m = _HPMS_RE.match(b)
+        if m:
+            return "hpms", m.group(1)
+        if b.lower().startswith("nddot_traffic_counts"):
+            return "nddot", ""
+        if b.lower().startswith("nd_county_roads"):
+            return "county", ""
+        return "other", ""
+    kinds = [(kind(p), p, c) for p, c in files]
+    if not any(k[0] in ("hpms", "nddot") for k, _p, _c in kinds):
+        return files
+    hpms = sorted((k[1], p, c) for k, p, c in kinds if k[0] == "hpms")
+    keep, drop = [], []
+    if hpms:
+        keep.append([hpms[-1][1], hpms[-1][2]])
+        drop += [p for _y, p, _c in hpms[:-1]]
+        drop += [p for k, p, _c in kinds if k[0] == "nddot"]
+    else:
+        keep += [[p, c] for k, p, c in kinds if k[0] == "nddot"]
+    keep += [[p, c] for k, p, c in kinds if k[0] == "county"]
+    keep += [[p, c] for k, p, c in kinds if k[0] == "other"]
+    if drop or [k[1] for k in keep] != [p for p, _c in files]:
+        notes.append("input 'aadt': handed over as the run read it (newest HPMS year, else "
+                     "NDDOT counts, then the county roads){}".format(
+                         "; recorded but not read by the run: " + ", ".join(
+                             os.path.basename(split_source(p)[0]) for p in drop)
+                         if drop else ""))
+    return keep
+
+
+def _version_tuple(v):
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except (TypeError, ValueError):
+        return ()
+
+
 def _local_data_supported():
     try:
         from .pipeline import DEFAULTS
@@ -854,27 +913,30 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
         else:
             cfg["point_sources"].append((item.get("family"), lyr))
     # ---- the data sets the run read
+    # 2.34.5: ONE shape for every role - [[path, category or None], ...] - from any recorded
+    # shape (old records: a path, or a list of paths and pairs); every file of a role is
+    # handed over (AADT, bridges, ... may come from several); an unreadable entry is missing
+    old_record = _version_tuple(rec.get("plugin_version")) < (2, 34, 5)
     local = {}
     for role, spec in sorted((rec.get("inputs") or {}).items()):
         what = "input '{}'".format(role)
-        if isinstance(spec, list):
-            got = []
-            for item in spec:
-                p, cat = (item[0], item[1] if len(item) > 1 else None) \
-                    if isinstance(item, list) else (item, None)
-                full = R.source(p, what)
-                if full is None:
-                    missing.append("{} ({})".format(what, p))
-                    continue
-                got.append([full, cat] if isinstance(item, list) else full)
-            if got:
-                local[role] = got
-        else:
-            full = R.source(spec, what)
+        items, problems = _input_items(spec)
+        for prob in problems:
+            missing.append("{} - unreadable record entry: {}".format(what, prob))
+        got = []
+        for p, cat in items:
+            full = R.source(p, what)
             if full is None:
-                missing.append("{} ({})".format(what, spec))
-            else:
-                local[role] = full
+                missing.append("{} ({})".format(what, p))
+                continue
+            got.append([full, cat])
+        if role == "aadt" and old_record and len(got) > 1:
+            got = _traffic_as_run(got, notes)
+        if got:
+            local[role] = got
+        elif items or problems:
+            missing.append("{} - none of its {} file(s) is available: the role is NOT "
+                           "reproduced".format(what, len(items)))
     cfg["local_data"] = local
     if as_layers is None:
         as_layers = not _local_data_supported()
@@ -882,8 +944,7 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
         notes.append("This pipeline reads no cfg['local_data']: the packaged data are "
                      "handed over as layers")
         for role, spec in sorted(local.items()):
-            one = spec[0] if isinstance(spec, list) else spec
-            one = one[0] if isinstance(one, list) else one
+            one = spec[0][0]                     # 2.34.5: [[path, category], ...]
             key = ROLE_CFG_KEYS.get(role)
             fam = ROLE_POINT_FAMILIES.get(role)
             if key:
@@ -893,9 +954,13 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
                         notes.append("input '{}': only the first of {} files could be handed "
                                      "over as a layer".format(role, len(spec)))
             elif fam:
-                lyr = _make_layer("vector", one, role, _provider_for(one))
-                if lyr is not None:
-                    cfg["point_sources"].append((fam, lyr))
+                for path, _cat in spec:          # 2.34.5: every file of the role
+                    lyr = _make_layer("vector", path, role, _provider_for(path))
+                    if lyr is not None:
+                        cfg["point_sources"].append((fam, lyr))
+                    else:
+                        missing.append("input '{}' ({}) - could not be opened".format(role,
+                                                                                      path))
             else:
                 notes.append("input '{}' ({}) cannot be handed to this pipeline without "
                              "cfg['local_data'] - it is left out, the result may differ".format(
@@ -1035,6 +1100,22 @@ def _free_path(path):
         return "{}_{}{}".format(base, time.strftime("%Y%m%d_%H%M%S"), ext)
 
 
+def check_local_data(local_data):
+    """2.34.5: ({role: number of files that open}, [problem]) of a reproduction's
+    cfg["local_data"] - opened as the run opens them (datafolder.open_config_all), so a role
+    or file the run would leave out is named in the log and the check, never skipped
+    silently. ({}, []) without QGIS / datafolder."""
+    if not local_data:
+        return {}, []
+    try:
+        from .datafolder import open_config_all
+    except Exception:                         # noqa: BLE001 - no QGIS: not checked here
+        return {}, []
+    layers, notes = open_config_all(local_data)
+    loaded = {role: len(v) for role, v in layers.items()}
+    return loaded, list(notes)
+
+
 WORK_MARKER = "_Reproduction_Work_Folder.txt"
 
 
@@ -1112,6 +1193,11 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
             raise
     for m in plan["missing"]:
         say(">>> WARNING: not in the package: {}".format(m))
+    loaded, not_loaded = check_local_data(plan["cfg"].get("local_data"))
+    for role in sorted(loaded):
+        say(">>> Package data '{}': {} file(s) open".format(role, loaded[role]))
+    for m in not_loaded:
+        say(">>> WARNING: package data NOT loaded: {}".format(m))
     try:
         result = run(cfg, progress=progress, log=log)
     except Exception as e:                      # the check reports it
@@ -1134,6 +1220,11 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
     for m in plan["missing"]:
         rows.append(dict(zip(CHECK_FIELDS, ["Input", "Missing from the package", m, "", "",
                                             "", ""])))
+    for m in not_loaded:
+        rows.append(dict(zip(CHECK_FIELDS, ["Input", "Not loaded", m, "", "", "", ""])))
+    for role in sorted(loaded):
+        rows.append(dict(zip(CHECK_FIELDS, ["Input", "Loaded", role, "",
+                                            "{} file(s)".format(loaded[role]), "", ""])))
     for rel, prob in tampered:
         rows.append(dict(zip(CHECK_FIELDS, ["Package", "Package file " + prob, rel, "", "",
                                             "", ""])))
@@ -1159,6 +1250,12 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
     if plan["missing"]:
         summary.append("{} input(s) missing from the package - a difference may come from "
                        "them: {}".format(len(plan["missing"]), "; ".join(plan["missing"])))
+    if not_loaded:
+        summary.append("{} package data file(s) / role(s) NOT loaded - a difference may come "
+                       "from them: {}".format(len(not_loaded), "; ".join(not_loaded)))
+    if loaded:
+        summary.append("Package data loaded: {}".format(", ".join(
+            "{} ({})".format(r, loaded[r]) for r in sorted(loaded))))
     if tampered:
         summary.append("{} package file(s) missing or changed since the package was made "
                        "(MANIFEST.csv): {}".format(len(tampered), ", ".join(
@@ -1183,4 +1280,5 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
     return {"identical": status == "IDENTICAL", "status": status, "lines": summary,
             "rows": rows, "csv": cpath, "text": tpath, "missing": plan["missing"],
             "notes": plan["notes"], "result": result, "error": error,
+            "loaded": loaded, "not_loaded": not_loaded,
             "package_snapshot": before, "new_snapshot": now}

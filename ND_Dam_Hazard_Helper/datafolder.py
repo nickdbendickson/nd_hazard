@@ -108,6 +108,10 @@ from .download import _CACHE_RE
 ROLES = ("nsi", "address", "usa", "outlines", "camps", "roads", "aadt", "rail", "crossings",
          "bridges", "dams", "lifelines", "boundary", "parcels", "centerline", "parks", "places")
 MULTI_ROLES = ("lifelines",)
+# 2.34.5: roles a run can read from SEVERAL files (as it does from its downloads: AADT from
+# HPMS / NDDOT + county roads, bridges from NBI + OSM, ...); the other roles take one layer
+# and say so loudly when more files are given
+MULTI_SOURCE_ROLES = ("nsi", "address", "usa", "outlines", "aadt", "bridges", "lifelines")
 ROLE_LABELS = {
     "nsi": "NSI structure points", "address": "ND GIS Hub site / structure address points",
     "usa": "FEMA USA Structures outlines", "outlines": "other building outlines",
@@ -1388,38 +1392,138 @@ def _file_of_uri(uri):
     return p
 
 
-def open_config(local_data):
-    """Open the layers of a to_config() dict (also after a JSON round trip):
-    ({role: layer, "lifelines": [(layer, category)]}, notes). A file that no
-    longer exists or does not open is left out with a note."""
+_VECTOR_EXTS = (".gpkg", ".shp", ".geojson", ".json", ".csv", ".txt", ".kml", ".kmz", ".gml",
+                ".sqlite", ".fgb", ".zip", ".gdb", ".tab", ".dbf", ".parquet", ".xlsx")
+
+
+def _looks_like_uri(text):
+    """True for a file path / layer URI, False for a lifeline category such as
+    'Basic care / assisted living' (the second item of a [uri, category] pair)."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    t = text.strip()
+    if "|layername=" in t or t.startswith(("/vsi", "file:", "\\\\")) or os.path.isabs(t):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", t):
+        return True
+    return os.path.splitext(t.split("|")[0].split("?")[0])[1].lower() in _VECTOR_EXTS
+
+
+def local_items(value):
+    """2.34.5: ([(uri, category or None)], [problem]) of ONE role's local_data value in
+    any of the shapes it has been written in - the single shape every reader uses:
+      "uri"                                     (to_config, one file)
+      ["uri", ...]                              (a reproduction / Run_Settings inputs list)
+      [["uri", "category"], ["uri"], "uri"...]  (lifelines; also after a JSON round trip)
+      ("uri", "category") / [("uri", None)]     (tuples)
+      ["uri", "category"]                       (one pair, not wrapped in a list)
+    and nested mistakes such as [["uri1", "uri2"]] or [[["uri", cat]]]. Duplicates are
+    dropped; anything that is not a URI (a number, an empty item, a dict without a path)
+    is a problem, reported - never silently skipped."""
+    items, problems, seen = [], [], set()
+
+    def add(uri, cat):
+        u = str(uri).strip()
+        if not u:
+            problems.append("an empty file entry")
+            return
+        if u not in seen:
+            seen.add(u)
+            items.append((u, cat if (cat is None or isinstance(cat, str)) else str(cat)))
+
+    def walk(v, depth):
+        if depth > 6:
+            problems.append("an entry nested too deep: {!r}".format(v)[:200])
+            return
+        if v is None or (isinstance(v, str) and not v.strip()):
+            if depth:
+                problems.append("an empty file entry")
+            return
+        if isinstance(v, str):
+            add(v, None)
+            return
+        if isinstance(v, dict):
+            uri = v.get("uri") or v.get("path") or v.get("source")
+            if isinstance(uri, str) and uri.strip():
+                add(uri, v.get("category") or v.get("cat"))
+            else:
+                problems.append("an entry without a file: {!r}".format(v)[:200])
+            return
+        if isinstance(v, (list, tuple)):
+            if not v:
+                if depth:
+                    problems.append("an empty file entry")
+                return
+            if len(v) == 2 and isinstance(v[0], str) and _looks_like_uri(v[0]) and \
+                    (v[1] is None or (isinstance(v[1], str) and not _looks_like_uri(v[1]))):
+                add(v[0], v[1] or None)                 # one (uri, category) pair
+                return
+            for x in v:
+                walk(x, depth + 1)
+            return
+        problems.append("an entry that is not a file: {!r}".format(v)[:200])
+
+    walk(value, 0)
+    return items, problems
+
+
+def open_config_all(local_data):
+    """2.34.5: open EVERY layer of a local_data dict (to_config(), a reproduction's inputs
+    lists, an old package's record - any shape local_items() takes): ({role: [(layer,
+    category)]}, notes). A malformed entry, a file that no longer exists or does not open,
+    an unknown role or a role of which no file opened is a note - the caller logs each one
+    as a WARNING; nothing is left out silently."""
     layers, notes = {}, []
     for role, value in (local_data or {}).items():
         if role not in ROLES:
+            notes.append("'{}' is not a data-folder role - its file(s) are NOT used: {}".format(
+                role, value)[:400])
             continue
-        if role in MULTI_ROLES and not isinstance(value, str):
-            items = value
-        else:
-            items = [(value, None)] if isinstance(value, str) else [value]
+        label = ROLE_LABELS.get(role, role)
+        items, problems = local_items(value)
+        for p in problems:
+            notes.append("{} ({}): {} - left out".format(role, label, p))
         opened = []
-        for item in items or []:
+        for uri, cat in items:
             try:
-                uri, cat = (item[0], item[1]) if isinstance(item, (list, tuple)) else (item, None)
-            except (IndexError, TypeError):
-                continue
-            path = _file_of_uri(uri)
+                path = _file_of_uri(uri)
+            except Exception:                            # noqa
+                path = ""
             if path and not os.path.exists(path):
-                notes.append("{}: {} no longer exists".format(role, path))
+                notes.append("{} ({}): {} no longer exists - NOT used".format(role, label, path))
                 continue
             lyr = open_uri(uri)
             if lyr is None:
-                notes.append("{}: {} could not be opened".format(role, uri))
+                notes.append("{} ({}): {} could not be opened - NOT used".format(role, label,
+                                                                                 uri))
                 continue
             opened.append((lyr, cat))
+        if opened:
+            layers[role] = opened
+        elif items or problems:
+            n = len(items) + len(problems)
+            notes.append("{} ({}): none of its {} entr{} could be used - the role is NOT "
+                         "read from the data folder".format(role, label, n,
+                                                            "y" if n == 1 else "ies"))
+    return layers, notes
+
+
+def open_config(local_data):
+    """Open the layers of a local_data dict (to_config(), also after a JSON round trip, or
+    a reproduction's inputs lists): ({role: layer, "lifelines": [(layer, category)]},
+    notes). Roles other than the lifelines give their FIRST layer here - use
+    open_config_all() for all of them; a further file is named in the notes. A file that no
+    longer exists or does not open is left out with a note (open_config_all)."""
+    all_layers, notes = open_config_all(local_data)
+    layers = {}
+    for role, opened in all_layers.items():
         if role in MULTI_ROLES:
-            if opened:
-                layers[role] = opened
-        elif opened:
+            layers[role] = opened
+        else:
             layers[role] = opened[0][0]
+            if len(opened) > 1:
+                notes.append("{}: {} files - only the first ('{}') is returned here".format(
+                    role, len(opened), opened[0][0].name()))
     return layers, notes
 
 
@@ -1537,8 +1641,7 @@ def drop_uncovered(local_data, dam_folder, box, crossing_box=None):
         return local_data, [], []
     mine = {}
     for role, v in local_data.items():
-        uris = [x[0] for x in v if isinstance(x, (list, tuple)) and x] \
-            if isinstance(v, (list, tuple)) else [v]
+        uris = [u for u, _c in local_items(v)[0]]       # 2.34.5: any recorded shape
         if uris and all(is_dam_data(u, dam_folder) for u in uris):
             mine[role] = uris
     if not mine:
@@ -1570,18 +1673,16 @@ def drop_uncovered(local_data, dam_folder, box, crossing_box=None):
 
 
 def existing_roles(local_data):
-    """The roles of a to_config() dict whose file (at least one, for the
-    lifelines) still exists - what a run will take from the folder instead of
-    downloading. A missing file is left to the download."""
+    """The roles of a local_data dict (any shape local_items() takes) of which at least one
+    file still exists - what a run will take from the folder instead of downloading. A
+    missing file is left to the download (open_config_all() names it)."""
     if not isinstance(local_data, dict) or not local_data:
         return set()
     out = set()
     for role, v in local_data.items():
-        uris = [x[0] for x in v if isinstance(x, (list, tuple)) and x] \
-            if isinstance(v, (list, tuple)) else [v]
-        for uri in uris:
+        for uri, _cat in local_items(v)[0]:
             try:
-                f = _file_of_uri(uri) if isinstance(uri, str) else ""
+                f = _file_of_uri(uri)
             except Exception:                        # noqa
                 f = ""
             if f and os.path.exists(f):
