@@ -9,17 +9,24 @@ name: CI
 #                 of every source, and the fingerprint nested-VRT regression. Mark THIS job required
 #                 in branch protection.
 # plugin-suites — the fuller per-plugin test suites. These need QGIS/GDAL (and a scipy-compatible
-#                 numpy), so the job provisions them via conda. Best-effort for now (does not block):
-#                 promote it to required once it is green on your runners.
+#                 numpy), so the job provisions them via conda. A failing suite fails the run.
+# model-tests   — the Runner's --models suite on the shipped LISFLOOD-FP and a conda ANUGA.
+# All three should be required checks on main (see docs/CI.md, which also has the local recipe).
 
 on:
   pull_request:
   push:
     branches: [main]
 
+# A new push to a PR cancels that PR's older run; every push to main still gets its own run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fast-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,7 +41,7 @@ jobs:
 
   plugin-suites:
     runs-on: ubuntu-latest
-    continue-on-error: true          # best-effort until green on your runners
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash -el {0}
