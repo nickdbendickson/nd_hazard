@@ -28,7 +28,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
                    structures as structmod, conditioning as condmod, nd_data, handoff,
                    sensitivity as sensmod, cascade as cascmod, estimate as estmod,
                    outlets as outmod, damjson, stoprule, products as prodmod,
-                   batchqueue)
+                   batchqueue, gaps as gapsmod)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .core.anuga_model import check_anuga
 from .core.units import ARRIVAL_DEPTH_FT, FT, MILE
@@ -62,13 +62,18 @@ STRUCT_KINDS = [(structmod.KIND_CULVERT, "Culvert"), (structmod.KIND_BRIDGE, "Br
 # 3.20.0 (feature 14): the crossings layer (NBI bridges and culverts, rail grade crossings,
 # the offline pack's surveyed road-stream crossings). Only a SURVEYED span and rise can be cut
 # as a gap, so the span / rise synonyms deliberately do not include a generic "width".
+# 3.26.7: the NBI's own field names (STRUCTURE_NUMBER_008, STRUCTURE_TYPE_043B = 19 for a
+# culvert, MAX_SPAN_LEN_MT_048 in metres, MAIN_UNIT_SPANS_045 = barrels); see gaps.kind_from.
 CROSSING_FIELD_SYNONYMS = {
     "X_NAME": ("name", "id", "structure_number", "struct_num", "bridge_id", "crossing_id",
-               "facility", "label"),
-    "X_KIND": ("type", "kind", "structure_type", "structure_kind", "crossing_type"),
-    "X_SPAN": ("span_ft", "span", "max_span_ft", "maxspan", "diameter", "dia", "culv_span_ft"),
+               "facility", "label", "structure_number_008"),
+    "X_KIND": ("type", "kind", "structure_type", "structure_kind", "crossing_type",
+               "structure_type_043b"),
+    "X_SPAN": ("span_ft", "span", "max_span_ft", "maxspan", "diameter", "dia", "culv_span_ft",
+               "max_span_len_mt_048"),
     "X_RISE": ("rise_ft", "rise", "height_ft", "culv_rise_ft", "vert_clearance_ft"),
-    "X_BARRELS": ("barrels", "n_barrels", "num_barrels", "cells", "num_cells"),
+    "X_BARRELS": ("barrels", "n_barrels", "num_barrels", "cells", "num_cells",
+                  "main_unit_spans_045"),
     "X_SHAPE": ("shape", "culvert_shape", "barrel_shape"),
     "X_INV_UP": ("invert_up", "inv_up", "upstream_invert", "invert_us", "inlet_invert"),
     "X_INV_DN": ("invert_dn", "inv_dn", "downstream_invert", "invert_ds", "outlet_invert"),
@@ -471,7 +476,8 @@ class _Base(QgsProcessingAlgorithm):
                     "run report", SOURCE_POINT, advanced=True)
         for key, desc in (("X_NAME", "  name field"),
                           ("X_KIND", "  kind field (bridge / culvert)"),
-                          ("X_SPAN", "  surveyed span or diameter field (ft)"),
+                          ("X_SPAN", "  surveyed span or diameter field (ft; a ..._MT_... NBI field is "
+                       "metres)"),
                           ("X_RISE", "  surveyed rise field (ft)"),
                           ("X_BARRELS", "  barrels field"),
                           ("X_SHAPE", "  shape field (box / pipe)"),
@@ -482,6 +488,12 @@ class _Base(QgsProcessingAlgorithm):
                    "in the embankment (off by default: a gap LOWERS the water behind the road, "
                    "so the result upstream of it is less conservative than the default; a "
                    "crossing without a surveyed opening is never cut)", False, advanced=True)
+        # 3.26.7: the NBI gives a culvert's span and barrels but never its rise
+        self._num("CROSSING_RISE_FT", "Crossings: rise to assume for an inventory culvert with "
+                  "a span and no rise, e.g. every NBI culvert (ft; 0 = none: such a culvert is "
+                  "only reported). With 'cut ... as gaps' on, those culverts are then cut too, "
+                  "never deeper than the embankment, and the report marks the rise as assumed",
+                  0.0, minimum=0.0, advanced=True)
         # v3.4.0: building footprints as obstructions (polygons in the structures layer)
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "BUILDINGS", "Buildings: how polygon footprints in the structures layer enter the "
@@ -904,11 +916,10 @@ class _Base(QgsProcessingAlgorithm):
             except Exception:                                    # noqa - one crossing
                 continue
             at = lambda key: _attr_of(f, fld[key])
-            ktxt = str(at("X_KIND") or "").lower()
-            kind = (structmod.KIND_BRIDGE if "bridge" in ktxt else
-                    structmod.KIND_CULVERT if ktxt else structmod.KIND_BRIDGE)
+            kind = gapsmod.kind_from(at("X_KIND"), fld["X_KIND"])
             shape_txt = str(at("X_SHAPE") or "").lower()
-            span, rise = qio.num(at("X_SPAN")), qio.num(at("X_RISE"))
+            span = gapsmod.length_ft(qio.num(at("X_SPAN")), fld["X_SPAN"])
+            rise = gapsmod.length_ft(qio.num(at("X_RISE")), fld["X_RISE"])
             if span and rise:
                 surveyed += 1
             st.crossings.append({
@@ -921,6 +932,9 @@ class _Base(QgsProcessingAlgorithm):
                 "source": "crossings layer"})
         if not st.crossings:
             return []
+        rise_ft = (self.parameterAsDouble(parameters, "CROSSING_RISE_FT", context)
+                   if self.parameterDefinition("CROSSING_RISE_FT") is not None else 0.0)
+        assumed = gapsmod.assume_rise(st.crossings, rise_ft)
         used = ", ".join("{} = {}".format(k[2:].lower(), v) for k, v in sorted(fld.items()) if v)
         return ["Crossings within {:.0f} mi of the dam: {} ({} with a surveyed span and rise, "
                 "so {} can be cut as gaps){}{}".format(
@@ -928,7 +942,9 @@ class _Base(QgsProcessingAlgorithm):
                     surveyed if st.crossing_gaps else "none",
                     "" if st.crossing_gaps else "; 'cut the surveyed ones as gaps' is off, so "
                     "every crossing is only reported",
-                    "; fields: " + used if used else "")]
+                    "; fields: " + used if used else "")] + (
+            ["{} inventory culvert(s) had a span and no rise and take the assumed rise of {:g} "
+             "ft (CROSSING_RISE_FT)".format(assumed, rise_ft)] if assumed else [])
 
     def apply_features(self, st, parameters, context, work, center_xy):
         """Read the flow-path layers around the dam into `st`. Returns notes."""
