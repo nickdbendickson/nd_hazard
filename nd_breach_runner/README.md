@@ -55,7 +55,7 @@ still arrives earlier at Casselton and loses more volume.
   reaches the arrival depth get an arrival time. A pixel that reaches it only between two output
   times gets the cell's time of the maximum instead, and a note gives the number of pixels. The
   arrival depth is the tool's *Arrival depth* (`ARRIVAL_FT`) or the re-export's
-  `--arrival-depth-ft`, 1 ft by default in both.
+  `--arrival-depth-ft`, 0.1 ft by default in both (1 ft before 3.26.3).
 - **The method is recorded** as `depth_basis`: `terrain` (from the terrain) or `cell_min` (the old
   lowest-point depth).
 
@@ -496,7 +496,7 @@ that already has the crest changes nothing. Nothing here has been run in a real 
 |---|---|
 | `Depth (Max).tif` | ft |
 | `Velocity (Max).tif` | ft/s |
-| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 1 ft) |
+| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 0.1 ft, the ND hazard wet depth; 1 ft before 3.26.3) |
 | `WSE (Max).tif` | ft (DEM datum) |
 | `Baseline Depth (Max).tif` etc. | flood scenario: the same flood without the breach |
 | `Incremental Depth (Max).tif`, `Incremental WSE Rise (Max).tif` | flood scenario: with minus without (ND 6.4) |
@@ -585,7 +585,12 @@ model installation*, *Self-test in this QGIS*.
 4. **First domain.** A steepest-descent trace from there (default 5 mi), buffered 1 mi.
 5. **LISFLOOD-FP**, inertial solver, 10 m cells by default. **How far downstream
    (ND 5.1.1(f)):** if the flood leaves an edge deeper than the tolerance (default 1 ft),
-   that edge moves out (default 3 mi) and the model runs again. With structure, road or rail
+   that edge moves out (default 3 mi) and the model runs again. **How long:** while the latest
+   arrival time comes after 90% of the simulated time, the flood is still advancing and the next
+   run is 1.5 times longer (an automatic duration, or a chosen one up to `DURATION_MAX_HR`); a run
+   that cannot lengthen ends with a *Results cut off* note. The arrival time is at the arrival
+   depth (0.1 ft by default since 3.26.3, 1 ft before), so the thin front keeps runs going
+   longer, and ends more of them with a cut-off note, than 1 ft did. With structure, road or rail
    layers, an edge is left alone when none of them lies within 5 mi of the flood's path
    beyond it, and the report says so for you to confirm. Optionally (3.2.0) an edge is also
    left alone where the class stops changing (see "New in 3.2.0"). Results are read every

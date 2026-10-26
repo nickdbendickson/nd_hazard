@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""tools/ci_checks.py fast-gate tests. Currently covers the 'qt6 enums' lint: it must fire on the
+"""tools/ci_checks.py fast-gate tests. Covers the 'qt6 enums' lint: it must fire on the
 unscoped PyQt6/QGIS 4.x enum spellings (and bare-int / QVariant QgsField types) that broke the
 sibling DamSafety suite in #131 / #134, and must allow the scoped forms, compat constants,
 hasattr-guarded and '# qt6-ok' lines, prose in docstrings/comments, compat modules and qgis_mock
-doubles. Pure stdlib; builds a throw-away tree.
+doubles. And the 'release table' check: the damsuite RELEASE of every vendored copy must equal
+each plugin's metadata.txt version, so a merge that keeps one side of a version bump fails here.
+Pure stdlib; builds a throw-away tree.
 
     python3 tools/test_ci_checks.py
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -73,6 +76,64 @@ def test_qt6_enum_lint_fires_and_allows():
 def test_qt6_enum_lint_clean_on_the_real_tree():
     hits = C.scan_qt6_enums(C.ROOT)
     assert hits == [], ["{}:{} {}".format(h[0], h[1], h[2]) for h in hits]
+
+
+SET = {"ndhazard": "2.34.5", "ndbreach": "3.26.2", "ndscreen": "0.32.4", "ndupdater": "1.7.0"}
+
+
+def _release_tree(root, meta, release, odd=None):
+    """Every plugin gets the real damsuite/versions.py with its RELEASE replaced by `release` (or
+    by odd[plugin] for that one copy) and a metadata.txt at version=meta[key]."""
+    folders = C._load_versions(os.path.join(C.ROOT, "nd_breach_runner", "damsuite",
+                                            "versions.py")).ALL
+    for plugin in C.PLUGINS:
+        with open(os.path.join(C.ROOT, plugin, "damsuite", "versions.py"), encoding="utf-8") as f:
+            src = f.read()
+        table = "RELEASE = " + repr((odd or {}).get(plugin, release))
+        src, n = re.subn(r"^RELEASE\s*=\s*\{[^}]*\}", lambda _m: table, src, flags=re.M)
+        assert n == 1, plugin
+        _w(root, plugin + "/damsuite/versions.py", src)
+    for key, folder in folders.items():
+        _w(root, folder + "/metadata.txt", "[general]\nname={}\nversion={}\n".format(key, meta[key]))
+
+
+def _release_problems(meta, release, odd=None):
+    root = tempfile.mkdtemp(prefix="release_table_")
+    try:
+        _release_tree(root, meta, release, odd)
+        problems = []
+        C.check_release_table(problems, root)
+        return problems
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_release_table_matching_metadata_passes():
+    assert _release_problems(SET, SET) == []
+
+
+def test_release_table_one_sided_bump_fails():
+    # RELEASE took the Runner bump (3.26.3), metadata.txt kept the other side (3.26.2)
+    p = _release_problems(SET, dict(SET, ndbreach="3.26.3"))
+    assert any("RELEASE['ndbreach'] = 3.26.3 but nd_breach_runner/metadata.txt version=3.26.2"
+               in x for x in p), p
+    assert len(p) == 1, p
+    # and the other way round: metadata.txt is 2.34.5, every RELEASE copy still says 2.34.4
+    p = _release_problems(SET, dict(SET, ndhazard="2.34.4"))
+    assert any("RELEASE['ndhazard'] = 2.34.4 but ND_Dam_Hazard_Helper/metadata.txt version="
+               "2.34.5" in x for x in p), p
+
+
+def test_release_table_one_copy_disagreeing_fails():
+    p = _release_problems(SET, SET, odd={"nd_dam_screening": dict(SET, ndbreach="3.26.3")})
+    assert any("RELEASE disagrees across copies" in x and "nd_dam_screening" in x for x in p), p
+    assert any("RELEASE['ndbreach'] = 3.26.3" in x and "nd_dam_screening" in x for x in p), p
+
+
+def test_release_table_clean_on_the_real_tree():
+    problems = []
+    C.check_release_table(problems)
+    assert problems == [], problems
 
 
 def main():

@@ -11,7 +11,7 @@ from .compat import ALG_NO_THREADING
 from .algorithms import _Base
 from .core import (benchmark, conditioning as condmod, gdal_io, handoff, nd_data, products,
                    structures as structmod, workflow)
-from .core.units import FT, MILE
+from .core.units import ARRIVAL_DEPTH_FT, FT, MILE
 
 
 class _ToolBase(_Base):
@@ -400,8 +400,9 @@ class ProductsAlgorithm(_ToolBase):
         self.addParameter(QgsProcessingParameterString("DAM_ID", "Dam ID", optional=True))
         self._text("DAM_NAME", "Dam name (map title)")
         self.addParameter(QgsProcessingParameterPoint("DAM_POINT", "Dam (in the raster's CRS)"))
-        self._num("ARRIVAL_FT", "Flood extent: depth at least (ft; starting value 1 is the "
-                  "engineer's, a screening value you choose)", 1.0, minimum=0.01)
+        self._num("ARRIVAL_FT", "Flood extent: depth at least (ft; starting value 0.1 is the "
+                  "ND hazard wet depth, a screening value you choose)", ARRIVAL_DEPTH_FT,
+                  minimum=0.01)
         self._text("CONTOURS_HR", "Arrival zones (hours)", "0.25, 0.5, 1, 2, 4, 8")
         from .algorithms import EAP_MAP_CHOICES
         self.addParameter(QgsProcessingParameterEnum(

@@ -6,6 +6,8 @@ QGIS/GDAL install, so they can gate every PR cheaply:
                        the single source both forks vendor from, with no checkout of the other repo
   2. version sanity  — each plugin metadata.txt has a well-formed version=, and the vendored
                        damsuite SUITE_VERSION is identical across every copy
+     release table   — the vendored damsuite RELEASE is identical across every copy and equals
+                       each plugin's metadata.txt version
   3. compile         — py_compile every .py in the suite (catches a syntax error from a bad merge
                        across all plugins in seconds, without importing anything)
   4. shared/ui       — every plugin copy of the shared window files matches shared/ui/, and no
@@ -96,6 +98,58 @@ def check_versions(problems):
             seen.setdefault(m.group(1), []).append(plugin)
     if len(seen) > 1:
         _fail(problems, "damsuite SUITE_VERSION disagrees across copies: " + repr(seen))
+
+
+def _metadata_version(path):
+    with open(path, encoding="utf-8") as f:
+        m = re.search(r"^version=\s*(\S+)", f.read(), re.M)
+    return m.group(1) if m else None
+
+
+def _load_versions(path):
+    """A vendored damsuite/versions.py loaded on its own (it needs only the stdlib), so RELEASE and
+    ALL are what suitecheck reads at run time."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_ci_damsuite_versions", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_release_table(problems, root=None):
+    """The damsuite RELEASE table is the same in every vendored copy and names each plugin's
+    metadata.txt version. suitecheck warns '2.34.4 installed, 2.34.5 is this release' from it, and
+    a merge that keeps one side of a version bump would otherwise pass every other fast check.
+    (nd_data_updater/ndpack/damsuite is the pack builder's own older snapshot, not vendored from
+    the pin, and is not checked here.)"""
+    root = root or ROOT
+    tables = {}                                     # repr(RELEASE) -> (RELEASE, ALL, [plugins])
+    for plugin in PLUGINS:
+        path = os.path.join(root, plugin, "damsuite", "versions.py")
+        if not os.path.isfile(path):
+            continue
+        vs = _load_versions(path)
+        release = dict(getattr(vs, "RELEASE", {}) or {})
+        folders = dict(getattr(vs, "ALL", None) or vs.PLUGINS)
+        if not release:
+            _fail(problems, "{}/damsuite/versions.py: no RELEASE dict".format(plugin))
+            continue
+        tables.setdefault(repr(sorted(release.items())), (release, folders, []))[2].append(plugin)
+    if len(tables) > 1:
+        _fail(problems, "damsuite RELEASE disagrees across copies: " + "; ".join(
+            "{} in {}".format(r, ", ".join(p)) for r, _f, p in tables.values()))
+    for release, folders, copies in tables.values():
+        for key, ver in sorted(release.items()):
+            folder = folders.get(key)
+            meta = os.path.join(root, folder or "", "metadata.txt")
+            if not folder or not os.path.isfile(meta):
+                _fail(problems, "RELEASE[{!r}]: no plugin folder / metadata.txt".format(key))
+                continue
+            mv = _metadata_version(meta)
+            if mv != ver:
+                _fail(problems, "RELEASE[{!r}] = {} but {}/metadata.txt version={} (in the "
+                                "damsuite/versions.py of {}; bump both, in every copy)".format(
+                                    key, ver, folder, mv, ", ".join(copies)))
 
 
 def check_compile(problems):
@@ -211,6 +265,7 @@ def check_qt6_enums(problems):
 def main():
     problems = []
     for name, fn in (("damsuite pin", check_damsuite_pin), ("versions", check_versions),
+                     ("release table", check_release_table),
                      ("shared/ui drift", check_ui_drift), ("window colours", check_window_colours),
                      ("qt6 enums", check_qt6_enums),
                      ("compile", check_compile)):

@@ -18,7 +18,7 @@ import time
 import numpy as np
 
 from .grid import Grid
-from .units import ACFT, ACRE, CFS, FT
+from .units import ACFT, ACRE, ARRIVAL_DEPTH_FT, CFS, FT
 from ..damsuite.keepawake import keep_awake
 
 
@@ -126,7 +126,7 @@ class Cancelled(RuntimeError):
 
 class LisfloodSettings:
     def __init__(self, exe, threads=0, manning_n=0.06, manning_grid=None,
-                 arrival_depth_m=0.3048, sim_time_s=6 * 3600.0, massint_s=300.0,
+                 arrival_depth_m=ARRIVAL_DEPTH_FT * FT, sim_time_s=6 * 3600.0, massint_s=300.0,
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False):

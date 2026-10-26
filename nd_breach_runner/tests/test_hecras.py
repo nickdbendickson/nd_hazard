@@ -384,15 +384,17 @@ def hecras_import_grids_from_a_synthetic_mesh():
         _close(v[N - 1 - 3, 1], (2.0 + 3.0 + 1.0 + 1.0) / 4.0)            # cell (i=1, j=3)
         _close(v[N - 1 - 0, 0], (2.0 + 1.0 + 9.0) / 3.0)                  # corner, ghost face
         assert np.isnan(v[:, 4:]).all()
-        arr = grids["arrival"].data                                       # depth reaches 1 ft
-        _nan_eq(arr, _expected_columns(2.0 / DMAX))
+        arr = grids["arrival"].data                                       # depth reaches 0.1 ft
+        _nan_eq(arr, _expected_columns(0.2 / DMAX))                       # (default, 3.26.3)
+        g1, _ = hecras.import_results(src, arrival_depth_ft=1.0)          # the old 1 ft
+        _nan_eq(g1["arrival"].data, _expected_columns(2.0 / DMAX))
         _close(grids["time_of_max"].data[0, 0], 3.0)                      # days -> hours
         assert not any("No " in n for n in info["notes"]), info["notes"]
         assert "faces averaged" in info["used"]["velocity"]
         # arrival counted from the breach: 0.25 h after the start, and clipped at 0
-        g2, _ = hecras.import_results(src, t0_hr=0.25)
+        g2, _ = hecras.import_results(src, t0_hr=0.25, arrival_depth_ft=1.0)
         _close(g2["arrival"].data[0, 0], 0.4 - 0.25)
-        g3, _ = hecras.import_results(src, t0_hr=1.0)
+        g3, _ = hecras.import_results(src, t0_hr=1.0, arrival_depth_ft=1.0)
         assert g3["arrival"].data[0, 0] == 0.0
         # a 2 ft arrival depth
         g4, _ = hecras.import_results(src, arrival_depth_ft=2.0)
@@ -412,7 +414,7 @@ def hecras_import_si_file_returns_feet():
         _nan_eq(grids["depth"].data, _expected_columns(DMAX), tol=1e-6)
         _nan_eq(grids["wse"].data, _expected_columns([105.0] * 4), tol=1e-6)
         _close(grids["velocity"].data[2, 1], 1.75)
-        _nan_eq(grids["arrival"].data, _expected_columns(2.0 / DMAX))
+        _nan_eq(grids["arrival"].data, _expected_columns(0.2 / DMAX))     # 0.1 ft default
         # a wrong 'units' request is honoured over the file (values read as feet)
         g, _ = hecras.import_results(src, units="us")
         _close(np.nanmax(g["wse"].data), 105.0 * FT)

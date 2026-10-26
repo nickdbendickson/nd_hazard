@@ -805,8 +805,14 @@ def workflow_lisflood_extends_domain():
         assert os.path.exists(r.final[k])
     depth = np.load(os.path.splitext(r.final["depth"])[0] + ".npy")
     arr = np.load(os.path.splitext(r.final["arrival"])[0] + ".npy")
-    # arrival only where depth reached the arrival depth
-    assert np.all(depth[np.isfinite(arr)] >= 1.0 - 1e-6)
+    # arrival only where depth reached the run's arrival depth (0.1 ft default since 3.26.3;
+    # LISFLOOD-FP writes depth to the mm, so the wet test allows ARRIVAL_TOL_M)
+    from nd_breach_runner.core.lisflood import ARRIVAL_TOL_M
+    from nd_breach_runner.core.units import FT
+    floor_ft = st.arrival_depth_ft - ARRIVAL_TOL_M / FT - 1e-6
+    assert np.isfinite(arr).any()
+    assert np.all(depth[np.isfinite(arr)] >= floor_ft), (float(np.nanmin(
+        depth[np.isfinite(arr)])), st.arrival_depth_ft)
     # reservoir side (west of the dam) stays dry
     js = json.load(open(os.path.splitext(r.final["depth"])[0] + ".json"))
     xs = js["x0"] + (np.arange(depth.shape[1]) + 0.5) * js["dx"]

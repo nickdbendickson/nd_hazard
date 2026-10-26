@@ -410,7 +410,7 @@ TEMPLATE = {
     "model": {
         "_help": "tier: lisflood or lisflood+anuga. Paths left empty are auto-detected "
                  "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places).",
-        "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 1.0,
+        "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": units.ARRIVAL_DEPTH_FT,
         "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 60.0, "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
@@ -1764,7 +1764,8 @@ def build_parser():
     p.add_argument("--terrain-z", default="", help="terrain elevation unit (default from "
                    "the raster: auto, feet, us_feet, meters)")
     p.add_argument("--t0-hr", type=float, default=0.0, help="arrival counted from this hour")
-    p.add_argument("--arrival-depth-ft", type=float, default=1.0)
+    p.add_argument("--arrival-depth-ft", type=float, default=units.ARRIVAL_DEPTH_FT,
+                   help="arrival time is when the depth first exceeds this (default %(default)s ft)")
     p.add_argument("--overwrite", action="store_true", help="replace existing rasters in --out")
     p.set_defaults(func=cmd_hecras_reexport)
     return ap
