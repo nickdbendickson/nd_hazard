@@ -227,6 +227,23 @@ def _crown_and_bed(grid, point, direction, corridor_m=CORRIDOR_M, reach_m=REACH_
     return crown, bed
 
 
+def side_beds(grid, point, direction, corridor_m=CORRIDOR_M, reach_m=REACH_M):
+    """3.26.8: the lowest ground off the road on each side, (side of gap_line's first end,
+    side of its second end), metres; None for a side with no data."""
+    z = grid.masked()
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    ux, uy = direction
+    along = (X - point[0]) * ux + (Y - point[1]) * uy
+    across = (X - point[0]) * (-uy) + (Y - point[1]) * ux
+    near = (np.abs(along) <= corridor_m) & (np.abs(across) > 0.5 * corridor_m) & \
+        (np.abs(across) <= reach_m) & np.isfinite(z)
+    out = []
+    for side in (across < 0, across > 0):
+        m = near & side
+        out.append(float(np.nanmin(z[m])) if m.any() else None)
+    return tuple(out)
+
+
 def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
                   corridor_m=CORRIDOR_M, reach_m=REACH_M):
     """One row per crossing: where it is, how much the terrain blocks it, and whether its
@@ -285,6 +302,8 @@ def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
             # 3.26.7: an assumed rise never cuts deeper than the embankment stands
             row["rise_ft"] = row["blocks_ft"]
             row["surveyed"] = row["surveyed"] and bool(row["rise_ft"])
+        b0, b1 = side_beds(grid, match["point"], match["direction"], corridor_m, reach_m)
+        row["side_beds_ft"] = [None if b is None else round(b / FT, 2) for b in (b0, b1)]
         row["line"] = line.tolist()
         row["point"] = list(match["point"])
         row["direction"] = list(match["direction"])
@@ -319,14 +338,28 @@ def structures_from(rows, cell_m, kind_override=""):
         span_m = float(r["span_ft"]) * FT
         rise_m = float(r["rise_ft"]) * FT
         kind = kind_override or r.get("kind") or structmod.KIND_BRIDGE
+        line = np.asarray(r["line"], dtype=float)
+        inv_up = float(r["invert_up_ft"]) * FT if r.get("invert_up_ft") is not None else None
+        inv_dn = float(r["invert_dn_ft"]) * FT if r.get("invert_dn_ft") is not None else None
+        beds = r.get("side_beds_ft") or [None, None]
+        if kind == structmod.KIND_CULVERT and None not in beds:
+            # 3.26.8: a culvert runs from the higher bed to the lower one and is the road's
+            # width long, not the whole gap line: HEC-RAS got a 394 ft barrel with its inlet
+            # 10 ft above the channel (the line's end on a field) and passed no water through
+            # it (Absaraka NBI 9117181). Inverts not in the inventory are the beds each side.
+            if beds[1] > beds[0]:
+                line, beds = line[::-1].copy(), beds[::-1]
+            mid = line.mean(axis=0)
+            u = (line[-1] - line[0]) / max(float(np.hypot(*(line[-1] - line[0]))), 1e-9)
+            half = max(CORRIDOR_M, float(cell_m))
+            line = np.array([mid - u * half, mid + u * half])
+            if inv_up is None and inv_dn is None:
+                inv_up, inv_dn = beds[0] * FT, beds[1] * FT
         s = structmod.Structure(
-            kind=kind, line=np.asarray(r["line"], dtype=float), width_m=span_m,
+            kind=kind, line=line, width_m=span_m,
             height_m=rise_m, barrels=max(1, int(r.get("barrels") or 1)),
             shape=str(r.get("shape") or "box"),
-            invert_up_m=(float(r["invert_up_ft"]) * FT
-                         if r.get("invert_up_ft") is not None else None),
-            invert_dn_m=(float(r["invert_dn_ft"]) * FT
-                         if r.get("invert_dn_ft") is not None else None),
+            invert_up_m=inv_up, invert_dn_m=inv_dn,
             name="{} ({})".format(r["name"], r.get("source") or "surveyed crossing"))
         out.append(s)
         notes.append("{}: {:.0f} ft x {:.1f} ft {} cut as a gap in the embankment ({} blocked "

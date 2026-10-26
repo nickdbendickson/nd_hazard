@@ -47,3 +47,32 @@ def v3268_a_plain_grid_has_no_split_cells():
     gx, gy = np.meshgrid(xs, xs)
     pts = np.column_stack([gx.ravel(), gy.ravel()])
     assert len(hm.perimeter_split_cells(per, pts, 100.0)) == 0
+
+
+@test
+def v3268_a_cut_culvert_runs_from_the_higher_bed_and_is_the_roads_width_long():
+    """Absaraka NBI 9117181: the gap line (120 m) went to HEC-RAS as a 394 ft barrel whose
+    inlet sat on a field 10 ft above the channel, so no water went through it."""
+    from nd_breach_runner.core import gaps as gp
+    from nd_breach_runner.core.grid import Grid
+
+    def read_dem(bounds, cell):
+        x0, y0, x1, y1 = bounds
+        nx, ny = max(4, int((x1 - x0) / cell)), max(4, int((y1 - y0) / cell))
+        g = Grid(np.zeros((ny, nx)), x0, y1, cell)
+        _X, Y = np.meshgrid(g.x_centers(), g.y_centers())
+        # a road along y = 0; the ground falls to the south (bed 98 m south, 100 m north)
+        return Grid(np.where(np.abs(Y) < 8.0, 104.0, np.where(Y > 0, 100.0, 98.0)), x0, y1,
+                    cell)
+
+    roads = [np.array([[-200.0, 0.0], [200.0, 0.0]])]
+    rows = gp.blocking_rows([{"name": "C", "x": 0.0, "y": 1.0, "kind": "culvert",
+                              "span_ft": 10.0, "rise_ft": 4.0, "barrels": 2}],
+                            roads, read_dem, 3.0)
+    assert rows[0]["side_beds_ft"] is not None
+    structs, _ = gp.structures_from(rows, 3.0)
+    s = structs[0]
+    line = np.asarray(s.line)
+    assert line[0][1] > 0 > line[-1][1]                 # north (higher bed) end first
+    assert abs(np.hypot(*(line[-1] - line[0])) - 2 * gp.CORRIDOR_M) < 1e-6
+    assert abs(s.invert_up_m - 100.0) < 0.01 and abs(s.invert_dn_m - 98.0) < 0.01
