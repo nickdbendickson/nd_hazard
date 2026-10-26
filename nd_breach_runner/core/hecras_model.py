@@ -2189,13 +2189,18 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
         worse, better = _closed_worse(meas, plain, cell, units.len_name)
         if worse or not better:
             return {"rejected": worse or ["it is no better"], "terrain_tif": terrain_tif}
+        # closing a gap between parts of the flood can also bring in a part left out before
+        grow = 100.0 * (meas["area"] / max(plain["area"], 1e-9) - 1.0)
+        grown = "; it also joins flooded ground left outside, and the 2D area is {:.1f}% " \
+            "larger than as drawn".format(grow) if \
+            grow > 100.0 * added / max(dom0_area, 1e-9) + 1.0 else ""
         notes.append(
             "Perimeter pre-check: the 2D area as drawn had {} cell(s) that its perimeter cuts in "
             "two (HEC-RAS stops with 'face errors detected on the perimeter of the mesh'), so "
             "its notches narrower than {:,.0f} {u} there were closed before the dam line was "
-            "cut ({:,.0f} {u}2, {:.2f}% of the area, of dry ground added at the edge). As "
+            "cut ({:,.0f} {u}2, {:.2f}% of the area, of dry ground added at the edge{}). As "
             "drawn, {} point(s) had to be removed{}; with the notches closed {}.".format(
-                plain["found"], w_close, added, 100.0 * added / max(dom0_area, 1e-9),
+                plain["found"], w_close, added, 100.0 * added / max(dom0_area, 1e-9), grown,
                 plain["removed"], _left_text(plain),
                 "{} point(s) are removed{}".format(meas["removed"], _left_text(meas))
                 if meas["removed"] else "none is", u=units.len_name))
@@ -2810,7 +2815,7 @@ def _layout_measures(per, pts, cell, bc, A, B, wet, removed, split_left, over8):
     return {"removed": int(removed),
             "split_left": int(len(split_left)) if split_left is not None else 0,
             "over8": int(len(over8)) if over8 is not None else 0,
-            "valid": bool(poly.IsValid()),
+            "valid": bool(poly.IsValid()), "area": abs(ring_area(per)),
             "bc_cross": bool(bcl.Intersects(pv)) if bcl is not None and pv is not None
             else False,
             "bc_gap": float(gap) if gap is not None and gap >= 0 else float("nan"),
