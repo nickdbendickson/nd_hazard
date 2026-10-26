@@ -121,8 +121,12 @@ def _check_model(m, P, flow_dir):
     assert np.cross(flow_dir, u) < 0           # B is to the right of the flow
     per = list(m.perimeter) + [m.perimeter[0]]
     assert hm.ring_area(m.perimeter) > 0
-    for q in list(m.conn_line) + list(m.bc_line):
+    for q in m.conn_line:
         assert hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0] < 0.5
+    # 3.26.4: the BC line runs a quarter cell outside the perimeter (HEC-RAS refuses it on it)
+    for q in m.bc_line:
+        dq = hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0]
+        assert 0.5 * hm.BC_OFFSET_CELLS * m.cell < dq < 2.0 * hm.BC_OFFSET_CELLS * m.cell, dq
     poly = hm._polygon(m.perimeter)
     assert poly.IsValid()
     for x, y in m.points[::53]:
@@ -281,8 +285,9 @@ def hecras_model_builds_every_file_with_three_crs():
         per = list(m.perimeter) + [m.perimeter[0]]
         for q in m.conn_line:
             assert hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0] < 0.5
-        for q in m.bc_line:
-            assert hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0] < 0.5
+        for q in m.bc_line:               # 3.26.4: a quarter cell outside the perimeter
+            dq = hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0]
+            assert 0.5 * hm.BC_OFFSET_CELLS * m.cell < dq < 2.0 * hm.BC_OFFSET_CELLS * m.cell
         # the boundary line is at the downstream end (far east of the dam)
         bc = np.array(m.bc_line)
         assert bc[:, 0].mean() > P[0] + 3.0 * 5000 / 0.3048 / 3, (bc[:, 0].mean() - P[0])

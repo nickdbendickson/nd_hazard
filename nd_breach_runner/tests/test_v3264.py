@@ -75,6 +75,9 @@ def v3264_finer_cells_below_the_breach_and_adaptive_step():
         assert "Computation Time Step Max Courant= 1" in p01
         readme = open(r["paths"]["readme"], encoding="utf-8").read()
         assert "Finer cells below the breach" in readme
+        # the breach opening is cut into the terrain to the breach bottom, which stays put
+        assert any(n.startswith("Terrain: the breach opening") for n in r["notes"])
+        assert not any("breach bottom was raised" in n for n in r["notes"]), r["notes"]
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

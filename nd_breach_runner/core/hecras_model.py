@@ -717,6 +717,69 @@ def _grid_points(perim, cell, srs):
     return np.column_stack([px[keep], py[keep]])
 
 
+def _piping_in_breach(bvals, top_u, notes, units):
+    """v3.26.4: keeps the initial piping elevation inside a raised breach (half way up)."""
+    pe, z = bvals.get("piping_elev"), bvals["bottom_elev"]
+    if bvals.get("piping") and pe is not None and pe <= z:
+        bvals["piping_elev"] = round(z + 0.5 * (top_u - z), 2)
+        notes.append("Initial piping elevation moved to half way up the raised breach "
+                     "({:.1f} {}).".format(bvals["piping_elev"], units.len_name))
+
+
+def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=None,
+                       z_top=None, t_min=0.0):
+    """v3.26.4 (as DamSafety Runner hecras_model.cut_breach_channel): lowers the terrain
+    GeoTIFF (never raises it) to z_cut in the rectangle from the dam line A + ab*s
+    (s_lo..s_hi) downstream (d, across the line) for t_min..t_max: the breach opening through
+    the downstream half of the embankment. With side_slope (H:V) and z_top the sides rise
+    from z_cut at that slope beyond s_lo / s_hi up to z_top. Returns {'cells', 'area',
+    'max_cut'} (area in the GeoTIFF's units squared)."""
+    gdal, _, _ = _ogr()
+    ds = gdal.Open(tif_path, gdal.GA_Update)
+    gt = ds.GetGeoTransform()
+    b = ds.GetRasterBand(1)
+    nd = b.GetNoDataValue()
+    A = np.asarray(A, float)
+    ab = np.asarray(ab, float)
+    d = np.asarray(d, float)
+    wside = 0.0
+    if side_slope and z_top is not None and z_top > z_cut:
+        wside = float(side_slope) * (float(z_top) - float(z_cut))
+    lo_, hi_ = s_lo - wside, s_hi + wside
+    corners = np.array([A + ab * lo_ + d * t_min, A + ab * hi_ + d * t_min,
+                        A + ab * hi_ + d * t_max, A + ab * lo_ + d * t_max])
+    c0 = max(0, int(math.floor((corners[:, 0].min() - gt[0]) / gt[1])) - 1)
+    c1 = min(ds.RasterXSize, int(math.ceil((corners[:, 0].max() - gt[0]) / gt[1])) + 1)
+    r0 = max(0, int(math.floor((corners[:, 1].max() - gt[3]) / gt[5])) - 1)
+    r1 = min(ds.RasterYSize, int(math.ceil((corners[:, 1].min() - gt[3]) / gt[5])) + 1)
+    out = {"cells": 0, "area": 0.0, "max_cut": 0.0}
+    if c1 <= c0 or r1 <= r0:
+        ds = None
+        return out
+    a = b.ReadAsArray(c0, r0, c1 - c0, r1 - r0).astype(np.float64)
+    xs = gt[0] + (np.arange(c0, c1) + 0.5) * gt[1]
+    ys = gt[3] + (np.arange(r0, r1) + 0.5) * gt[5]
+    X, Y = np.meshgrid(xs, ys)
+    s = (X - A[0]) * ab[0] + (Y - A[1]) * ab[1]
+    t = (X - A[0]) * d[0] + (Y - A[1]) * d[1]
+    valid = np.isfinite(a)
+    if nd is not None:
+        valid &= a != nd
+    zt = np.full(a.shape, float(z_cut))
+    if wside > 0:
+        off = np.maximum(s_lo - s, s - s_hi)
+        zt = np.where(off > 0, z_cut + off / float(side_slope), z_cut)
+    m = (s >= lo_) & (s <= hi_) & (t >= t_min) & (t <= t_max) & valid & (a > zt + 1e-9)
+    if m.any():
+        out = {"cells": int(m.sum()), "area": float(m.sum() * abs(gt[1] * gt[5])),
+               "max_cut": float((a[m] - zt[m]).max())}
+        a[m] = zt[m]
+        b.WriteArray(a.astype(np.float32), c0, r0)
+        b.FlushCache()
+    ds = None
+    return out
+
+
 def _connection_cell_mins(pts, A, B, d, z, x0, y0, step, cell):
     """v3.26.4: a function giving, for points on the dam line A-B, the lowest ground of the 2D
     cell just downstream of each (the Voronoi cell of the nearest computation point, the
@@ -1213,8 +1276,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "terrain_cell": 0.0, "max_terrain_cells": 150e6, "extent_depth_ft": 0.0,
             "manning_n": None, "courant": None,
             "structures": True,                  # v3.12.0: the run's culverts and bridges
-            "breaklines": True}                  # v3.23.0: enforce cell faces along the dam
+            "breaklines": True,                  # v3.23.0: enforce cell faces along the dam
                                                  #          crest and road embankments
+            "breach_cut": True, "refine_breach": True}   # v3.26.4: see build_model
 
 
 def _ogr():
@@ -1800,10 +1864,38 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         # sunny day: breach as soon as the run starts (pool starts at the trigger)
         bvals["trigger_wse"] = units.from_ft(wse0_ft - 0.01)
     gb = float(_sample(zw, wx0, wy0, wcell, [toe_xy])[0])
-    if np.isfinite(gb) and bvals["bottom_elev"] < gb - units.from_ft(5.0):
-        notes.append("The breach bottom ({:.1f} {u}) is more than 5 ft below the ground at the "
-                     "toe ({:.1f} {u}); HEC-RAS drains the reservoir only down to the 2D cells "
-                     "there.".format(bvals["bottom_elev"], gb, u=units.len_name))
+    # v3.26.4 (the DamSafety Runner's breach cut): HEC-RAS refuses a breach bottom below the 2D
+    # cells it opens into ('weir breach lower than the cells they are connected to'), and with
+    # the dam line on the crest those cells sit on the embankment. The breach bottom is no
+    # lower than the ground at the toe (HEC-RAS cannot drain the reservoir lower anyway), and
+    # the breach opening through the downstream half of the embankment is cut into the
+    # terrain GeoTIFF down to it, so the cells along the breach reach its bottom.
+    dn = np.array([-ab[1], ab[0]])
+    if float(np.dot(dn, d)) < 0:
+        dn = -dn
+    if np.isfinite(gb) and bvals["bottom_elev"] < gb - units.from_ft(0.01):
+        notes.append("The breach bottom was raised from {:.1f} to {:.1f} {u}, the ground at the "
+                     "toe the breach flows onto: HEC-RAS cannot drain the reservoir lower than "
+                     "the 2D cells there. The plugin's run breached to {:.1f} {u}.".format(
+                         bvals["bottom_elev"], gb, bvals["bottom_elev"], u=units.len_name))
+        bvals["bottom_elev"] = round(gb, 2)
+        _piping_in_breach(bvals, top_u, notes, units)
+    if o.get("breach_cut", True):
+        # past each bottom corner and a little upstream of the dam line by about 1.5 terrain
+        # cells, so the terrain HEC-RAS interpolates is the breach bottom right at the line
+        # and at the corners (DamSafety Runner: breach_corner_margin, t_min < 0)
+        cw = 0.5 * max(bvals["bottom_width"], 2.0 * tcell) + 1.5 * tcell
+        cut = cut_breach_channel(terrain_tif, A, ab, dn, sc - cw, sc + cw, toe_off + cell,
+                                 bvals["bottom_elev"], side_slope=bvals["left_slope"],
+                                 z_top=top_u, t_min=-1.5 * tcell)
+        if cut["cells"]:
+            notes.append("Terrain: the breach opening ({:,.0f} {u} wide, to "
+                         "{:,.0f} {u} below the dam line) is cut to the breach bottom {:.2f} {u} "
+                         "in the terrain GeoTIFF ({:,} cells, lowered by up to {:.1f} {u}), so "
+                         "the 2D cells at the breach reach its bottom.".format(
+                             2 * cw, toe_off + cell, bvals["bottom_elev"], cut["cells"],
+                             cut["max_cut"], u=units.len_name))
+            zw, wx0, wy0 = _warp(terrain_tif, srs, wcell, bounds=wb, alg="bilinear")
 
     # --- boundary: normal depth where the valley leaves the 2D area ---------------
     progress(70, "downstream boundary")
@@ -1887,7 +1979,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # v3.26.4: HEC-RAS stops ("has a weir elevation lower than the cells they are connected
     # to ... has a weir breach lower than the cells") when the dam weir or the breach bottom is
     # below the lowest ground of a 2D cell along the connection. Raise them to it.
-    cmin = _connection_cell_mins(pts, A, B, d, zw, wx0, wy0, wcell, cell)
+    cmin = _connection_cell_mins(pts, A, B, dn, zw, wx0, wy0, wcell, cell)
     if cmin is not None:
         cell_at = cmin(line)
         low = np.isfinite(cell_at) & (weir_z < cell_at + units.from_ft(0.01))
@@ -1909,22 +2001,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         floor_ = cmin.span_max(sc - 0.5 * bvals["bottom_width"],
                                sc + 0.5 * bvals["bottom_width"]) + units.from_ft(0.01)
         if np.isfinite(floor_):
-            if bvals["bottom_elev"] < floor_:
+            if bvals["bottom_elev"] < floor_ - units.from_ft(0.02):
                 notes.append("The breach bottom was raised from {:.1f} to {:.1f} {u}, the lowest "
                              "ground of the 2D cells below the breach: HEC-RAS does not allow a "
-                             "breach below the cells it opens into, so it cannot drain the "
-                             "reservoir lower than that. The plugin's run breached to {:.1f} "
-                             "{u}; lower the terrain below the dam (a channel) in RAS Mapper "
-                             "if the deeper breach matters.".format(
-                                 bvals["bottom_elev"], floor_, bvals["bottom_elev"],
-                                 u=units.len_name))
+                             "breach below the cells it opens into.".format(
+                                 bvals["bottom_elev"], floor_, u=units.len_name))
                 bvals["bottom_elev"] = round(floor_, 2)
-                pe = bvals.get("piping_elev")
-                if bvals.get("piping") and pe is not None and pe <= floor_:
-                    bvals["piping_elev"] = round(floor_ + 0.5 * (top_u - floor_), 2)
-                    notes.append("Initial piping elevation moved to half way up the raised "
-                                 "breach ({:.1f} {}).".format(bvals["piping_elev"],
-                                                              units.len_name))
+                _piping_in_breach(bvals, top_u, notes, units)
     if len(pts) < 10:
         raise HecRasModelError("the 2D area has fewer than 10 cells at {} {}; choose a "
                                "smaller cell size".format(cell, units.len_name))
