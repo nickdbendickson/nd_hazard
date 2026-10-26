@@ -151,3 +151,18 @@ def v3264_dam_point_on_the_crest_is_not_moved():
         assert not any("from the embankment crest" in n for n in r["notes"]), r["notes"]
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def v3264_reservoir_volumes_rise_as_written():
+    """HEC-RAS stopped the smoke-test dam with 'Volume Elevation relationship does not have
+    increasing volume': the pool bottom wrote 0.00, 0.00, 0.00 acre-ft."""
+    rows = [(1825.0, 0.0), (1825.13, 0.001), (1825.36, 0.004), (1825.67, 0.01),
+            (1826.03, 0.04), (1850.0, 500.0), (1850.0, 500.5), (1851.57, 600.09)]
+    kept = hm.written_increasing(rows)
+    assert kept[0] == (1825.0, 0.0)
+    assert (1825.13, 0.001) not in kept and (1825.36, 0.004) not in kept
+    assert (1825.67, 0.01) in kept and (1850.0, 500.5) not in kept
+    w = [(float(hm.f8(e)), float(hm.f8(v))) for e, v in kept]
+    assert all(b[0] > a[0] and b[1] > a[1] for a, b in zip(w, w[1:]))
+    assert hm.written_increasing([]) == []

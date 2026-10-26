@@ -353,7 +353,9 @@ def hecras_model_geometry_text_layout():
         assert lines[j].startswith("Storage Area 2D PointsPerimeterTime=")
         # reservoir: elevation-volume pairs in 8-character fields, 10 to a line
         ev, _ = _count_block(lines, "Storage Area Vol Elev=", 10, 8)
-        assert len(ev) == len(m.elev_volume) and np.allclose(ev, m.elev_volume, atol=0.01)
+        kept = hm.written_increasing(m.elev_volume)          # 3.26.4: rising as written
+        assert len(ev) == len(kept) and np.allclose(ev, kept, atol=0.01)
+        assert np.all(np.diff(np.asarray(ev)[:, 1]) > 0) and np.all(np.diff(np.asarray(ev)[:, 0]) > 0)
         # connection
         assert "Connection Up SA=Reservoir       " in lines
         assert "Connection Dn SA=Downstream      " in lines

@@ -211,6 +211,20 @@ def name32(s):
     return s.ljust(32)
 
 
+def written_increasing(pairs):
+    """v3.26.4: the (elevation, volume) rows whose WRITTEN values (8-character fields) both
+    rise. HEC-RAS stops on 'Volume Elevation relationship does not have increasing volume'
+    when two rows round to the same volume, which the shallow bottom of a pool does at two
+    decimals (0.00, 0.00, 0.00 acre-ft on the smoke-test dam). The first row is kept."""
+    out, last = [], None
+    for e, v in pairs or []:
+        we, wv = float(f8(e)), float(f8(v))
+        if last is None or (we > last[0] and wv > last[1]):
+            out.append((e, v))
+            last = (we, wv)
+    return out
+
+
 def lines8(values, per_line=10):
     vals = list(values)
     return ["".join(f8(x) for x in vals[i:i + per_line]) for i in range(0, len(vals), per_line)]
@@ -350,9 +364,9 @@ def geometry_text(m, now=None):
     L.append("Storage Area Surface Line= {} ".format(len(m.reservoir)))
     L += [s.ljust(48) for s in lines_xy(m.reservoir, 1)]
     L += ["Storage Area Type= 1 ", "Storage Area Area=", "Storage Area Min Elev=",
-          "Storage Area Vol Elev= {} ".format(len(m.elev_volume))]
+          "Storage Area Vol Elev= {} ".format(len(written_increasing(m.elev_volume)))]
     flat = []
-    for e, v in m.elev_volume:
+    for e, v in written_increasing(m.elev_volume):
         flat += [e, v]
     L += lines8(flat)
     L += ["Storage Area Is2D=0", ""]
