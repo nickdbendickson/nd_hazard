@@ -78,6 +78,11 @@ MAX_ARC_POINTS = 400
 # intersects the perimeter ... it must be entirely outside"), so it is drawn this many cells
 # outside the perimeter, along it (found running the export in HEC-RAS 6.6 itself)
 BC_OFFSET_CELLS = 0.25
+# v3.26.8: notches of the 2D area narrower than this many cells are closed before the grid is
+# laid (a cell the perimeter cuts in two stops HEC-RAS); points whose cell is still cut in two
+# are removed in up to this many passes
+NOTCH_CLOSE_CELLS = 1.2
+SPLIT_PASSES = 25
 CR = "\r\n"
 
 # v3.12.0: culverts, bridges and notches as connections inside the 2D area. The keyword lines
@@ -1772,6 +1777,18 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     if not cell:
         lo, hi = (units.from_ft(25.0), units.from_ft(500.0))
         cell = nice_cell(min(hi, max(lo, math.sqrt(area_u2 / float(o["target_cells"])))))
+    # v3.26.8: a notch of the 2D area narrower than about a cell (a dry strip a little wider
+    # than twice the side buffer) gives a grid point beside it a cell the perimeter cuts in
+    # two, and HEC-RAS stops ('face errors detected on the perimeter of the mesh'). Close
+    # such notches first; that only adds dry ground at the edge, before the dam line is cut.
+    dom0_area = dom.GetArea()
+    dom = close_notches(dom, NOTCH_CLOSE_CELLS * cell)
+    added = dom.GetArea() - dom0_area
+    if added > 0.01 * dom0_area:
+        notes.append("Notches of the 2D area narrower than {:,.0f} {u} were closed (they give "
+                     "cells the perimeter cuts in two): {:,.0f} {u}2 ({:.1f}%) of dry ground "
+                     "added at the edge.".format(NOTCH_CLOSE_CELLS * cell, added,
+                                                 100.0 * added / dom0_area, u=units.len_name))
     dom = dom.Simplify(cell / 4.0)
     # cut straight along the dam line, keep the downstream part
     span = 4.0 * math.sqrt(max(area_u2, 1.0)) + 10 * side
@@ -2071,14 +2088,26 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             pts = np.vstack(keep_pts)
     # v3.26.8: HEC-RAS stops with '1 face errors detected on the perimeter of the mesh' on a
     # cell the perimeter cuts in two (a grid point beside a narrow notch of the perimeter;
-    # Absaraka with roads, 2026-10-26). Drop those points, as the DamSafety Runner's
-    # perimeter pre-check does (3.10.22); their neighbours take the area.
-    split = perimeter_split_cells(perim, pts, cell)
-    if split is not None and len(split):
-        pts = np.delete(pts, split, axis=0)
+    # Absaraka with roads, 2026-10-26). The narrow notches were closed above; a point whose
+    # cell is still cut in two is removed, in repeated passes (its neighbours take its area,
+    # and their cells can then be cut in two), and any left are reported. The DamSafety
+    # Runner's pre-check (3.10.22) also checks sliver faces and corners and cells of more than
+    # 8 faces, and stops the build.
+    pts_unsplit = pts
+    pts, n_split, split_left = drop_perimeter_split_points(perim, pts, cell)
+    if n_split:
         notes.append("Perimeter pre-check: {} computation point(s) whose cell the perimeter "
                      "cut in two were removed (HEC-RAS stops with 'face errors detected on "
-                     "the perimeter of the mesh').".format(len(split)))
+                     "the perimeter of the mesh').".format(n_split))
+        log(notes[-1])
+    if split_left is not None and len(split_left):
+        notes.append("WARNING: {} cell(s) along the perimeter are still cut in two; HEC-RAS "
+                     "will stop with \"face errors detected on the perimeter of the mesh\" - "
+                     "move or delete those points in RAS Mapper or use another cell size: "
+                     "{}{}.".format(len(split_left), ", ".join(
+                         "({:.1f}, {:.1f})".format(*pts[i]) for i in split_left[:10]),
+                         ", ..." if len(split_left) > 10 else ""))
+        log(notes[-1])
     # v3.26.6: HEC-RAS stops ("has a weir elevation lower than the cells they are connected
     # to ... has a weir breach lower than the cells") when the dam weir or the breach bottom is
     # below the lowest ground of a 2D cell along the connection. Raise them to it.
@@ -2117,9 +2146,16 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
 
     mc = mesh_check(perim, pts, cell)
     if mc and mc["over_8_faces"]:
-        notes.append("{} cells along the perimeter have more than 8 faces; HEC-RAS will "
+        since = ""
+        if n_split:
+            # v3.26.8: say so when removing the split-cell points made some of them
+            mc0 = mesh_check(perim, pts_unsplit, cell)
+            if mc0 and mc["over_8_faces"] > mc0["over_8_faces"]:
+                since = " ({} more than before the points whose cell the perimeter cut in two " \
+                        "were removed)".format(mc["over_8_faces"] - mc0["over_8_faces"])
+        notes.append("{} cells along the perimeter have more than 8 faces{}; HEC-RAS will "
                      "report them. Fix them in RAS Mapper (move or delete the points).".format(
-                         mc["over_8_faces"]))
+                         mc["over_8_faces"], since))
 
     # --- v3.12.0: the run's culverts, bridges and notches inside the 2D area -------
     structs, ssrc = run_structures(report) if o["structures"] else ([], "")
@@ -2309,32 +2345,115 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     return {"folder": out, "paths": paths, "model": m, "info": info, "notes": notes}
 
 
-def perimeter_split_cells(perimeter, points, cell, reach=3.0):
-    """v3.26.8: indices of the points whose Voronoi cell, clipped to the perimeter, falls
-    in two or more pieces (checked within `reach` cells of the perimeter), or None without
-    scipy. HEC-RAS counts such a cell as a face error on the perimeter and stops."""
+def close_notches(geom, width):
+    """v3.26.8: the (multi)polygon `geom` with its notches, and the gaps between its parts,
+    narrower than about `width` filled: buffered out by half the width and back in (a
+    morphological closing), joined with `geom` so that nothing of it is lost. `geom` itself
+    when GEOS gives nothing usable."""
+    r = 0.5 * float(width)
+    try:
+        g = geom.Buffer(r, 4)
+        g = g.Buffer(-r, 4) if g is not None and not g.IsEmpty() else None
+        g = g.Union(geom) if g is not None and not g.IsEmpty() else None
+    except Exception:  # noqa: BLE001 - OGR with exceptions on; keep the geometry as it was
+        g = None
+    if g is None or g.IsEmpty() or not g.IsValid() or \
+            g.GetArea() < geom.GetArea() * (1.0 - 1e-9):
+        return geom
+    return g
+
+
+def _voronoi():
+    """scipy's Voronoi, or None without scipy."""
     try:
         from scipy.spatial import Voronoi
     except ImportError:
         return None
-    pts = np.asarray(points, float)
-    per = np.asarray(perimeter, float)
-    if len(pts) < 4:
-        return np.zeros(0, np.int64)
+    return Voronoi
+
+
+def _split_cells(per, pts, cell, reach=None, check=None):
+    """perimeter_split_cells, also returning which points are Voronoi neighbours of the split
+    ones (their cells change when those are removed); `check` limits the points looked at."""
+    Voronoi = _voronoi()
+    n = len(pts)
+    if n < 4:
+        return np.zeros(0, np.int64), np.zeros(n, bool)
     poly = _polygon(per)
     xmin, ymin = per.min(axis=0) - 10 * cell
     xmax, ymax = per.max(axis=0) + 10 * cell
     vor = Voronoi(np.vstack([pts, [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]]))
-    d = point_segment_distance(pts[:, 0], pts[:, 1], list(map(tuple, per)) + [tuple(per[0])])
+    idx = np.arange(n) if check is None else np.nonzero(check)[0]
     out = []
-    for i in np.nonzero(d < reach * cell)[0]:
-        reg = vor.regions[vor.point_region[i]]
-        if not reg or -1 in reg:
-            continue
-        piece = _polygon(vor.vertices[reg]).Intersection(poly)
-        if piece is not None and not piece.IsEmpty() and len(_rings(piece)) > 1:
-            out.append(int(i))
-    return np.asarray(out, np.int64)
+    if len(idx):
+        d = point_segment_distance(pts[idx, 0], pts[idx, 1],
+                                   list(map(tuple, per)) + [tuple(per[0])])
+        # a cell can reach the perimeter only if one of its corners is as far from its point
+        # as the perimeter is (a cell grown by removed neighbours can reach it from far away)
+        regs = [vor.regions[vor.point_region[i]] for i in idx]
+        lens = np.fromiter((len(r) for r in regs), np.int64, len(idx))
+        flat = np.fromiter((v for r in regs for v in r), np.int64, int(lens.sum()))
+        owner = np.repeat(np.arange(len(idx)), lens)
+        far = np.hypot(*(vor.vertices[np.maximum(flat, 0)] - pts[idx][owner]).T)
+        far[flat < 0] = np.inf
+        R = np.zeros(len(idx))
+        np.maximum.at(R, owner, far)
+        look = d <= R
+        if reach is not None:
+            look &= d < reach * cell
+        for k in np.nonzero(look)[0]:
+            reg = regs[k]
+            if not reg or -1 in reg:
+                continue
+            piece = _polygon(vor.vertices[reg]).Intersection(poly)
+            if piece is not None and not piece.IsEmpty() and len(_rings(piece)) > 1:
+                out.append(int(idx[k]))
+    out = np.asarray(out, np.int64)
+    near = np.zeros(n + 4, bool)
+    if len(out):
+        rp = vor.ridge_points
+        hit = np.isin(rp, out)
+        near[rp[hit[:, 0], 1]] = True
+        near[rp[hit[:, 1], 0]] = True
+    return out, near[:n]
+
+
+def perimeter_split_cells(perimeter, points, cell, reach=None):
+    """v3.26.8: indices of the points whose Voronoi cell, clipped to the perimeter, falls
+    in two or more pieces, or None without scipy. HEC-RAS counts such a cell as a face error
+    on the perimeter and stops. Every cell that reaches the perimeter is checked (only those
+    within `reach` cells of it when given)."""
+    if _voronoi() is None:
+        return None
+    return _split_cells(np.asarray(perimeter, float), np.asarray(points, float), cell,
+                        reach)[0]
+
+
+def drop_perimeter_split_points(perimeter, points, cell, passes=SPLIT_PASSES, min_points=10):
+    """v3.26.8: removes the points whose cell the perimeter cuts in two, pass after pass:
+    a removed point's neighbours take its area, and across a notch their cells can then be
+    cut in two as well. Stops when a pass finds none, after `passes` passes, or before fewer
+    than `min_points` points would be left. Returns (points left, number removed, indices into
+    the points left of the cells still cut in two); (points, 0, None) without scipy."""
+    if _voronoi() is None:
+        return np.asarray(points, float), 0, None
+    per = np.asarray(perimeter, float)
+    cur = np.asarray(points, float)
+    removed, check, split = 0, None, np.zeros(0, np.int64)
+    for _ in range(max(1, int(passes))):
+        # after the first pass only the neighbours of the removed points can change
+        split, near = _split_cells(per, cur, cell, check=check)
+        if not len(split) or len(cur) - len(split) < min_points:
+            break
+        keep = np.ones(len(cur), bool)
+        keep[split] = False
+        cur, check = cur[keep], near[keep]
+        removed += len(split)
+        split = None
+    if removed and (split is None or not len(split)):
+        # the final check, over every point along the perimeter
+        split = _split_cells(per, cur, cell)[0]
+    return cur, removed, split
 
 
 def mesh_check(perimeter, points, cell):
