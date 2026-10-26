@@ -585,7 +585,11 @@ model installation*, *Self-test in this QGIS*.
 4. **First domain.** A steepest-descent trace from there (default 5 mi), buffered 1 mi.
 5. **LISFLOOD-FP**, inertial solver, 10 m cells by default. **How far downstream
    (ND 5.1.1(f)):** if the flood leaves an edge deeper than the tolerance (default 1 ft),
-   that edge moves out (default 3 mi) and the model runs again. **How long:** while the latest
+   that edge moves out (default 3 mi) and the model runs again. Since 3.26.5 the water that
+   leaves counts too: once 5% of the breach volume has left the model (`OUTFLOW_EXTEND_PCT`,
+   0 = the depth rule alone), every edge carrying at least 10% of that water and wet past the
+   arrival depth moves out as well, however shallow, so a wide sheet under 1 ft no longer
+   leaves unmodelled. **How long:** while the latest
    arrival time comes after 90% of the simulated time, the flood is still advancing and the next
    run is 1.5 times longer (an automatic duration, or a chosen one up to `DURATION_MAX_HR`); a run
    that cannot lengthen ends with a *Results cut off* note. The arrival time is at the arrival

@@ -74,7 +74,7 @@ BC_NAME = "DS Normal Depth"
 START_DATE = "01JAN2000"
 MAX_WEIR_POINTS = 450          # HEC-RAS allows 500 station-elevation points on a weir
 MAX_ARC_POINTS = 400
-# v3.26.4: HEC-RAS rejects an external BC line that touches the 2D perimeter ("BC Line ...
+# v3.26.6: HEC-RAS rejects an external BC line that touches the 2D perimeter ("BC Line ...
 # intersects the perimeter ... it must be entirely outside"), so it is drawn this many cells
 # outside the perimeter, along it (found running the export in HEC-RAS 6.6 itself)
 BC_OFFSET_CELLS = 0.25
@@ -96,7 +96,7 @@ CR = "\r\n"
 # (blank on a connection); then one upstream / downstream station pair per barrel in
 # 8-character fields. In those storage-area files a culvert counts only with 'Conn Routing
 # Type= 3' (OrleansEx.g04 has a culvert with type 1 and HEC-RAS 6.3 left it out of the HDF);
-# inside a 2D area type 3 stops HEC-RAS 6.6, so a connection there is type 1 (v3.26.4).
+# inside a 2D area type 3 stops HEC-RAS 6.6, so a connection there is type 1 (v3.26.6).
 CULVERT_GROUP = "Culvert #1"
 # Runner shape -> (HEC-RAS shape code, FHWA chart, FHWA scale, entrance loss coefficient):
 # a concrete pipe with a square edge in a headwall (chart 1 scale 1, Ke 0.5) and a box with
@@ -213,7 +213,7 @@ def name32(s):
 
 
 def written_increasing(pairs):
-    """v3.26.4: the (elevation, volume) rows whose WRITTEN values (8-character fields) both
+    """v3.26.6: the (elevation, volume) rows whose WRITTEN values (8-character fields) both
     rise. HEC-RAS stops on 'Volume Elevation relationship does not have increasing volume'
     when two rows round to the same volume, which the shallow bottom of a pool does at two
     decimals (0.00, 0.00, 0.00 acre-ft on the smoke-test dam). The first row is kept."""
@@ -295,7 +295,7 @@ class Model:
         self.base_flow = 0.0
         self.sim_hours = 24.0
         self.comp_interval = "5SEC"
-        self.courant_max = 1.0           # v3.26.4: adaptive time step
+        self.courant_max = 1.0           # v3.26.6: adaptive time step
         self.output_interval = "1MIN"
         self.mapping_interval = "5MIN"
         self.detail_interval = "1HOUR"
@@ -447,7 +447,7 @@ def structure_block(c, now):
     L += ["Connection Last Edited Time=" + now.strftime("%b/%d/%Y %H:%M:%S"),
           "Conn Near Repeats=1",
           "Connection Up SA=" + name16(AREA_NAME), "Connection Dn SA=" + name16(AREA_NAME),
-          # v3.26.4 (as DamSafety Runner 3.10.56): 1 (weir, gates, culverts) with or without a
+          # v3.26.6 (as DamSafety Runner 3.10.56): 1 (weir, gates, culverts) with or without a
           # culvert, as BaldEagleDamBrk's internal levees are. Type 3, copied from the
           # storage-area examples (Diamond.g01, Beaver_LS_SAConn.g01), made HEC-RAS 6.6 read a
           # culvert inside a 2D area as a rating-curve family with no curves, and stop. The
@@ -618,7 +618,7 @@ def plan_text(m):
         "END DESCRIPTION:",
         "Computation Interval=" + m.comp_interval, "Output Interval=" + m.output_interval,
         "Instantaneous Interval=" + m.detail_interval, "Mapping Interval=" + m.mapping_interval,
-        # v3.26.4: HEC-RAS varies the step on the Courant number (halves it near the peak,
+        # v3.26.6: HEC-RAS varies the step on the Courant number (halves it near the peak,
         # doubles it back as the flood slows), from the step set for the finest cells
         "Computation Time Step Use Courant=        1",
         "Computation Time Step Use Time Series=    0",
@@ -736,7 +736,7 @@ def _grid_points(perim, cell, srs):
 
 
 def _piping_in_breach(bvals, top_u, notes, units):
-    """v3.26.4: keeps the initial piping elevation inside a raised breach (half way up)."""
+    """v3.26.6: keeps the initial piping elevation inside a raised breach (half way up)."""
     pe, z = bvals.get("piping_elev"), bvals["bottom_elev"]
     if bvals.get("piping") and pe is not None and pe <= z:
         bvals["piping_elev"] = round(z + 0.5 * (top_u - z), 2)
@@ -746,7 +746,7 @@ def _piping_in_breach(bvals, top_u, notes, units):
 
 def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=None,
                        z_top=None, t_min=0.0):
-    """v3.26.4 (as DamSafety Runner hecras_model.cut_breach_channel): lowers the terrain
+    """v3.26.6 (as DamSafety Runner hecras_model.cut_breach_channel): lowers the terrain
     GeoTIFF (never raises it) to z_cut in the rectangle from the dam line A + ab*s
     (s_lo..s_hi) downstream (d, across the line) for t_min..t_max: the breach opening through
     the downstream half of the embankment. With side_slope (H:V) and z_top the sides rise
@@ -799,7 +799,7 @@ def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=
 
 
 def _crest_snap(z, x0, y0, step, P, top, tol, search, half):
-    """v3.26.4: when the ground at the dam point P is more than `tol` below the top of dam
+    """v3.26.6: when the ground at the dam point P is more than `tol` below the top of dam
     (a dam.json point on the pool or the toe), the nearest ground within `search` that is
     within `tol` of the top, and the direction of the embankment there (the long axis of that
     high ground within `half` of it). Returns (point, unit axis) or None when P is on the
@@ -833,7 +833,7 @@ def _crest_snap(z, x0, y0, step, P, top, tol, search, half):
 
 
 def _connection_cell_mins(pts, A, B, d, z, x0, y0, step, cell):
-    """v3.26.4: a function giving, for points on the dam line A-B, the lowest ground of the 2D
+    """v3.26.6: a function giving, for points on the dam line A-B, the lowest ground of the 2D
     cell just downstream of each (the Voronoi cell of the nearest computation point, the
     ground sampled on the terrain grid in a strip below the line). None when nothing is
     found. The strip only sees part of a cell, so its lowest ground is at or above the
@@ -894,7 +894,7 @@ def _connection_cell_mins(pts, A, B, d, z, x0, y0, step, cell):
 
 
 def _offset_outward(ring, idx, dist):
-    """v3.26.4: the points ring[idx] of a closed ring moved `dist` outward, along the ring's
+    """v3.26.6: the points ring[idx] of a closed ring moved `dist` outward, along the ring's
     normal there, so a line drawn along the perimeter lies just outside it."""
     ring = np.asarray(ring, float)
     n = len(ring)
@@ -1330,7 +1330,7 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "structures": True,                  # v3.12.0: the run's culverts and bridges
             "breaklines": True,                  # v3.23.0: enforce cell faces along the dam
                                                  #          crest and road embankments
-            "breach_cut": True, "refine_breach": True}   # v3.26.4: see build_model
+            "breach_cut": True, "refine_breach": True}   # v3.26.6: see build_model
 
 
 def _ogr():
@@ -1717,7 +1717,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         v = np.array([wx[near].mean() - P[0], wy[near].mean() - P[1]])
         d = v / (np.hypot(*v) or 1.0)
         notes.append("Flow direction at the dam taken from the flooded area near it.")
-    # v3.26.4: a dam point off the embankment (on the pool or the toe) put the dam line through
+    # v3.26.6: a dam point off the embankment (on the pool or the toe) put the dam line through
     # the reservoir and across the flow direction to the toe, not across the embankment;
     # move it to the crest found nearby and across the embankment's own direction
     res_near = None
@@ -1957,7 +1957,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         # sunny day: breach as soon as the run starts (pool starts at the trigger)
         bvals["trigger_wse"] = units.from_ft(wse0_ft - 0.01)
     gb = float(_sample(zw, wx0, wy0, wcell, [toe_xy])[0])
-    # v3.26.4 (the DamSafety Runner's breach cut): HEC-RAS refuses a breach bottom below the 2D
+    # v3.26.6 (the DamSafety Runner's breach cut): HEC-RAS refuses a breach bottom below the 2D
     # cells it opens into ('weir breach lower than the cells they are connected to'), and with
     # the dam line on the crest those cells sit on the embankment. The breach bottom is no
     # lower than the ground at the toe (HEC-RAS cannot drain the reservoir lower anyway), and
@@ -2043,7 +2043,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # --- 2D computation points -----------------------------------------------------
     progress(80, "2D computation points")
     pts = _grid_points(perim, cell, srs)
-    # v3.26.4: finer cells below the breach. With the 2D area's cell (about 100 ft on a dam
+    # v3.26.6: finer cells below the breach. With the 2D area's cell (about 100 ft on a dam
     # like Absaraka) the breach opens into one or two cells and HEC-RAS 6.6 does not converge
     # there (20 iterations every step, the breach flow flipping sign step to step); HEC's dam
     # breach guidance is cells no wider than the breach near it. Rings of half and a quarter
@@ -2069,7 +2069,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                 refine.append({"cell": fc, "radius": rr_})
                 inner = rr_
             pts = np.vstack(keep_pts)
-    # v3.26.4: HEC-RAS stops ("has a weir elevation lower than the cells they are connected
+    # v3.26.6: HEC-RAS stops ("has a weir elevation lower than the cells they are connected
     # to ... has a weir breach lower than the cells") when the dam weir or the breach bottom is
     # below the lowest ground of a 2D cell along the connection. Raise them to it.
     cmin = _connection_cell_mins(pts, A, B, dn, zw, wx0, wy0, wcell, cell)
@@ -2174,7 +2174,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     hmax_ft = float(summ.get("max_depth_ft") or dmax or 10.0)
     cour = o["courant"] or (1.0 if o["equation"] == EQ_SWE else 2.0)
     # HEC-RAS's Courant number is V dt / dx (velocity, not wave celerity)
-    # v3.26.4: the finest cells (below the breach) set the step
+    # v3.26.6: the finest cells (below the breach) set the step
     cell_ft = (refine[0]["cell"] if refine else cell) * units.L / FT
     dt = cour * cell_ft / max(vmax_fps, 5.0)
     dt_s, dt_lab = comp_interval(dt)

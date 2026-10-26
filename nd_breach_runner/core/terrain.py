@@ -605,6 +605,21 @@ def edge_depths(depth, valid=None):
             "W": float(d[:, 0].max()), "E": float(d[:, -1].max())}
 
 
+def edge_flux_shares(depth, valid=None):
+    """3.26.5: each edge's share (0-1) of the water leaving the grid, estimated from the max
+    depths on it. LISFLOOD-FP reports only the total boundary outflow (Qout), not per edge, so
+    the edges are weighed by the sum of depth**(5/3) along them (Manning unit discharge at the
+    same slope and roughness). A screening estimate for which edge to move out, not a flow."""
+    d = np.where(np.isfinite(depth), depth, 0.0)
+    if valid is not None:
+        d = np.where(valid, d, 0.0)
+    d = np.clip(d, 0.0, None) ** (5.0 / 3.0)
+    w = {"N": float(d[0, :].sum()), "S": float(d[-1, :].sum()),
+         "W": float(d[:, 0].sum()), "E": float(d[:, -1].sum())}
+    tot = sum(w.values())
+    return {k: (v / tot if tot > 0 else 0.0) for k, v in w.items()}
+
+
 def expand_bounds(bounds, edges, step_m, limits=None):
     xmin, ymin, xmax, ymax = bounds
     if "W" in edges:

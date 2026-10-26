@@ -1,4 +1,4 @@
-"""3.26.4: Build a HEC-RAS 2D model, three fixes found by running the model in HEC-RAS 6.6.
+"""3.26.6: Build a HEC-RAS 2D model, three fixes found by running the model in HEC-RAS 6.6.
 
 (1) the normal-depth BC line lies just outside the 2D perimeter (HEC-RAS: 'BC Line intersects
 the perimeter ... must be entirely outside'); (2) finer cells below the breach and the adaptive
@@ -23,7 +23,7 @@ def _model():
 
 
 @test
-def v3264_bc_line_is_outside_the_2d_perimeter():
+def v3266_bc_line_is_outside_the_2d_perimeter():
     if not _has_gdal():
         print("  (skipped: no GDAL)")
         return
@@ -44,7 +44,7 @@ def v3264_bc_line_is_outside_the_2d_perimeter():
 
 
 @test
-def v3264_offset_outward_follows_the_ring_orientation():
+def v3266_offset_outward_follows_the_ring_orientation():
     sq = np.array([(0, 0), (10, 0), (10, 10), (0, 10)], float)
     ring = np.asarray(hm.densify(sq, 1.0, closed=True))
     for r_ in (ring, ring[::-1]):
@@ -54,7 +54,7 @@ def v3264_offset_outward_follows_the_ring_orientation():
 
 
 @test
-def v3264_finer_cells_below_the_breach_and_adaptive_step():
+def v3266_finer_cells_below_the_breach_and_adaptive_step():
     if not _has_gdal():
         print("  (skipped: no GDAL)")
         return
@@ -85,7 +85,7 @@ def v3264_finer_cells_below_the_breach_and_adaptive_step():
 
 
 @test
-def v3264_connection_cell_mins_raise_weir_and_breach():
+def v3266_connection_cell_mins_raise_weir_and_breach():
     # a flat 2D area at 10 below a dam line along y = 0, with a mound at x in [40, 60]
     step, cell = 1.0, 10.0
     x0, ytop = -50.0, 0.0
@@ -115,7 +115,7 @@ def _embankment(top=130.0):
 
 
 @test
-def v3264_crest_snap_moves_an_off_crest_dam_point_onto_the_embankment():
+def v3266_crest_snap_moves_an_off_crest_dam_point_onto_the_embankment():
     z, step = _embankment()
     r = hm._crest_snap(z, 0.0, 1000.0, step, (120.0, 500.0), 130.0, 3.0, 300.0, 150.0)
     assert r is not None
@@ -125,7 +125,7 @@ def v3264_crest_snap_moves_an_off_crest_dam_point_onto_the_embankment():
 
 
 @test
-def v3264_crest_snap_leaves_a_crest_point_hills_and_far_ground_alone():
+def v3266_crest_snap_leaves_a_crest_point_hills_and_far_ground_alone():
     z, step = _embankment()
     # on the crest already
     assert hm._crest_snap(z, 0.0, 1000.0, step, (210.0, 500.0), 130.0, 3.0, 300.0,
@@ -142,7 +142,7 @@ def v3264_crest_snap_leaves_a_crest_point_hills_and_far_ground_alone():
 
 
 @test
-def v3264_dam_point_on_the_crest_is_not_moved():
+def v3266_dam_point_on_the_crest_is_not_moved():
     if not _has_gdal():
         print("  (skipped: no GDAL)")
         return
@@ -154,7 +154,7 @@ def v3264_dam_point_on_the_crest_is_not_moved():
 
 
 @test
-def v3264_reservoir_volumes_rise_as_written():
+def v3266_reservoir_volumes_rise_as_written():
     """HEC-RAS stopped the smoke-test dam with 'Volume Elevation relationship does not have
     increasing volume': the pool bottom wrote 0.00, 0.00, 0.00 acre-ft."""
     rows = [(1825.0, 0.0), (1825.13, 0.001), (1825.36, 0.004), (1825.67, 0.01),
