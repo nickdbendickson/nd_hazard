@@ -566,6 +566,12 @@ class _Base(QgsProcessingAlgorithm):
         self._num("EDGE_TOL_FT", "Extend the domain while the flood leaves an edge deeper "
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.01)
+        # 3.26.5: the depth rule alone lets a wide sheet under the tolerance leave the model
+        self._num("OUTFLOW_EXTEND_PCT", "Also extend the edges the water leaves through "
+                  "(under the edge tolerance too) once this % of the breach volume has left the "
+                  "model (0 = off; starting value 5 is the engineer's, a screening value you "
+                  "choose)",
+                  workflow.OUTFLOW_WARN_PCT, minimum=0.0, maximum=100.0, advanced=True)
         # v3.4.0: near-dam refine on a fine FV1 grid (refine.py). v3.12.0: off by default
         # again - LISFLOOD-FP 8.1 writes no FV1 maximum velocity, so the fine box kept depth
         # but had zero velocity (the ACC velocities are now kept there; see refine.py)
@@ -693,7 +699,8 @@ class _Base(QgsProcessingAlgorithm):
             tier=tier, breach_method=method or METHODS[self.parameterAsEnum(
                 parameters, "METHOD", context)][0],
             cell_size_m=g("CELL"), manning_n=g("MANNING"), arrival_depth_ft=g("ARRIVAL_FT"),
-            edge_tolerance_ft=g("EDGE_TOL_FT"), initial_length_mi=g("LENGTH_MI"),
+            edge_tolerance_ft=g("EDGE_TOL_FT"), outflow_extend_pct=g("OUTFLOW_EXTEND_PCT"),
+            initial_length_mi=g("LENGTH_MI"),
             half_width_mi=g("HALF_WIDTH_MI"), expand_step_mi=g("STEP_MI"),
             max_extent_mi=g("MAX_EXTENT_MI"), max_iterations=int(g("MAX_RUNS")),
             sim_time_hr=dur if dur > 0 else None,

@@ -26,7 +26,7 @@ from ND_Dam_Hazard_Helper.damsuite import suitecheck as SC  # noqa: E402
 from ND_Dam_Hazard_Helper.damsuite import suitedata as SD  # noqa: E402
 from ND_Dam_Hazard_Helper.damsuite import versions as VS  # noqa: E402
 
-RELEASE = {"ndhazard": "2.34.5", "ndbreach": "3.26.3", "ndscreen": "0.32.4",
+RELEASE = {"ndhazard": "2.34.5", "ndbreach": "3.26.5", "ndscreen": "0.32.4",
            "ndupdater": "1.7.0"}
 
 
