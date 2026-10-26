@@ -123,7 +123,7 @@ def _check_model(m, P, flow_dir):
     assert hm.ring_area(m.perimeter) > 0
     for q in m.conn_line:
         assert hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0] < 0.5
-    # 3.26.4: the BC line runs a quarter cell outside the perimeter (HEC-RAS refuses it on it)
+    # 3.26.6: the BC line runs a quarter cell outside the perimeter (HEC-RAS refuses it on it)
     for q in m.bc_line:
         dq = hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0]
         assert 0.5 * hm.BC_OFFSET_CELLS * m.cell < dq < 2.0 * hm.BC_OFFSET_CELLS * m.cell, dq
@@ -285,7 +285,7 @@ def hecras_model_builds_every_file_with_three_crs():
         per = list(m.perimeter) + [m.perimeter[0]]
         for q in m.conn_line:
             assert hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0] < 0.5
-        for q in m.bc_line:               # 3.26.4: a quarter cell outside the perimeter
+        for q in m.bc_line:               # 3.26.6: a quarter cell outside the perimeter
             dq = hm.point_segment_distance(np.array([q[0]]), np.array([q[1]]), per)[0]
             assert 0.5 * hm.BC_OFFSET_CELLS * m.cell < dq < 2.0 * hm.BC_OFFSET_CELLS * m.cell
         # the boundary line is at the downstream end (far east of the dam)
@@ -353,7 +353,7 @@ def hecras_model_geometry_text_layout():
         assert lines[j].startswith("Storage Area 2D PointsPerimeterTime=")
         # reservoir: elevation-volume pairs in 8-character fields, 10 to a line
         ev, _ = _count_block(lines, "Storage Area Vol Elev=", 10, 8)
-        kept = hm.written_increasing(m.elev_volume)          # 3.26.4: rising as written
+        kept = hm.written_increasing(m.elev_volume)          # 3.26.6: rising as written
         assert len(ev) == len(kept) and np.allclose(ev, kept, atol=0.01)
         assert np.all(np.diff(np.asarray(ev)[:, 1]) > 0) and np.all(np.diff(np.asarray(ev)[:, 0]) > 0)
         # connection

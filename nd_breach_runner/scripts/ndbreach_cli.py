@@ -162,6 +162,7 @@ MODEL_KEYS = {
     "cell_size_m": ("cell_size_m", ("num", 1.0, None)),
     "arrival_depth_ft": ("arrival_depth_ft", ("num", 0.01, None)),
     "edge_tolerance_ft": ("edge_tolerance_ft", ("num", 0.01, None)),
+    "outflow_extend_pct": ("outflow_extend_pct", ("num", 0.0, 100.0)),
     "initial_length_mi": ("initial_length_mi", ("num", 0.25, None)),
     "half_width_mi": ("half_width_mi", ("num", 0.1, None)),
     "expand_step_mi": ("expand_step_mi", ("num", 0.1, None)),
@@ -411,7 +412,8 @@ TEMPLATE = {
         "_help": "tier: lisflood or lisflood+anuga. Paths left empty are auto-detected "
                  "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places).",
         "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": units.ARRIVAL_DEPTH_FT,
-        "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
+        "edge_tolerance_ft": 1.0, "outflow_extend_pct": workflow.OUTFLOW_WARN_PCT,
+        "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 60.0, "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,

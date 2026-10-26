@@ -54,7 +54,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.26.4"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.26.6"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -108,6 +108,9 @@ CUT_OFF_RUNS = "domain-run limit"
 CUT_OFF_EXTENT = "largest domain side"
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
 OUTFLOW_WARN_PCT = 5.0     # warn when at least this share of the breach volume leaves the model
+# 3.26.5: an edge carrying at least this share of the leaving water (terrain.edge_flux_shares)
+# moves out once outflow_extend_pct of the breach volume has left, even under the edge tolerance
+OUTFLOW_EDGE_SHARE = 0.10
 STATE_FILE = "state.json"
 # 3.18.0: the run report of a finished run (REPORT_REL in damjson); written only after every
 # pass is done, so its presence tells a finished run from a cancelled one that left pass rasters
@@ -149,6 +152,9 @@ class RunSettings:
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
         self.arrival_depth_ft = ARRIVAL_DEPTH_FT
         self.edge_tolerance_ft = 1.0
+        # 3.26.5: once this % of the breach volume has left the model, the edges it leaves
+        # through also move out, however shallow (0 = off, the depth rule alone as before)
+        self.outflow_extend_pct = OUTFLOW_WARN_PCT
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
         self.expand_step_mi = 3.0
@@ -1131,6 +1137,23 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             depth_eff = np.clip(depth_eff - np.nan_to_num(init_grid.data), 0.0, None)
         edges = terrain.edge_depths(depth_eff, dem.valid())
         over = [e for e in terrain.EDGES if edges[e] > tol_m]
+        # 3.26.5: the depth rule alone let a wide sheet under the tolerance carry 36-40% of the
+        # breach volume out of the model at Absaraka (DWR-2801) with the domain never growing
+        # there. When outflow_extend_pct or more of the volume has left, every edge that
+        # carries a real share of it (and is wet past the arrival depth) moves out too.
+        leak = []
+        out_now = lf_env.stats.get("boundary_outflow_pct")
+        ext_pct = getattr(st, "outflow_extend_pct", 0.0) or 0.0
+        if plan is None and ext_pct > 0 and out_now is not None and out_now >= ext_pct:
+            shares = terrain.edge_flux_shares(depth_eff, dem.valid())
+            leak = [e for e in terrain.EDGES if e not in over and edges[e] > arrival_m
+                    and shares[e] >= OUTFLOW_EDGE_SHARE]
+            if leak:
+                log("{:.0f}% of the breach volume left the model; the water leaves through {} "
+                    "under {:g} ft, so {} moves out too.".format(
+                        out_now, ", ".join(leak), st.edge_tolerance_ft,
+                        "that edge" if len(leak) == 1 else "those edges"))
+                over = over + leak
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
         # arrival at the arrival depth (0.1 ft by default since 3.26.3, was 1 ft), not
@@ -1142,7 +1165,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                "cells": int(dem.data.size), "dem_coverage": round(cover, 4),
                "sim_time_hr": round(sim_time / 3600.0, 2), "runtime_min": round(runtime / 60, 1),
                "edge_max_depth_ft": {k: round(v / FT, 2) for k, v in edges.items()},
-               "edges_over_tolerance": over, "latest_arrival_hr": round(arr_max, 2),
+               "edges_over_tolerance": over, "edges_over_outflow": leak,
+               "latest_arrival_hr": round(arr_max, 2),
                "stats": lf_env.stats}
         iterations.append(rec)
         if st.write_final:
@@ -1238,11 +1262,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if plan is not None:
             if over:
                 warnings.append("The flood leaves the base domain through {} deeper than "
-                                "{:.1f} ft in this case.".format(", ".join(over),
-                                                                 st.edge_tolerance_ft))
+                                "{:g} ft in this case.".format(", ".join(over),
+                                                               st.edge_tolerance_ft))
             break
         if not over and not still_moving:
-            log("Flood stays inside the domain (edge depths below {:.1f} ft, or nothing "
+            log("Flood stays inside the domain (edge depths below {:g} ft, or nothing "
                 "downstream to reach).".format(st.edge_tolerance_ft))
             break
         cap_now = MAX_SIM_S if not st.sim_max_hr else min(MAX_SIM_S, float(st.sim_max_hr) * 3600.0)
@@ -1256,7 +1280,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if it == st.max_iterations:
             why = []
             if over:
-                why.append("leaving the domain through {} deeper than {:.1f} ft".format(
+                why.append("leaving the domain through {} deeper than {:g} ft".format(
                     ", ".join(over), st.edge_tolerance_ft))
             if still_moving:
                 why.append("still advancing at the end of the simulation")
@@ -1273,8 +1297,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                         st.max_extent_mi, ", ".join(over)))
             break
         if over:
-            log("Flood leaves through {} deeper than {:.1f} ft; extending.".format(
-                ", ".join(over), st.edge_tolerance_ft))
+            deep = [e for e in over if e not in leak]
+            why = (["through {} deeper than {:g} ft".format(", ".join(deep), st.edge_tolerance_ft)]
+                   if deep else []) + (["its outflow through {}".format(", ".join(leak))]
+                                       if leak else [])
+            log("Flood leaves {}; extending.".format(" and ".join(why)))
             bounds = new_bounds
         new_sim = sim_time
         cap_s = MAX_SIM_S if not st.sim_max_hr else min(MAX_SIM_S, float(st.sim_max_hr) * 3600.0)
@@ -1303,11 +1330,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         report["boundary_outflow_acft"] = out_acft
         if out_pct >= OUTFLOW_WARN_PCT:
             msg = ("{:.0f}% of the breach volume ({:,.0f} ac-ft) left the model through its "
-                   "edges. The domain grows only while an edge is deeper than {:.1f} ft, so a "
-                   "wide, shallow sheet can leave under that rule: the flood area and the "
-                   "downstream consequences are minimums. Extend the model downstream, or "
-                   "confirm nothing that would change the classification lies beyond it."
-                   .format(out_pct, out_acft or 0.0, st.edge_tolerance_ft))
+                   "edges when the run stopped{}, so the flood area and the downstream "
+                   "consequences are minimums. Extend the model downstream (more runs, a "
+                   "larger step or a larger first domain), or confirm nothing that would "
+                   "change the classification lies beyond it."
+                   .format(out_pct, out_acft or 0.0,
+                           " ({})".format(report["cut_off"]["reason"])
+                           if report.get("cut_off") else ""))
             if msg not in warnings:
                 warnings.append(msg)
     snap_npz = os.path.join(model_dir, "depth_snapshots.npz")
@@ -1949,11 +1978,15 @@ def render_report(r):
         r["inflow_point"]["xy"][0], r["inflow_point"]["xy"][1], r["inflow_point"]["how"]), "",
         "## Downstream extent (ND 5.1.1(f))", "",
         "Each run checks the deepest water on every domain edge. An edge deeper than {} ft "
-        "moves out by {} mi and the model runs again{}.".format(
+        "moves out by {} mi and the model runs again{}.{}".format(
             r["settings"]["edge_tolerance_ft"], r["settings"]["expand_step_mi"],
             "; with receptor layers an edge is left alone when no structure, road or rail lies "
             "in the flood's path within {} mi".format(r["settings"]["impact_look_ahead_mi"])
-            if r["settings"].get("receptors") else ""), "",
+            if r["settings"].get("receptors") else "",
+            " Once {}% of the breach volume has left the model, an edge the water leaves "
+            "through moves out too, however shallow.".format(
+                r["settings"]["outflow_extend_pct"])
+            if r["settings"].get("outflow_extend_pct") else ""), "",
         "| Run | Size (mi) | Cells | Hours | Edge depth N/S/E/W (ft) | Over | Minutes |",
         "|---|---|---|---|---|---|---|"]
     for it in r["lisflood_runs"]:
