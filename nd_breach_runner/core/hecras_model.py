@@ -74,6 +74,10 @@ BC_NAME = "DS Normal Depth"
 START_DATE = "01JAN2000"
 MAX_WEIR_POINTS = 450          # HEC-RAS allows 500 station-elevation points on a weir
 MAX_ARC_POINTS = 400
+# v3.26.4: HEC-RAS rejects an external BC line that touches the 2D perimeter ("BC Line ...
+# intersects the perimeter ... it must be entirely outside"), so it is drawn this many cells
+# outside the perimeter, along it (found running the export in HEC-RAS 6.6 itself)
+BC_OFFSET_CELLS = 0.25
 CR = "\r\n"
 
 # v3.12.0: culverts, bridges and notches as connections inside the 2D area. The keyword lines
@@ -276,6 +280,7 @@ class Model:
         self.base_flow = 0.0
         self.sim_hours = 24.0
         self.comp_interval = "5SEC"
+        self.courant_max = 1.0           # v3.26.4: adaptive time step
         self.output_interval = "1MIN"
         self.mapping_interval = "5MIN"
         self.detail_interval = "1HOUR"
@@ -595,8 +600,16 @@ def plan_text(m):
         "END DESCRIPTION:",
         "Computation Interval=" + m.comp_interval, "Output Interval=" + m.output_interval,
         "Instantaneous Interval=" + m.detail_interval, "Mapping Interval=" + m.mapping_interval,
-        "Computation Time Step Use Courant=        0",
+        # v3.26.4: HEC-RAS varies the step on the Courant number (halves it near the peak,
+        # doubles it back as the flood slows), from the step set for the finest cells
+        "Computation Time Step Use Courant=        1",
         "Computation Time Step Use Time Series=    0",
+        "Computation Time Step Residence Courant=0",
+        "Computation Time Step Max Courant= {}".format(num(m.courant_max, 2)),
+        "Computation Time Step Min Courant= {}".format(num(m.courant_max * 0.45, 2)),
+        "Computation Time Step Count To Double= 4",
+        "Computation Time Step Max Doubling= 3",
+        "Computation Time Step Max Halving= 4",
         "Run HTab=-1 ", "Run UNet=-1 ", "Run Sediment= 0 ", "Run PostProcess=-1 ",
         "Run WQNet= 0 ", "Run RASMapper= 0 ",
         "UNET Theta= 1 ", "UNET Theta Warmup= 1 ", "UNET ZTol= 0.02 ", "UNET ZSATol= 0.02 ",
@@ -664,6 +677,122 @@ def ring_area(pts):
     a = np.asarray(pts, dtype=float)
     x, y = a[:, 0], a[:, 1]
     return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+
+
+def _grid_points(perim, cell, srs):
+    """The 2D computation points on a square grid of `cell` inside the perimeter, without the
+    ones closer than 0.3 cell to it (they would make sliver cells)."""
+    gdal, ogr, _ = _ogr()
+    pxmin, pymin = perim.min(axis=0)
+    pxmax, pymax = perim.max(axis=0)
+    gx0 = math.floor(pxmin / cell) * cell + cell / 2.0
+    gy1 = math.ceil(pymax / cell) * cell - cell / 2.0
+    gnx = int(math.ceil((pxmax - gx0) / cell)) + 1
+    gny = int(math.ceil((gy1 - pymin) / cell)) + 1
+    mds = gdal.GetDriverByName("MEM").Create("", gnx, gny, 1, gdal.GDT_Byte)
+    mds.SetGeoTransform((gx0 - cell / 2.0, cell, 0.0, gy1 + cell / 2.0, 0.0, -cell))
+    vds = ogr.GetDriverByName("Memory").CreateDataSource("p")
+    lyr = vds.CreateLayer("p", srs, ogr.wkbPolygon)
+    f_ = ogr.Feature(lyr.GetLayerDefn())
+    f_.SetGeometry(_polygon(perim))
+    lyr.CreateFeature(f_)
+    gdal.RasterizeLayer(mds, [1], lyr, burn_values=[1])
+    inside = mds.GetRasterBand(1).ReadAsArray().astype(bool)
+    pr, pc = np.nonzero(inside)
+    px = gx0 + pc * cell
+    py = gy1 - pr * cell
+    # drop points too close to the perimeter (they would make sliver cells)
+    edge = np.zeros_like(inside)
+    edge[1:-1, 1:-1] = ~(inside[:-2, 1:-1] & inside[2:, 1:-1] & inside[1:-1, :-2] &
+                         inside[1:-1, 2:])
+    edge |= inside & False
+    edge[[0, -1], :] = True
+    edge[:, [0, -1]] = True
+    near_edge = edge[pr, pc]
+    keep = np.ones(len(px), bool)
+    if near_edge.any():
+        dd = point_segment_distance(px[near_edge], py[near_edge],
+                                    list(map(tuple, perim)) + [tuple(perim[0])])
+        keep[np.nonzero(near_edge)[0][dd < 0.3 * cell]] = False
+    return np.column_stack([px[keep], py[keep]])
+
+
+def _connection_cell_mins(pts, A, B, d, z, x0, y0, step, cell):
+    """v3.26.4: a function giving, for points on the dam line A-B, the lowest ground of the 2D
+    cell just downstream of each (the Voronoi cell of the nearest computation point, the
+    ground sampled on the terrain grid in a strip below the line). None when nothing is
+    found. The strip only sees part of a cell, so its lowest ground is at or above the
+    cell's: raising a weir to it always satisfies HEC-RAS."""
+    A = np.asarray(A, float)
+    B = np.asarray(B, float)
+    d = np.asarray(d, float)
+    L = float(np.hypot(*(B - A)))
+    if L <= 0:
+        return None
+    ab = (B - A) / L
+    depth = 1.5 * cell
+    ns = max(2, int(L / step) + 1)
+    nd = max(2, int(depth / step) + 1)
+    s_ = np.linspace(0.0, L, ns)
+    t_ = np.linspace(0.25 * step, depth, nd)
+    S, T = np.meshgrid(s_, t_)
+    xy = A[None, :] + S.reshape(-1, 1) * ab[None, :] + T.reshape(-1, 1) * d[None, :]
+    zz = _sample(z, x0, y0, step, xy)
+    near = np.abs((pts - A) @ np.array([-ab[1], ab[0]])) <= 3.0 * cell
+    along = (pts - A) @ ab
+    near &= (along > -3.0 * cell) & (along < L + 3.0 * cell)
+    P = pts[near]
+    if not len(P):
+        return None
+    owner = np.empty(len(xy), int)
+    for i in range(0, len(xy), 4096):
+        q = xy[i:i + 4096]
+        owner[i:i + 4096] = np.argmin(((q[:, None, :] - P[None, :, :]) ** 2).sum(-1), axis=1)
+    mins = np.full(len(P), np.inf)
+    ok = np.isfinite(zz)
+    np.minimum.at(mins, owner[ok], zz[ok])
+    mins[~np.isfinite(mins)] = np.nan
+
+    row = owner[:ns]                 # the strip's first row, right below the line
+    row_m = mins[row]
+
+    def at(line_pts):
+        # a weir point spills into every cell whose face along the line is within about
+        # half a cell of it: take the highest of those cells' lowest ground
+        q = np.asarray(line_pts, float)
+        qs = (q - A) @ ab
+        r = np.sqrt(((q[:, None, :] - P[None, :, :]) ** 2).sum(-1).min(axis=1))
+        out = np.full(len(q), np.nan)
+        for i in range(len(q)):
+            w = np.abs(s_ - qs[i]) <= max(r[i], step)
+            if w.any() and np.isfinite(row_m[w]).any():
+                out[i] = np.nanmax(row_m[w])
+        return out
+
+    def span_max(s0, s1):
+        # the cells right below the line between stations s0 and s1 (the breach bottom)
+        w = (s_ >= s0) & (s_ <= s1)
+        return float(np.nanmax(row_m[w])) if w.any() and np.isfinite(row_m[w]).any() \
+            else float("nan")
+    at.span_max = span_max
+    return at
+
+
+def _offset_outward(ring, idx, dist):
+    """v3.26.4: the points ring[idx] of a closed ring moved `dist` outward, along the ring's
+    normal there, so a line drawn along the perimeter lies just outside it."""
+    ring = np.asarray(ring, float)
+    n = len(ring)
+    x, y = ring[:, 0], ring[:, 1]
+    ccw = (np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y)) > 0
+    out = []
+    for i in idx:
+        t = ring[(i + 1) % n] - ring[(i - 1) % n]
+        L = math.hypot(t[0], t[1]) or 1.0
+        # outward normal: right of the direction of travel on a counter-clockwise ring
+        nx, ny = (t[1] / L, -t[0] / L) if ccw else (-t[1] / L, t[0] / L)
+        out.append((ring[i][0] + nx * dist, ring[i][1] + ny * dist))
+    return np.asarray(out)
 
 
 def densify(pts, step, closed=False):
@@ -1700,7 +1829,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     idx = [(i % n) for i in range(lo, hi + 1)]
     if len(idx) < 2:
         idx = [(i0 - 1) % n, i0, (i0 + 1) % n]
-    bc = dens[idx]
+    bc = _offset_outward(dens, idx, BC_OFFSET_CELLS * cell)
     if len(bc) > MAX_ARC_POINTS:
         bc = bc[np.linspace(0, len(bc) - 1, MAX_ARC_POINTS).astype(int)]
     exit_xy = dens[i0]
@@ -1728,38 +1857,74 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
 
     # --- 2D computation points -----------------------------------------------------
     progress(80, "2D computation points")
-    pxmin, pymin = perim.min(axis=0)
-    pxmax, pymax = perim.max(axis=0)
-    gx0 = math.floor(pxmin / cell) * cell + cell / 2.0
-    gy1 = math.ceil(pymax / cell) * cell - cell / 2.0
-    gnx = int(math.ceil((pxmax - gx0) / cell)) + 1
-    gny = int(math.ceil((gy1 - pymin) / cell)) + 1
-    mds = gdal.GetDriverByName("MEM").Create("", gnx, gny, 1, gdal.GDT_Byte)
-    mds.SetGeoTransform((gx0 - cell / 2.0, cell, 0.0, gy1 + cell / 2.0, 0.0, -cell))
-    vds = ogr.GetDriverByName("Memory").CreateDataSource("p")
-    lyr = vds.CreateLayer("p", srs, ogr.wkbPolygon)
-    f_ = ogr.Feature(lyr.GetLayerDefn())
-    f_.SetGeometry(_polygon(perim))
-    lyr.CreateFeature(f_)
-    gdal.RasterizeLayer(mds, [1], lyr, burn_values=[1])
-    inside = mds.GetRasterBand(1).ReadAsArray().astype(bool)
-    pr, pc = np.nonzero(inside)
-    px = gx0 + pc * cell
-    py = gy1 - pr * cell
-    # drop points too close to the perimeter (they would make sliver cells)
-    edge = np.zeros_like(inside)
-    edge[1:-1, 1:-1] = ~(inside[:-2, 1:-1] & inside[2:, 1:-1] & inside[1:-1, :-2] &
-                         inside[1:-1, 2:])
-    edge |= inside & False
-    edge[[0, -1], :] = True
-    edge[:, [0, -1]] = True
-    near_edge = edge[pr, pc]
-    keep = np.ones(len(px), bool)
-    if near_edge.any():
-        dd = point_segment_distance(px[near_edge], py[near_edge],
-                                    list(map(tuple, perim)) + [tuple(perim[0])])
-        keep[np.nonzero(near_edge)[0][dd < 0.3 * cell]] = False
-    pts = np.column_stack([px[keep], py[keep]])
+    pts = _grid_points(perim, cell, srs)
+    # v3.26.4: finer cells below the breach. With the 2D area's cell (about 100 ft on a dam
+    # like Absaraka) the breach opens into one or two cells and HEC-RAS 6.6 does not converge
+    # there (20 iterations every step, the breach flow flipping sign step to step); HEC's dam
+    # breach guidance is cells no wider than the breach near it. Rings of half and a quarter
+    # of the cell (no finer than a third of the breach bottom width) around the breach centre.
+    refine = []
+    if o.get("refine_breach", True):
+        Cxy = A + ab * sc
+        fine = nice_cell(max(bvals["bottom_width"] / 3.0, cell / 4.0, units.from_ft(10.0)))
+        r1 = max(units.from_ft(500.0), 6.0 * half, 8.0 * fine)
+        rings_ = []
+        if fine < cell / 2.0 - 1e-9:
+            rings_ = [(fine, r1), (nice_cell(cell / 2.0), 2.5 * r1)]
+        elif fine < cell - 1e-9:
+            rings_ = [(fine, 2.5 * r1)]
+        if rings_:
+            dist = np.hypot(pts[:, 0] - Cxy[0], pts[:, 1] - Cxy[1])
+            keep_pts = [pts[dist > rings_[-1][1]]]
+            inner = 0.0
+            for fc, rr_ in rings_:
+                q = _grid_points(perim, fc, srs)
+                dq = np.hypot(q[:, 0] - Cxy[0], q[:, 1] - Cxy[1])
+                keep_pts.append(q[(dq > inner) & (dq <= rr_)])
+                refine.append({"cell": fc, "radius": rr_})
+                inner = rr_
+            pts = np.vstack(keep_pts)
+    # v3.26.4: HEC-RAS stops ("has a weir elevation lower than the cells they are connected
+    # to ... has a weir breach lower than the cells") when the dam weir or the breach bottom is
+    # below the lowest ground of a 2D cell along the connection. Raise them to it.
+    cmin = _connection_cell_mins(pts, A, B, d, zw, wx0, wy0, wcell, cell)
+    if cmin is not None:
+        cell_at = cmin(line)
+        low = np.isfinite(cell_at) & (weir_z < cell_at + units.from_ft(0.01))
+        if low.any():
+            weir_z = np.where(low, cell_at + units.from_ft(0.01), weir_z)
+            s2, e2 = simplify_profile(st, weir_z, units.from_ft(0.01), MAX_WEIR_POINTS)
+            # simplifying must not cut a kept profile below the cells again
+            weir_z2 = np.interp(st, s2, e2)
+            if (weir_z2 < weir_z - 1e-6).any():
+                s2, e2 = st[::max(1, len(st) // MAX_WEIR_POINTS + 1)], weir_z[
+                    ::max(1, len(st) // MAX_WEIR_POINTS + 1)]
+            weir = [(round(float(a), 2), round(float(b) + 0.005, 2)) for a, b in zip(s2, e2)]
+            notes.append("The dam weir was raised to the lowest ground of the 2D cells next to "
+                         "it at {} place(s) (by up to {:.2f} {}); HEC-RAS does not allow a weir "
+                         "below the cells it spills into.".format(
+                             int(low.sum()), float(np.nanmax((cell_at - zl)[low])
+                                                   if np.isfinite(zl[low]).any() else 0.0),
+                             units.len_name))
+        floor_ = cmin.span_max(sc - 0.5 * bvals["bottom_width"],
+                               sc + 0.5 * bvals["bottom_width"]) + units.from_ft(0.01)
+        if np.isfinite(floor_):
+            if bvals["bottom_elev"] < floor_:
+                notes.append("The breach bottom was raised from {:.1f} to {:.1f} {u}, the lowest "
+                             "ground of the 2D cells below the breach: HEC-RAS does not allow a "
+                             "breach below the cells it opens into, so it cannot drain the "
+                             "reservoir lower than that. The plugin's run breached to {:.1f} "
+                             "{u}; lower the terrain below the dam (a channel) in RAS Mapper "
+                             "if the deeper breach matters.".format(
+                                 bvals["bottom_elev"], floor_, bvals["bottom_elev"],
+                                 u=units.len_name))
+                bvals["bottom_elev"] = round(floor_, 2)
+                pe = bvals.get("piping_elev")
+                if bvals.get("piping") and pe is not None and pe <= floor_:
+                    bvals["piping_elev"] = round(floor_ + 0.5 * (top_u - floor_), 2)
+                    notes.append("Initial piping elevation moved to half way up the raised "
+                                 "breach ({:.1f} {}).".format(bvals["piping_elev"],
+                                                              units.len_name))
     if len(pts) < 10:
         raise HecRasModelError("the 2D area has fewer than 10 cells at {} {}; choose a "
                                "smaller cell size".format(cell, units.len_name))
@@ -1833,7 +1998,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     hmax_ft = float(summ.get("max_depth_ft") or dmax or 10.0)
     cour = o["courant"] or (1.0 if o["equation"] == EQ_SWE else 2.0)
     # HEC-RAS's Courant number is V dt / dx (velocity, not wave celerity)
-    cell_ft = cell * units.L / FT
+    # v3.26.4: the finest cells (below the breach) set the step
+    cell_ft = (refine[0]["cell"] if refine else cell) * units.L / FT
     dt = cour * cell_ft / max(vmax_fps, 5.0)
     dt_s, dt_lab = comp_interval(dt)
 
@@ -1880,6 +2046,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.base_flow = units.flow(o["base_flow_cfs"] * CFS)
     m.sim_hours = sim
     m.comp_interval = dt_lab
+    m.courant_max = float(cour)
     m.equation = o["equation"]
     m.breach = bvals
     m.terrain_name = terrain_name
@@ -1916,7 +2083,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     paths["layout"] = write_layout(os.path.join(out, "GIS", "HECRAS Layout.gpkg"), m, srs,
                                    bc_slope_how=how, P=P, skipped=sinfo["skipped"])
     info = {"crs": _epsg_text(srs), "crs_why": why, "units": units.label,
-            "len_name": units.len_name, "cell": cell, "cell_chosen": bool(o["cell_ft"]),
+            "len_name": units.len_name, "cell": cell, "refine": refine, "cell_chosen": bool(o["cell_ft"]),
             "cells": int(len(pts)), "area": abs(ring_area(perim)),
             "dam_line": dam_len, "terrain_cell": tcell, "dem_z": znote,
             "comp_interval": dt_lab, "sim_hours": sim, "bc_slope": slope,
@@ -2174,6 +2341,9 @@ def write_readme(path, m, info, notes, dam, params):
         "| Cell size | {:g} {} | {} |".format(info["cell"], L,
                                              "chosen" if info.get("cell_chosen") else
                                              "about {:,} cells".format(DEFAULTS["target_cells"])),
+    ] + ["| Finer cells below the breach | {:g} {} within {:,.0f} {} of the breach centre | "
+         "HEC-RAS does not converge where the breach opens into one or two cells |".format(
+             r["cell"], L, r["radius"], L) for r in info.get("refine") or []] + [
         "| Manning's n | {:g} | the run's default n |".format(m.manning_n),
         "| Reservoir curve | {} points | the plugin's storage law: storage at the top of dam, "
         "surface area, dam height (exponent {:.2f}) |".format(len(m.elev_volume),

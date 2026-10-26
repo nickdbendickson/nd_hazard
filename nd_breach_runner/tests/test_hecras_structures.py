@@ -297,10 +297,11 @@ def _hand_texts(si):
 
 # SHA-256 (first 16 hex digits) of the project, geometry, unsteady, plan, RAS Mapper and
 # README text of the hand-made model, written by the 3.11.0 code (before structures)
+# the plan text (4th) changed in 3.26.4: the adaptive (Courant) time step lines
 GOLDEN_3110 = {
-    False: ["db1469db6a372a6f", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "1b65dbf1fe0d99e2",
+    False: ["db1469db6a372a6f", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "0df1f610d3c0a923",
             "97664151919e2834", "f88edff79c7eab1c"],
-    True: ["3b1f1ea3c0eb48b8", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "2f66edbc4d58e263",
+    True: ["3b1f1ea3c0eb48b8", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "25cbda86d08a2fb5",
            "3a09dd23f63da7fc", "34d7cb5cd4f1e867"]}
 
 
