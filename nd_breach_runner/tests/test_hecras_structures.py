@@ -103,7 +103,7 @@ def hecras_structures_box_culvert_block_in_feet():
     L = _block(c)
     assert L[0].startswith("Connection=Test            ,")
     assert "Connection Up SA=Downstream      " in L and "Connection Dn SA=Downstream      " in L
-    assert "Conn Routing Type= 3 " in L and "Conn OverFlow Method 2D=False" in L
+    assert "Conn Routing Type= 1 " in L and "Conn OverFlow Method 2D=False" in L  # 3.26.6
     assert "Conn Weir Coef=2.6" in L and L[-1] == "Conn Outlet Rating Curve= 0 ,False,,"
     culv = next(ln for ln in L if ln.startswith("Connection Culv="))
     # box (2), rise 4, span 6, 80 ft long, n, Ke 0.4, Kx 1, chart 8 scale 1, inverts, 2 barrels
@@ -297,10 +297,11 @@ def _hand_texts(si):
 
 # SHA-256 (first 16 hex digits) of the project, geometry, unsteady, plan, RAS Mapper and
 # README text of the hand-made model, written by the 3.11.0 code (before structures)
+# the plan text (4th) changed in 3.26.6: the adaptive (Courant) time step lines
 GOLDEN_3110 = {
-    False: ["db1469db6a372a6f", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "1b65dbf1fe0d99e2",
+    False: ["db1469db6a372a6f", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "0df1f610d3c0a923",
             "97664151919e2834", "f88edff79c7eab1c"],
-    True: ["3b1f1ea3c0eb48b8", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "2f66edbc4d58e263",
+    True: ["3b1f1ea3c0eb48b8", "95802a0a6d74fd27", "3d4a44bc8d7c130b", "25cbda86d08a2fb5",
            "3a09dd23f63da7fc", "34d7cb5cd4f1e867"]}
 
 
