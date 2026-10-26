@@ -75,8 +75,10 @@ DamSafety set in **separate QGIS profiles**; they register the same Processing i
   Helper's own plan import already took depth from the terrain; 2.34.4 changes only its
   arrival: now per pixel (the cell's water-surface series minus the pixel's terrain,
   interpolated between output steps, else the time of the maximum) and only where the depth
-  reaches the arrival depth (0.1 ft). Plans it converted before are converted again on their
-  own. DWR Hazard 2.18.61 puts its plan-import arrival on the same depth basis as the depth.
+  reaches the arrival depth (0.1 ft). A plan used directly as a scenario is converted again on
+  its own (2.34.4 changed the plan-cache key). Rasters already written by the HEC-RAS tab's
+  Import button or the "Import HEC-RAS plan results" tool keep the old arrival: import the plan
+  again. DWR Hazard 2.18.61 puts its plan-import arrival on the same depth basis as the depth.
 - **Lone 911 address points count as habitable again (ND Hazard, audit H1, no version bump).**
   An ND 911 address point with no building outline within the snap distance and no NSI record
   had been made Unverified since 2.20.1, and Unverified never raises the class, so a new rural
@@ -106,8 +108,9 @@ DamSafety set in **separate QGIS profiles**; they register the same Processing i
   0.32.3) and then modelled from `dam.json`: re-screen (tool 8, 0.32.4) and re-run the Runner.
   Peak flows go up.
 - HEC-RAS results imported by the Runner before ND 3.26.1 / DWR 3.10.79: re-export and
-  reclassify. Plans the ND Hazard Helper reads directly: reclassify on 2.34.4 (they are
-  converted again on their own).
+  reclassify. ND Hazard Helper: a plan used directly as a scenario is converted again on its
+  own on 2.34.4, so just reclassify; rasters written before 2.34.4 by the HEC-RAS tab's Import
+  button or the "Import HEC-RAS plan results" tool: import the plan again, then reclassify.
 - Gauge fix: re-run on ND Runner 3.26.2 / DWR Runner 3.10.80 every **nested-grid** run,
   **cascade** run and run **with gauge points** made on ND 3.26.1 / DWR 3.10.79 or older. For
   nested and cascade runs the flood itself can change (below the interface, and at every dam
@@ -153,7 +156,7 @@ rebuild it; that is a separate, long download job.
 ## Testing
 
 - CI on both `main` heads: fast-checks, plugin-suites and model-tests all green. Model tests:
-  nd_hazard 532/0, DWR_Plugins 837/0.
+  nd_hazard 532/0, DWR_Plugins 838/0.
 - Installed from these zips into real QGIS 3.34.4 (one profile per set):
   - ND: all four load; Runner self-test with a model run **26 PASS / 0 FAIL / 1 SKIP** (skip =
     keep-awake, no system bus in the container); Screening self-test OK.
