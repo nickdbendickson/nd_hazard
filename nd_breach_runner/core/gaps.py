@@ -63,7 +63,7 @@ NOT_CUT = ("Not cut: opening the embankment lowers the water behind it, which th
            "whose span and rise are surveyed.")
 
 
-# 3.26.5: the NBI's own field names and codes (the offline pack's NBI_bridges layer, as the
+# 3.26.7: the NBI's own field names and codes (the offline pack's NBI_bridges layer, as the
 # DamSafety Runner's culvert_guess.inventory_record reads them). Item 43B = 19 is a culvert,
 # every other main structure type a bridge; item 48 (maximum span) is in metres; item 45 (main
 # unit spans) is the number of barrels for a culvert. The NBI has no culvert rise.
@@ -101,7 +101,7 @@ def length_ft(value, field=""):
 
 
 def assume_rise(crossings, rise_ft):
-    """3.26.5: give the inventory culverts that have a span and no rise (every NBI culvert)
+    """3.26.7: give the inventory culverts that have a span and no rise (every NBI culvert)
     the engineer's rise, so they can be cut as gaps. Off (rise_ft 0 / None) by default: the
     size is then half guessed, which is why the crossing's source says so, the row carries
     rise_assumed, and blocking_rows keeps the rise below the embankment's own height.
@@ -122,7 +122,7 @@ def assume_rise(crossings, rise_ft):
 
 
 def inventory_near(candidates, crossings, match_m=INVENTORY_MATCH_M):
-    """3.26.5 (as the DamSafety Runner's culvert_guess.match_inventory, report only): each
+    """3.26.7 (as the DamSafety Runner's culvert_guess.match_inventory, report only): each
     culvert candidate (a road across the flow path) gets the nearest inventory crossing within
     match_m - its name, kind, span, rise and barrels - so the candidate list says "NBI culvert,
     2 x 12 ft" where there is one. An inventory crossing names at most one candidate. Nothing
@@ -282,7 +282,7 @@ def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
         row["bed_ft"] = round(bed / FT, 2)
         row["blocks_ft"] = round(max(0.0, crown - bed) / FT, 2)
         if row["rise_assumed"] and rise and row["blocks_ft"] and rise > row["blocks_ft"]:
-            # 3.26.5: an assumed rise never cuts deeper than the embankment stands
+            # 3.26.7: an assumed rise never cuts deeper than the embankment stands
             row["rise_ft"] = row["blocks_ft"]
             row["surveyed"] = row["surveyed"] and bool(row["rise_ft"])
         row["line"] = line.tolist()

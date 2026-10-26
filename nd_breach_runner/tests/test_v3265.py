@@ -1,138 +1,131 @@
-"""3.26.5: NBI crossings as the NBI writes them.
+"""3.26.5: the water leaving the model also extends the domain, not only an edge's depth.
 
-The offline pack's NBI_bridges layer keeps the NBI's own field names: STRUCTURE_TYPE_043B
-(19 = culvert), MAX_SPAN_LEN_MT_048 (metres), MAIN_UNIT_SPANS_045 (barrels). Before 3.26.5
-none of them matched the crossings field synonyms, so every NBI culvert was read as an
-unnamed bridge with no span. The NBI has no culvert rise, so an NBI culvert is cut only with
-an assumed rise (CROSSING_RISE_FT, off by default). Culvert candidates name the inventory
-crossing near them (as the DamSafety Runner's culvert_guess.match_inventory)."""
+The domain grew only while an edge was deeper than the edge tolerance (1 ft). At Absaraka
+(DWR-2801) a sheet under 1 ft carried 36-40% of the breach volume out of the south and east
+edges with the domain never growing there (runs-notes/edge-rule-extent-2026-10-26). Now, once
+outflow_extend_pct (5% by default, OUTFLOW_EXTEND_PCT) of the breach volume has left, every edge
+that carries a real share of it (terrain.edge_flux_shares >= OUTFLOW_EDGE_SHARE) and is wet past
+the arrival depth moves out too. LISFLOOD-FP is stubbed as in test_v320 (fake_models)."""
+import contextlib
+import json
 import os
 import shutil
 import tempfile
 
 import numpy as np
 
-from nd_breach_runner.core import gaps as gp
-from nd_breach_runner.core import structures as structmod
-from nd_breach_runner.core.grid import Grid
 from nd_breach_runner.tests.registry import test
-from nd_breach_runner.tests.test_v3200 import _algs
+from nd_breach_runner.tests.test_v320 import _dam, _settings
 
 
-def _read_dem(bounds, cell):
-    """A 3 m road embankment along y = 0 on flat ground at 100 m."""
-    x0, y0, x1, y1 = bounds
-    nx = max(4, int((x1 - x0) / cell))
-    ny = max(4, int((y1 - y0) / cell))
-    g = Grid(np.zeros((ny, nx)), x0, y1, cell)
-    _X, Y = np.meshgrid(g.x_centers(), g.y_centers())
-    return Grid(np.where(np.abs(Y) < 8.0, 103.0, 100.0), x0, y1, cell)
+@contextlib.contextmanager
+def _sheet(depth_m, outflow_pct):
+    """A flood band |y| < 300 m east of the dam, `depth_m` deep, reaching the east edge of every
+    domain, with `outflow_pct` of the breach volume reported as left through the edges."""
+    from nd_breach_runner.core import lisflood as lf
 
+    def fake_run(wd, par, st, progress=None, cancel=None, log=None, name="run"):
+        return 60.0
 
-@test
-def v3265_nbi_item_43b_19_is_a_culvert_and_other_codes_are_bridges():
-    assert gp.kind_from("19", "STRUCTURE_TYPE_043B") == structmod.KIND_CULVERT
-    assert gp.kind_from("'19'", "") == structmod.KIND_CULVERT
-    assert gp.kind_from("02", "STRUCTURE_TYPE_043B") == structmod.KIND_BRIDGE
-    assert gp.kind_from("4", "") == structmod.KIND_BRIDGE
-    assert gp.kind_from("", "STRUCTURE_TYPE_043B") == structmod.KIND_BRIDGE
-    # plain text keeps the 3.20.0 reading
-    assert gp.kind_from("Box culvert", "type") == structmod.KIND_CULVERT
-    assert gp.kind_from("BRIDGE", "type") == structmod.KIND_BRIDGE
-    assert gp.kind_from(None, "type") == structmod.KIND_BRIDGE
-
-
-@test
-def v3265_nbi_span_in_metres_is_converted_to_feet():
-    assert gp.is_metres_field("MAX_SPAN_LEN_MT_048")
-    assert not gp.is_metres_field("span_ft") and not gp.is_metres_field("diameter")
-    assert abs(gp.length_ft(3.7, "MAX_SPAN_LEN_MT_048") - 12.14) < 0.01
-    assert gp.length_ft(12.0, "span_ft") == 12.0
-    assert gp.length_ft(None, "MAX_SPAN_LEN_MT_048") is None
-
-
-@test
-def v3265_the_nbi_layer_reads_name_kind_span_and_barrels():
-    algs, _mod, fq = _algs()
-    a = algs.RunDamAlgorithm()
-    a.initAlgorithm()
-    assert a.parameterDefinition("CROSSING_RISE_FT") is not None
-    nbi = dict(STRUCTURE_NUMBER_008="000000009116181", STRUCTURE_TYPE_043B="19",
-               MAIN_UNIT_SPANS_045=2, MAX_SPAN_LEN_MT_048=3.0, FEATURES_DESC_006A="SWAN CREEK")
-    br = dict(STRUCTURE_NUMBER_008="000000009117190", STRUCTURE_TYPE_043B="04",
-              MAIN_UNIT_SPANS_045=1, MAX_SPAN_LEN_MT_048=11.3, FEATURES_DESC_006A="SWAN CREEK")
-    src = fq.FakeSource([fq.FakeFeature(fq.FakeGeometry("point", [[(100.0, 0.0)]]), **nbi),
-                         fq.FakeFeature(fq.FakeGeometry("point", [[(300.0, 0.0)]]), **br)])
-    tf = lambda s: (fq.QgsCoordinateTransform(), fq.QgsCoordinateTransform())
-    st = algs.workflow.RunSettings(cell_size_m=20.0)
-    notes = a.apply_crossings(st, {"CROSSINGS": src, "CROSSING_GAPS": True},
-                              fq.QgsProcessingContext(), tf, (0.0, 0.0), 5000.0)
-    by = {c["name"]: c for c in st.crossings}
-    culv, bridge = by["000000009116181"], by["000000009117190"]
-    assert culv["kind"] == "culvert" and culv["barrels"] == 2
-    assert abs(culv["span_ft"] - 9.84) < 0.01 and culv["rise_ft"] is None
-    assert bridge["kind"] == "bridge" and abs(bridge["span_ft"] - 37.07) < 0.01
-    assert "0 with a surveyed span and rise" in notes[0], notes
-    assert not any("assumed" in n for n in notes)
-    # with a rise to assume, the culvert (not the bridge) takes it and says so
-    st = algs.workflow.RunSettings(cell_size_m=20.0)
-    notes = a.apply_crossings(st, {"CROSSINGS": src, "CROSSING_GAPS": True,
-                                   "CROSSING_RISE_FT": 6.0},
-                              fq.QgsProcessingContext(), tf, (0.0, 0.0), 5000.0)
-    by = {c["name"]: c for c in st.crossings}
-    assert by["000000009116181"]["rise_ft"] == 6.0 and by["000000009116181"]["rise_assumed"]
-    assert "assumed" in by["000000009116181"]["source"]
-    assert by["000000009117190"]["rise_ft"] is None
-    assert any("1 inventory culvert" in n and "6 ft" in n for n in notes), notes
-
-
-@test
-def v3265_an_assumed_rise_is_cut_but_never_deeper_than_the_embankment():
-    roads = [np.array([[-200.0, 0.0], [200.0, 0.0]])]
-    crossings = [{"name": "NBI culvert", "x": 0.0, "y": 2.0, "kind": "culvert",
-                  "span_ft": 12.0, "rise_ft": None, "barrels": 2, "source": "NBI"},
-                 {"name": "NBI bridge", "x": 80.0, "y": 1.0, "kind": "bridge",
-                  "span_ft": 37.0, "source": "NBI"}]
-    rows = gp.blocking_rows([dict(c) for c in crossings], roads, _read_dem, 3.0)
-    assert not any(r["surveyed"] for r in rows)
-    off = "\n".join(gp.markdown_lines(rows))
-    assert "span 12, no rise" in off
-    cs = [dict(c) for c in crossings]
-    assert gp.assume_rise(cs, 0.0) == 0 and gp.assume_rise(cs, None) == 0
-    assert gp.assume_rise(cs, 20.0) == 1                   # the culvert only
-    rows = gp.blocking_rows(cs, roads, _read_dem, 3.0)
-    culv = [r for r in rows if r["name"] == "NBI culvert"][0]
-    assert culv["surveyed"] and culv["rise_assumed"]
-    assert culv["rise_ft"] == culv["blocks_ft"] < 20.0     # capped at the 3 m embankment
-    structs, _notes = gp.structures_from(rows, 3.0)
-    assert len(structs) == 1 and structs[0].kind == "culvert" and structs[0].barrels == 2
-    assert abs(structs[0].width_m - 12.0 * 0.3048) < 1e-6
-    on = "\n".join(gp.markdown_lines(rows, cut=True))
-    assert "(rise assumed)" in on
-
-
-@test
-def v3265_culvert_candidates_name_the_nearest_inventory_crossing_once():
-    cands = [{"name": "candidate 1", "x": 0.0, "y": 0.0, "along_mi": 0.5, "road": "road 1",
-              "angle_deg": 80.0, "source": "candidate"},
-             {"name": "candidate 2", "x": 30.0, "y": 0.0, "along_mi": 0.6, "road": "road 1",
-              "angle_deg": 80.0, "source": "candidate"},
-             {"name": "candidate 3", "x": 2000.0, "y": 0.0, "along_mi": 1.8, "road": "road 2",
-              "angle_deg": 85.0, "source": "candidate"}]
-    crossings = [{"name": "9116181", "kind": "culvert", "x": 25.0, "y": 5.0, "span_ft": 9.84,
-                  "rise_ft": 6.0, "rise_assumed": True, "barrels": 2, "source": "NBI"}]
-    assert gp.inventory_near(cands, crossings) == 1
-    assert "inventory" not in cands[0] and "inventory" not in cands[2]
-    inv = cands[1]["inventory"]
-    assert inv["name"] == "9116181" and inv["barrels"] == 2 and inv["span_ft"] == 9.84
-    assert inv["rise_ft"] is None                          # an assumed rise is not inventory
-    d = tempfile.mkdtemp()
+    def fake_read(wd, dem, st, hydrograph, name="run"):
+        X, Y = np.meshgrid(dem.x_centers(), dem.y_centers())
+        d = np.where((X > 0) & (np.abs(Y) < 300), depth_m, np.nan)
+        vel = np.where(np.isfinite(d), 1.0, np.nan)
+        arr = np.where(np.isfinite(d), 0.5, np.nan)
+        wse = np.where(np.isfinite(d), dem.data + depth_m, np.nan)
+        stats = {"max_volume_error_pct": 0.1, "peak_inflow_cfs": 1000.0,
+                 "boundary_outflow_pct": outflow_pct, "boundary_outflow_acft": 5.0 * outflow_pct}
+        return lf.Envelopes(dem.like(d, np.nan), dem.like(vel, np.nan), dem.like(arr, np.nan),
+                            dem.like(wse, np.nan), stats, [], {})
+    from nd_breach_runner.core import workflow as wf
+    old = (lf.run, lf.read_results, wf.SG.lisflood_smoke)
+    lf.run, lf.read_results = fake_run, fake_read
+    # the pre-run smoke test of the stub executable (sys.executable) is not what is tested here
+    wf.SG.lisflood_smoke = lambda exe, *a, **k: wf.SG.check(wf.SG.OK, "LISFLOOD-FP starts")
     try:
-        p = os.path.join(d, "c.csv")
-        structmod.write_candidates_csv(p, cands)
-        lines = open(p).read().splitlines()
-        assert lines[0].endswith("inventory_barrels,inventory_distance_m")
-        assert '"9116181",culvert,9.84,,2,' in lines[2], lines[2]
-        assert lines[1].endswith('no,"",,,,,')
+        yield
     finally:
-        shutil.rmtree(d, ignore_errors=True)
+        lf.run, lf.read_results, wf.SG.lisflood_smoke = old
+
+
+def _run(folder, depth_m, outflow_pct, **k):
+    from nd_breach_runner.core import workflow as wf
+    from nd_breach_runner.tests.synthetic import SyntheticTerrain, npy_writer
+    with _sheet(depth_m, outflow_pct):
+        r = wf.run_dam(_dam(), (0.0, 0.0), _settings(max_iterations=2, **k), SyntheticTerrain(),
+                       npy_writer, folder)
+    with open(r.report_json, encoding="utf-8") as f:
+        return r, json.load(f)
+
+
+@test
+def v3265_edge_flux_shares_weigh_the_edges_by_depth_to_the_five_thirds():
+    from nd_breach_runner.core import terrain
+    d = np.full((5, 8), np.nan)
+    d[1:-1, -1] = 0.1                    # east edge: 3 cells, 0.1 m (not the corners)
+    d[-1, 2:4] = 0.4                     # south edge: 2 cells, 0.4 m
+    s = terrain.edge_flux_shares(d)
+    e, south = 3 * 0.1 ** (5 / 3.0), 2 * 0.4 ** (5 / 3.0)
+    assert abs(s["E"] - e / (e + south)) < 1e-9 and abs(s["S"] - south / (e + south)) < 1e-9
+    assert s["N"] == 0.0 and s["W"] == 0.0 and abs(sum(s.values()) - 1.0) < 1e-9
+    assert terrain.edge_flux_shares(np.full((3, 3), np.nan)) == {"N": 0.0, "S": 0.0,
+                                                                 "W": 0.0, "E": 0.0}
+    valid = np.ones((5, 8), bool)
+    valid[:, -1] = False                 # cells off the DEM carry nothing
+    assert terrain.edge_flux_shares(d, valid)["E"] == 0.0
+
+
+@test
+def v3265_a_shallow_sheet_that_carries_the_water_out_extends_the_domain():
+    from nd_breach_runner.core import workflow as wf
+    assert wf.RunSettings().outflow_extend_pct == wf.OUTFLOW_WARN_PCT == 5.0
+    assert wf.RunSettings().edge_tolerance_ft == 1.0          # the depth rule itself is unchanged
+    tmp = tempfile.mkdtemp(prefix="ndbr_v3265_")
+    try:
+        # 0.5 ft deep (under the 1 ft tolerance), 30% of the volume leaving: east moves out
+        _r, rep = _run(os.path.join(tmp, "A"), 0.5 * 0.3048, 30.0)
+        runs = rep["lisflood_runs"]
+        assert len(runs) == 2, runs
+        assert runs[0]["edges_over_outflow"] == ["E"] and runs[0]["edges_over_tolerance"] == ["E"]
+        assert runs[1]["size_mi"][0] > runs[0]["size_mi"][0]
+        assert rep["settings"]["outflow_extend_pct"] == 5.0
+        assert rep["cut_off"]["reason"] == wf.CUT_OFF_RUNS
+        assert any("left the model through its edges when the run stopped (domain-run limit)"
+                   in w for w in rep["warnings"]), rep["warnings"]
+        md = open(_r.report_md, encoding="utf-8").read()
+        assert "Once 5.0% of the breach volume has left the model, an edge the water" in md
+
+        # the rule off: the depth rule alone, as before 3.26.5 - one run, the water still leaves
+        _r, rep = _run(os.path.join(tmp, "B"), 0.5 * 0.3048, 30.0, outflow_extend_pct=0.0)
+        runs = rep["lisflood_runs"]
+        assert len(runs) == 1 and runs[0]["edges_over_tolerance"] == [], runs
+        assert runs[0]["edges_over_outflow"] == []
+        assert any("30% of the breach volume" in w for w in rep["warnings"]), rep["warnings"]
+        assert "an edge the water leaves" not in open(_r.report_md, encoding="utf-8").read()
+
+        # under the threshold (2% left) the shallow edge is left alone
+        _r, rep = _run(os.path.join(tmp, "C"), 0.5 * 0.3048, 2.0)
+        assert len(rep["lisflood_runs"]) == 1
+        assert rep["lisflood_runs"][0]["edges_over_outflow"] == []
+        assert not any("left the model" in w for w in rep["warnings"]), rep["warnings"]
+
+        # water under the arrival depth (0.1 ft) is not a flood edge, whatever the outflow
+        _r, rep = _run(os.path.join(tmp, "D"), 0.05 * 0.3048, 30.0)
+        assert len(rep["lisflood_runs"]) == 1
+        assert rep["lisflood_runs"][0]["edges_over_outflow"] == []
+
+        # an edge already over the depth rule is not listed twice
+        _r, rep = _run(os.path.join(tmp, "E"), 2.0 * 0.3048, 30.0)
+        runs = rep["lisflood_runs"]
+        assert runs[0]["edges_over_tolerance"] == ["E"] and runs[0]["edges_over_outflow"] == []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@test
+def v3265_the_tolerance_prints_as_given():
+    """A 0.25 ft tolerance printed as '0.2 ft' in the run log and warnings ({:.1f})."""
+    from nd_breach_runner.core import workflow as wf
+    import inspect
+    src = inspect.getsource(wf.run_dam)
+    assert "deeper than {:.1f} ft" not in src and "below {:.1f} ft" not in src

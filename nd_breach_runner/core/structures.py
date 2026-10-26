@@ -288,7 +288,7 @@ def culvert_candidates(roads, path, structures=(), merge_m=CANDIDATE_MERGE_M):
 
 def write_candidates_csv(path, cands):
     with open(path, "w") as f:
-        # 3.26.5: the inventory crossing near the candidate, when the run had one (gaps.py)
+        # 3.26.7: the inventory crossing near the candidate, when the run had one (gaps.py)
         f.write("name,x,y,along_mi,road,angle_deg,source,surveyed,inventory,inventory_kind,"
                 "inventory_span_ft,inventory_rise_ft,inventory_barrels,inventory_distance_m\n")
         for c in cands:

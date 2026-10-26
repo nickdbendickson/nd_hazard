@@ -62,7 +62,7 @@ STRUCT_KINDS = [(structmod.KIND_CULVERT, "Culvert"), (structmod.KIND_BRIDGE, "Br
 # 3.20.0 (feature 14): the crossings layer (NBI bridges and culverts, rail grade crossings,
 # the offline pack's surveyed road-stream crossings). Only a SURVEYED span and rise can be cut
 # as a gap, so the span / rise synonyms deliberately do not include a generic "width".
-# 3.26.5: the NBI's own field names (STRUCTURE_NUMBER_008, STRUCTURE_TYPE_043B = 19 for a
+# 3.26.7: the NBI's own field names (STRUCTURE_NUMBER_008, STRUCTURE_TYPE_043B = 19 for a
 # culvert, MAX_SPAN_LEN_MT_048 in metres, MAIN_UNIT_SPANS_045 = barrels); see gaps.kind_from.
 CROSSING_FIELD_SYNONYMS = {
     "X_NAME": ("name", "id", "structure_number", "struct_num", "bridge_id", "crossing_id",
@@ -488,7 +488,7 @@ class _Base(QgsProcessingAlgorithm):
                    "in the embankment (off by default: a gap LOWERS the water behind the road, "
                    "so the result upstream of it is less conservative than the default; a "
                    "crossing without a surveyed opening is never cut)", False, advanced=True)
-        # 3.26.5: the NBI gives a culvert's span and barrels but never its rise
+        # 3.26.7: the NBI gives a culvert's span and barrels but never its rise
         self._num("CROSSING_RISE_FT", "Crossings: rise to assume for an inventory culvert with "
                   "a span and no rise, e.g. every NBI culvert (ft; 0 = none: such a culvert is "
                   "only reported). With 'cut ... as gaps' on, those culverts are then cut too, "
@@ -578,6 +578,12 @@ class _Base(QgsProcessingAlgorithm):
         self._num("EDGE_TOL_FT", "Extend the domain while the flood leaves an edge deeper "
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.01)
+        # 3.26.5: the depth rule alone lets a wide sheet under the tolerance leave the model
+        self._num("OUTFLOW_EXTEND_PCT", "Also extend the edges the water leaves through "
+                  "(under the edge tolerance too) once this % of the breach volume has left the "
+                  "model (0 = off; starting value 5 is the engineer's, a screening value you "
+                  "choose)",
+                  workflow.OUTFLOW_WARN_PCT, minimum=0.0, maximum=100.0, advanced=True)
         # v3.4.0: near-dam refine on a fine FV1 grid (refine.py). v3.12.0: off by default
         # again - LISFLOOD-FP 8.1 writes no FV1 maximum velocity, so the fine box kept depth
         # but had zero velocity (the ACC velocities are now kept there; see refine.py)
@@ -705,7 +711,8 @@ class _Base(QgsProcessingAlgorithm):
             tier=tier, breach_method=method or METHODS[self.parameterAsEnum(
                 parameters, "METHOD", context)][0],
             cell_size_m=g("CELL"), manning_n=g("MANNING"), arrival_depth_ft=g("ARRIVAL_FT"),
-            edge_tolerance_ft=g("EDGE_TOL_FT"), initial_length_mi=g("LENGTH_MI"),
+            edge_tolerance_ft=g("EDGE_TOL_FT"), outflow_extend_pct=g("OUTFLOW_EXTEND_PCT"),
+            initial_length_mi=g("LENGTH_MI"),
             half_width_mi=g("HALF_WIDTH_MI"), expand_step_mi=g("STEP_MI"),
             max_extent_mi=g("MAX_EXTENT_MI"), max_iterations=int(g("MAX_RUNS")),
             sim_time_hr=dur if dur > 0 else None,

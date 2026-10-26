@@ -2275,6 +2275,7 @@ class _Report(object):
         for k, lab in (("cell_size_m", "Cell size (m)"), ("manning_n", "Manning's n"),
                        ("arrival_depth_ft", "Arrival depth (ft)"),
                        ("edge_tolerance_ft", "Edge depth tolerance (ft)"),
+                       ("outflow_extend_pct", "Outflow that also extends the domain (%)"),
                        ("initial_length_mi", "Initial domain length (mi)"),
                        ("half_width_mi", "Domain half-width (mi)"),
                        ("expand_step_mi", "Domain extension step (mi)"),
@@ -2292,9 +2293,13 @@ class _Report(object):
         if runs:
             self.sub("Model domain and downstream extent")
             d.paragraph("Each run checks the deepest water on every domain edge. An edge "
-                        "deeper than {} ft moves out by {} mi and the model runs again.".format(
+                        "deeper than {} ft moves out by {} mi and the model runs again.{}".format(
                             fmt_val(st.get("edge_tolerance_ft", 1.0)),
-                            fmt_val(st.get("expand_step_mi", 3.0))))
+                            fmt_val(st.get("expand_step_mi", 3.0)),
+                            " Once {}% of the breach volume has left the model, an edge the "
+                            "water leaves through moves out too, however shallow.".format(
+                                fmt_val(st.get("outflow_extend_pct")))
+                            if st.get("outflow_extend_pct") else ""))
             table = [["Run", "Size (mi)", "Cells", "Hours", "Edge depth N/S/E/W (ft)",
                       "Edges over", "Vol. error (%)", "Min"]]
             for it in runs:
