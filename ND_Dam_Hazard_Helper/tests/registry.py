@@ -1,6 +1,7 @@
 """Where tests register themselves, so every tests/test_*.py adds to the one suite:
 `from ND_Dam_Hazard_Helper.tests.registry import test`."""
 TESTS = []
+CLEANUPS = []
 
 
 class Skip(Exception):
@@ -10,4 +11,10 @@ class Skip(Exception):
 
 def test(fn):
     TESTS.append(fn)
+    return fn
+
+
+def cleanup(fn):
+    """Run fn once after the whole suite (run_tests leaves with os._exit, so atexit never runs)."""
+    CLEANUPS.append(fn)
     return fn

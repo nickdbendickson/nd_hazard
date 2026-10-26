@@ -17,8 +17,10 @@ imports and on tests/fake_qgis.py otherwise (nothing here opens a layer):
 
     python3 -m ND_Dam_Hazard_Helper.tests.run_tests v2345_
 """
+import atexit
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -27,7 +29,7 @@ PLUGIN_DIR = os.path.dirname(HERE)
 if os.path.dirname(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, os.path.dirname(PLUGIN_DIR))
 from ND_Dam_Hazard_Helper.tests import fake_qgis  # noqa: E402
-from ND_Dam_Hazard_Helper.tests.registry import test  # noqa: E402
+from ND_Dam_Hazard_Helper.tests.registry import cleanup, test  # noqa: E402
 
 MODE = fake_qgis.install()
 from ND_Dam_Hazard_Helper import datafolder as DF  # noqa: E402
@@ -42,6 +44,8 @@ OTHER = ("DamSafety Hazard", "2.18.61", "2.18.62")
 
 # ----------------------------------------------------------------- the fixture ---
 TMP = tempfile.mkdtemp(prefix="repro_as_run_")
+cleanup(lambda: shutil.rmtree(TMP, True))     # run_tests imports this module at start-up
+atexit.register(shutil.rmtree, TMP, True)     # and a direct import
 D = "20261020_abcdef12.geojson"                               # download._cache_path
 
 

@@ -21,7 +21,7 @@ if os.path.dirname(PLUGIN_DIR) not in sys.path:
 PACKAGE = os.path.basename(PLUGIN_DIR)
 
 from ND_Dam_Hazard_Helper.tests import fake_qgis  # noqa: E402
-from ND_Dam_Hazard_Helper.tests.registry import TESTS, Skip  # noqa: E402
+from ND_Dam_Hazard_Helper.tests.registry import CLEANUPS, TESTS, Skip  # noqa: E402
 
 
 def _load_test_modules():
@@ -50,6 +50,11 @@ def main(argv=None):
         except Exception:
             failed += 1
             print("FAIL  ", fn.__name__)
+            traceback.print_exc()
+    for fn in CLEANUPS:                         # fixture folders made at import time
+        try:
+            fn()
+        except Exception:                       # noqa - a cleanup never changes the result
             traceback.print_exc()
     print("\n{} tests, {} failed{}".format(len(todo), failed, ", {} skipped".format(skipped)
                                             if skipped else ""))
