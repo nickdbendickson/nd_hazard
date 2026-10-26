@@ -94,8 +94,9 @@ CR = "\r\n"
 # Manning's n, entrance loss, exit loss, FHWA chart, FHWA scale, upstream invert, downstream
 # invert, number of barrels, group name (12 characters), solution flag (0), upstream distance
 # (blank on a connection); then one upstream / downstream station pair per barrel in
-# 8-character fields. In those files a culvert counts only with 'Conn Routing Type= 3'
-# (OrleansEx.g04 has a culvert with type 1 and HEC-RAS 6.3 left it out of the HDF).
+# 8-character fields. In those storage-area files a culvert counts only with 'Conn Routing
+# Type= 3' (OrleansEx.g04 has a culvert with type 1 and HEC-RAS 6.3 left it out of the HDF);
+# inside a 2D area type 3 stops HEC-RAS 6.6, so a connection there is type 1 (v3.26.4).
 CULVERT_GROUP = "Culvert #1"
 # Runner shape -> (HEC-RAS shape code, FHWA chart, FHWA scale, entrance loss coefficient):
 # a concrete pipe with a square edge in a headwall (chart 1 scale 1, Ke 0.5) and a box with
@@ -446,9 +447,12 @@ def structure_block(c, now):
     L += ["Connection Last Edited Time=" + now.strftime("%b/%d/%Y %H:%M:%S"),
           "Conn Near Repeats=1",
           "Connection Up SA=" + name16(AREA_NAME), "Connection Dn SA=" + name16(AREA_NAME),
-          # 3 = weir and culverts (Diamond.g01, Beaver_LS_SAConn.g01), 1 = weir (BaldEagleDamBrk)
-          # and the weir equation for flow over the road (BaldEagleDamBrk.g03 'Lower Levee')
-          "Conn Routing Type= {} ".format(3 if culv else 1),
+          # v3.26.4 (as DamSafety Runner 3.10.56): 1 (weir, gates, culverts) with or without a
+          # culvert, as BaldEagleDamBrk's internal levees are. Type 3, copied from the
+          # storage-area examples (Diamond.g01, Beaver_LS_SAConn.g01), made HEC-RAS 6.6 read a
+          # culvert inside a 2D area as a rating-curve family with no curves, and stop. The
+          # weir equation is for flow over the road (BaldEagleDamBrk.g03 'Lower Levee').
+          "Conn Routing Type= 1 ",
           "Conn Use RC Family=False", "Conn OverFlow Method 2D=False",
           "Conn Weir WD={}".format(num(c["weir_width"], 2)),
           "Conn Weir Coef={}".format(num(c["weir_coef"], 3)),

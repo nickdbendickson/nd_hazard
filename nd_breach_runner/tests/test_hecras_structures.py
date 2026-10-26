@@ -103,7 +103,7 @@ def hecras_structures_box_culvert_block_in_feet():
     L = _block(c)
     assert L[0].startswith("Connection=Test            ,")
     assert "Connection Up SA=Downstream      " in L and "Connection Dn SA=Downstream      " in L
-    assert "Conn Routing Type= 3 " in L and "Conn OverFlow Method 2D=False" in L
+    assert "Conn Routing Type= 1 " in L and "Conn OverFlow Method 2D=False" in L  # 3.26.4
     assert "Conn Weir Coef=2.6" in L and L[-1] == "Conn Outlet Rating Curve= 0 ,False,,"
     culv = next(ln for ln in L if ln.startswith("Connection Culv="))
     # box (2), rise 4, span 6, 80 ft long, n, Ke 0.4, Kx 1, chart 8 scale 1, inverts, 2 barrels
