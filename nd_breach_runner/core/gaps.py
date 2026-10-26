@@ -35,6 +35,11 @@ output. So:
     rows = blocking_rows(crossings, roads, read_dem, cell_m)
     structs, notes = structures_from(rows, cell_m)       # only the surveyed ones
 
+3.26.8: each row also carries row["barrel"] (barrel_toes: the toe of the embankments and the
+channel bed on each side, beyond the outermost carriageway), which only the HEC-RAS export
+uses, to lay a culvert's barrel from bed to bed (hecras_model.crossing_barrel). The models
+cut the row's whole gap line, as before.
+
 `crossings` are plain dicts, as the caller reads them from the dam's data layers
 (damdata roles "bridges" = NBI_bridges and "crossings" = FRA grade crossings) or from the
 engineer's own surveyed layer:
@@ -55,6 +60,16 @@ MATCH_M = 40.0            # a crossing further than this from a road line is not
 CORRIDOR_M = 25.0         # half-width of the road corridor the crown is taken from
 REACH_M = 60.0            # how far either side of the road the channel bed is looked for
 MIN_SPAN_FT = 1.0         # a smaller opening is not a crossing we can cut
+# 3.26.8 (HEC-RAS export only, barrel_toes): a culvert barrel runs from the toe of the
+# embankments on one side to the other, the toe being where the ground comes within
+# TOE_TOL_FT of the bed beyond the outermost carriageway (a road line within
+# CARRIAGEWAY_ANGLE_DEG of the crossing's road), its invert the lowest ground from there to
+# TOE_BED_M further out; a toe less than CLEAR_M inside the end of the walk is not clear of
+# the embankments.
+TOE_TOL_FT = 1.0
+TOE_BED_M = 5.0
+CARRIAGEWAY_ANGLE_DEG = 30.0
+CLEAR_M = 10.0
 BLOCK_NOTE = ("A crossing that the terrain closes: bare-earth LiDAR leaves the road "
               "embankment as a solid wall where the bridge or culvert opening is. The model "
               "treats it as ground unless the crossing is given as a structure.")
@@ -227,21 +242,93 @@ def _crown_and_bed(grid, point, direction, corridor_m=CORRIDOR_M, reach_m=REACH_
     return crown, bed
 
 
-def side_beds(grid, point, direction, corridor_m=CORRIDOR_M, reach_m=REACH_M):
-    """3.26.8: the lowest ground off the road on each side, (side of gap_line's first end,
-    side of its second end), metres; None for a side with no data."""
-    z = grid.masked()
-    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
-    ux, uy = direction
-    along = (X - point[0]) * ux + (Y - point[1]) * uy
-    across = (X - point[0]) * (-uy) + (Y - point[1]) * ux
-    near = (np.abs(along) <= corridor_m) & (np.abs(across) > 0.5 * corridor_m) & \
-        (np.abs(across) <= reach_m) & np.isfinite(z)
-    out = []
-    for side in (across < 0, across > 0):
-        m = near & side
-        out.append(float(np.nanmin(z[m])) if m.any() else None)
-    return tuple(out)
+def _carriageways(line, roads, direction, max_angle_deg=CARRIAGEWAY_ANGLE_DEG):
+    """3.26.8: (stations, count) of the road lines running with the crossing's road (within
+    max_angle_deg of `direction`) that the gap line crosses, stations in metres from the
+    line's middle, positive towards its second end. Both carriageways of a divided highway;
+    a road meeting the line end-on is not one."""
+    line = np.asarray(line, dtype=float)
+    a, b = line[0], line[-1]
+    total = float(np.hypot(*(b - a)))
+    cos_min = math.cos(math.radians(max_angle_deg))
+    out, n = [], 0
+    for road in roads or []:
+        pts = np.asarray(road, dtype=float)
+        if pts.ndim != 2 or len(pts) < 2:
+            continue
+        pts = pts[:, :2]
+        hit = False
+        for c, d in zip(pts[:-1], pts[1:]):
+            v = d - c
+            nv = float(np.hypot(*v))
+            if nv <= 0.0 or abs(v[0] * direction[0] + v[1] * direction[1]) / nv < cos_min:
+                continue
+            got = structmod._seg_cross(a, b, c, d)
+            if got is not None:
+                out.append(got[0] * total - 0.5 * total)
+                hit = True
+        n += hit
+    return out, n
+
+
+def barrel_toes(grid, line, roads, direction, width_m=0.0, reach_m=REACH_M,
+                tol_m=TOE_TOL_FT * FT):
+    """3.26.8, for the HEC-RAS export only: where the embankment ends on each side of a
+    crossing, and the channel bed there, so that a culvert barrel can run bed to bed.
+
+    Along the gap line, from the OUTERMOST road line it crosses on each side (both
+    carriageways of a divided highway; the crossing's own road is at the middle), the walk
+    goes out up to `reach_m` until the ground is within `tol_m` of that side's bed, the
+    lowest ground of the walk. The ground at each station is the lowest across a band as
+    wide as the barrels (`width_m`, at least one grid cell each side of the line), so a
+    channel under the barrels counts. A side whose toe is less than CLEAR_M inside the end
+    of the walk (the ground still falling there), or with no terrain on the way, is not
+    'clear' of the embankments, and its bed should not decide which way the water runs.
+
+    Returns {"ends": [[x, y], [x, y]] (the toe on the side of the line's first end, then
+    its second end), "beds_ft": [ft, ft] (the channel bed at each toe: the lowest ground
+    from the toe to TOE_BED_M beyond it), "clear": [bool, bool],
+    "roads": road lines crossed, "stations_m": [first side, second side] (the outermost
+    road on each side, m from the line's middle)}; None for a side's values without
+    terrain."""
+    line = np.asarray(line, dtype=float)
+    a, b = line[0], line[-1]
+    total = float(np.hypot(*(b - a)))
+    if total <= 0.0:
+        return None
+    u = (b - a) / total
+    nrm = np.array([-u[1], u[0]])
+    mid = 0.5 * (a + b)
+    st, n_roads = _carriageways(line, roads, direction)
+    st = [0.0] + st                                     # the crossing's own road
+    h = float(grid.dx)
+    half = max(0.5 * float(width_m or 0.0), h)
+    offs = np.arange(-half, half + 0.5 * h, h)
+    out = {"ends": [], "beds_ft": [], "clear": [], "roads": int(max(1, n_roads)),
+           "stations_m": [round(min(st), 2), round(max(st), 2)]}
+    for side, edge in ((-1.0, min(st)), (1.0, max(st))):
+        walk = np.arange(0.0, float(reach_m) + 0.5 * h, h)
+        s = edge + side * walk
+        P = mid[None, :] + s[:, None] * u[None, :]
+        Q = P[:, None, :] + offs[None, :, None] * nrm[None, None, :]
+        z = grid.sample_bilinear(Q[..., 0], Q[..., 1])
+        ok = np.isfinite(z).any(axis=1)
+        zs = np.full(len(s), np.nan)
+        zs[ok] = np.nanmin(z[ok], axis=1)
+        if not ok.any():
+            out["ends"].append(None)
+            out["beds_ft"].append(None)
+            out["clear"].append(False)
+            continue
+        bed = float(np.nanmin(zs))
+        i = int(np.argmax(ok & (zs <= bed + tol_m)))
+        # the channel bed at the toe: the lowest ground from the toe to TOE_BED_M beyond it
+        # (the toe station itself can still be up to tol_m up the slope)
+        j = min(len(s), i + 1 + int(math.ceil(TOE_BED_M / h - 1e-9)))
+        out["ends"].append([round(float(P[i, 0]), 3), round(float(P[i, 1]), 3)])
+        out["beds_ft"].append(round(float(np.nanmin(zs[i:j])) / FT, 2))
+        out["clear"].append(bool(ok[:i + 1].all() and walk[i] <= float(reach_m) - CLEAR_M))
+    return out
 
 
 def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
@@ -302,8 +389,11 @@ def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
             # 3.26.7: an assumed rise never cuts deeper than the embankment stands
             row["rise_ft"] = row["blocks_ft"]
             row["surveyed"] = row["surveyed"] and bool(row["rise_ft"])
-        b0, b1 = side_beds(grid, match["point"], match["direction"], corridor_m, reach_m)
-        row["side_beds_ft"] = [None if b is None else round(b / FT, 2) for b in (b0, b1)]
+        # 3.26.8: the toes and channel beds either side, for the HEC-RAS export's culvert
+        # barrel only (the models cut the gap line, as before)
+        row["barrel"] = barrel_toes(
+            grid, line, roads, match["direction"],
+            float(span or 0.0) * FT * row["barrels"] * 1.1, reach_m)
         row["line"] = line.tolist()
         row["point"] = list(match["point"])
         row["direction"] = list(match["direction"])
@@ -338,28 +428,18 @@ def structures_from(rows, cell_m, kind_override=""):
         span_m = float(r["span_ft"]) * FT
         rise_m = float(r["rise_ft"]) * FT
         kind = kind_override or r.get("kind") or structmod.KIND_BRIDGE
-        line = np.asarray(r["line"], dtype=float)
-        inv_up = float(r["invert_up_ft"]) * FT if r.get("invert_up_ft") is not None else None
-        inv_dn = float(r["invert_dn_ft"]) * FT if r.get("invert_dn_ft") is not None else None
-        beds = r.get("side_beds_ft") or [None, None]
-        if kind == structmod.KIND_CULVERT and None not in beds:
-            # 3.26.8: a culvert runs from the higher bed to the lower one and is the road's
-            # width long, not the whole gap line: HEC-RAS got a 394 ft barrel with its inlet
-            # 10 ft above the channel (the line's end on a field) and passed no water through
-            # it (Absaraka NBI 9117181). Inverts not in the inventory are the beds each side.
-            if beds[1] > beds[0]:
-                line, beds = line[::-1].copy(), beds[::-1]
-            mid = line.mean(axis=0)
-            u = (line[-1] - line[0]) / max(float(np.hypot(*(line[-1] - line[0]))), 1e-9)
-            half = max(CORRIDOR_M, float(cell_m))
-            line = np.array([mid - u * half, mid + u * half])
-            if inv_up is None and inv_dn is None:
-                inv_up, inv_dn = beds[0] * FT, beds[1] * FT
+        # 3.26.8: the models cut the whole gap line with the inventory's inverts only, as in
+        # 3.26.7. The barrel the HEC-RAS export lays from toe to toe (row["barrel"]) is not
+        # used here: a 50 m line with the beds as inverts left the toe of a wide fill and a
+        # second carriageway standing in LISFLOOD-FP, the built-in engine and ANUGA.
         s = structmod.Structure(
-            kind=kind, line=line, width_m=span_m,
+            kind=kind, line=np.asarray(r["line"], dtype=float), width_m=span_m,
             height_m=rise_m, barrels=max(1, int(r.get("barrels") or 1)),
             shape=str(r.get("shape") or "box"),
-            invert_up_m=inv_up, invert_dn_m=inv_dn,
+            invert_up_m=(float(r["invert_up_ft"]) * FT
+                         if r.get("invert_up_ft") is not None else None),
+            invert_dn_m=(float(r["invert_dn_ft"]) * FT
+                         if r.get("invert_dn_ft") is not None else None),
             name="{} ({})".format(r["name"], r.get("source") or "surveyed crossing"))
         out.append(s)
         notes.append("{}: {:.0f} ft x {:.1f} ft {} cut as a gap in the embankment ({} blocked "

@@ -50,29 +50,42 @@ def v3268_a_plain_grid_has_no_split_cells():
 
 
 @test
-def v3268_a_cut_culvert_runs_from_the_higher_bed_and_is_the_roads_width_long():
+def v3268_a_cut_culvert_runs_from_the_higher_bed_in_hecras_and_whole_in_the_models():
     """Absaraka NBI 9117181: the gap line (120 m) went to HEC-RAS as a 394 ft barrel whose
-    inlet sat on a field 10 ft above the channel, so no water went through it."""
+    inlet sat on a field 10 ft above the channel, so no water went through it. The HEC-RAS
+    barrel now runs from the toe on the higher bed's side to the other toe, with the channel
+    beds there as inverts; LISFLOOD-FP, the built-in engine and ANUGA still get the whole gap
+    line with the inventory's inverts (none), as in 3.26.7."""
     from nd_breach_runner.core import gaps as gp
     from nd_breach_runner.core.grid import Grid
+
+    def z_at(Y):
+        # a road along y = 0; the ground falls to the south (bed 98 m south, 100 m north)
+        return np.where(np.abs(Y) < 8.0, 104.0, np.where(Y > 0, 100.0, 98.0))
 
     def read_dem(bounds, cell):
         x0, y0, x1, y1 = bounds
         nx, ny = max(4, int((x1 - x0) / cell)), max(4, int((y1 - y0) / cell))
         g = Grid(np.zeros((ny, nx)), x0, y1, cell)
         _X, Y = np.meshgrid(g.x_centers(), g.y_centers())
-        # a road along y = 0; the ground falls to the south (bed 98 m south, 100 m north)
-        return Grid(np.where(np.abs(Y) < 8.0, 104.0, np.where(Y > 0, 100.0, 98.0)), x0, y1,
-                    cell)
+        return Grid(z_at(Y), x0, y1, cell)
 
     roads = [np.array([[-200.0, 0.0], [200.0, 0.0]])]
     rows = gp.blocking_rows([{"name": "C", "x": 0.0, "y": 1.0, "kind": "culvert",
                               "span_ft": 10.0, "rise_ft": 4.0, "barrels": 2}],
                             roads, read_dem, 3.0)
-    assert rows[0]["side_beds_ft"] is not None
+    b = rows[0]["barrel"]
+    assert b["clear"] == [True, True] and b["roads"] == 1
     structs, _ = gp.structures_from(rows, 3.0)
     s = structs[0]
-    line = np.asarray(s.line)
-    assert line[0][1] > 0 > line[-1][1]                 # north (higher bed) end first
-    assert abs(np.hypot(*(line[-1] - line[0])) - 2 * gp.CORRIDOR_M) < 1e-6
-    assert abs(s.invert_up_m - 100.0) < 0.01 and abs(s.invert_dn_m - 98.0) < 0.01
+    # the models: the whole gap line, no inverts (3.26.7)
+    assert np.allclose(s.line, rows[0]["line"]) and s.invert_up_m is None is s.invert_dn_m
+    assert abs(np.hypot(*(np.asarray(s.line)[-1] - np.asarray(s.line)[0])) - 120.0) < 1e-6
+    # HEC-RAS: north (higher bed) toe first, the beds as inverts
+    u = hm.Units(True)
+    line, bar, notes = hm.crossing_barrel(s, b, lambda a: np.asarray(a, float).reshape(-1, 2),
+                                          u, 10.0)
+    assert line[0][1] > 0 > line[-1][1]
+    assert 8.0 <= line[0][1] <= 12.0 and -12.0 <= line[-1][1] <= -8.0, line
+    assert abs(bar["inverts"][0] - 100.0) < 0.01 and abs(bar["inverts"][1] - 98.0) < 0.01
+    assert bar["from"] == [hm.BED_LABEL, hm.BED_LABEL] and "higher channel bed" in notes[0]
