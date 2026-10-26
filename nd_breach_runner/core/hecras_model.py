@@ -780,6 +780,40 @@ def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=
     return out
 
 
+def _crest_snap(z, x0, y0, step, P, top, tol, search, half):
+    """v3.26.4: when the ground at the dam point P is more than `tol` below the top of dam
+    (a dam.json point on the pool or the toe), the nearest ground within `search` that is
+    within `tol` of the top, and the direction of the embankment there (the long axis of that
+    high ground within `half` of it). Returns (point, unit axis) or None when P is on the
+    crest, nothing is high enough or the high ground has no clear long axis (a hill, not an
+    embankment). z: north-up array in model units, x0/y0 its top-left corner."""
+    P = np.asarray(P, float)
+    zp = _sample(z, x0, y0, step, [P])[0]
+    if np.isfinite(zp) and zp >= top - tol:
+        return None
+    ny, nx = z.shape
+    X = x0 + (np.arange(nx) + 0.5) * step
+    Y = y0 - (np.arange(ny) + 0.5) * step
+    GX, GY = np.meshgrid(X, Y)
+    with np.errstate(invalid="ignore"):
+        high = np.isfinite(z) & (z >= top - tol)
+    dist = np.hypot(GX - P[0], GY - P[1])
+    cand = high & (dist <= search)
+    if not cand.any():
+        return None
+    i = np.argmin(np.where(cand, dist, np.inf))
+    Q = np.array([GX.flat[i], GY.flat[i]])
+    loc = high & (np.hypot(GX - Q[0], GY - Q[1]) <= half)
+    if loc.sum() < 3:
+        return None
+    pts = np.column_stack([GX[loc], GY[loc]])
+    w, v = np.linalg.eigh(np.cov((pts - pts.mean(axis=0)).T))
+    if w[0] <= 0 or w[1] / w[0] >= 2.0:
+        t = v[:, 1]
+        return Q, t / np.hypot(*t)
+    return None
+
+
 def _connection_cell_mins(pts, A, B, d, z, x0, y0, step, cell):
     """v3.26.4: a function giving, for points on the dam line A-B, the lowest ground of the 2D
     cell just downstream of each (the Voronoi cell of the nearest computation point, the
@@ -1665,6 +1699,44 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         v = np.array([wx[near].mean() - P[0], wy[near].mean() - P[1]])
         d = v / (np.hypot(*v) or 1.0)
         notes.append("Flow direction at the dam taken from the flooded area near it.")
+    # v3.26.4: a dam point off the embankment (on the pool or the toe) put the dam line through
+    # the reservoir and across the flow direction to the toe, not across the embankment;
+    # move it to the crest found nearby and across the embankment's own direction
+    res_near = None
+    if o.get("snap_crest", True):
+        toe_s = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
+                              0.5 * (dam.crest_width_ft or 20.0))
+        search = max(3.0 * toe_s, units.from_ft(300.0))
+        half = max(2.0 * toe_s, units.from_ft(150.0))
+        tol_s = units.from_ft(max(3.0, 0.1 * dam.dam_height_ft))
+        top_s = units.from_ft(dam.top_of_dam_ft)
+        dsrs_s = srs_from(dem_wkt) if dem_wkt else srs
+        step_s = max(units.from_ft(5.0), abs(dem_gt[1]) * (
+            dsrs_s.GetLinearUnits() if dsrs_s.IsProjected() else 111320.0) / units.L)
+        r_s = search + half + 2 * step_s
+        zs, sx0, sy0 = _warp(dem_path, srs, step_s, alg="bilinear",
+                             bounds=(P[0] - r_s, P[1] - r_s, P[0] + r_s, P[1] + r_s))
+        zs = zs * _z_factor(report, dem_path)[0] / units.L
+        snap = _crest_snap(zs, sx0, sy0, step_s, P, top_s, tol_s, search, half)
+        if snap is not None:
+            Q, t = snap
+            nq = np.array([-t[1], t[0]])
+            near_w = np.hypot(wx - Q[0], wy - Q[1]) <= max(units.from_ft(1000.0), 3 * half)
+            sgn = (wx[near_w] - Q[0]) * nq[0] + (wy[near_w] - Q[1]) * nq[1]
+            npos, nneg = int((sgn > 0).sum()), int((sgn < 0).sum())
+            if npos != nneg:
+                nq = nq if npos > nneg else -nq
+            elif float(np.dot(d, nq)) < 0:
+                nq = -nq
+            turn = math.degrees(math.acos(max(-1.0, min(1.0, float(np.dot(d, nq))))))
+            notes.append("The dam point is {:,.0f} {u} from the embankment crest (its ground is "
+                         "more than {:.1f} {u} below the top of dam): the dam line goes through "
+                         "the crest found there, across the embankment ({:.0f} degrees from the "
+                         "direction to the run's inflow point). Check it in RAS Mapper.".format(
+                             float(np.hypot(*(Q - P))), tol_s, turn, u=units.len_name))
+            log(notes[-1])
+            P, d = Q, nq
+            res_near = search    # the pool is just behind the crest, not the lowest ground
     n_left = np.array([-d[1], d[0]])
     wet_poly = _poly_from_mask(wet, dx0, dy0, acell, srs)
     # the end of the inundation: the flooded cells farthest from the dam
@@ -1789,6 +1861,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     can = upstream & within & np.isfinite(zc) & (zc <= top_u)
     near = can & (lat <= max(dam_len, 4 * rc_cell)) & (np.hypot(GX - P[0], GY - P[1]) <=
                                                         max(dam_len, 10 * rc_cell))
+    if res_near is not None:
+        close = near & (np.hypot(GX - P[0], GY - P[1]) <= max(res_near, 3 * rc_cell))
+        near = close if close.any() else near
     reservoir = None
     if near.any():
         cand = np.argwhere(near)

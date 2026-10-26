@@ -4,7 +4,9 @@
 the perimeter ... must be entirely outside'); (2) finer cells below the breach and the adaptive
 (Courant) time step (with one cell size HEC-RAS hit its iteration limit at the breach every
 step); (3) the dam weir and the breach bottom are not below the 2D cells next to them
-(HEC-RAS: 'weir elevation lower than the cells they are connected to')."""
+(HEC-RAS: 'weir elevation lower than the cells they are connected to'); (4) a dam point off
+the embankment (Absaraka's is on the pool, 92 ft from the crest) moves to the crest found nearby
+and the dam line runs along the embankment, not through the reservoir."""
 import shutil
 
 import numpy as np
@@ -100,3 +102,52 @@ def v3264_connection_cell_mins_raise_weir_and_breach():
     assert c[50] >= 15.0 - 1e-6 and c[10] < 11.0
     assert abs(f.span_max(10.0, 30.0) - 10.0) < 1e-6
     assert f.span_max(30.0, 70.0) >= 15.0 - 1e-6
+
+
+def _embankment(top=130.0):
+    """A north-south embankment (crest x in [190, 230], top `top`, 3:1 sides) between a pool at
+    105 (west) and a valley floor at 100 (east), on 5 ft cells; x0 = 0, ytop = 1000."""
+    step = 5.0
+    xs = (np.arange(200) + 0.5) * step
+    z = np.where(xs < 210, 105.0, 100.0)
+    z = np.maximum(z, top - np.maximum(np.abs(xs - 210.0) - 20.0, 0.0) / 3.0)
+    return np.tile(z, (200, 1)), step
+
+
+@test
+def v3264_crest_snap_moves_an_off_crest_dam_point_onto_the_embankment():
+    z, step = _embankment()
+    r = hm._crest_snap(z, 0.0, 1000.0, step, (120.0, 500.0), 130.0, 3.0, 300.0, 150.0)
+    assert r is not None
+    q, t = r
+    assert 180.0 <= q[0] <= 200.0 and abs(q[1] - 500.0) <= step, q
+    assert abs(abs(t[1]) - 1.0) < 1e-6, t
+
+
+@test
+def v3264_crest_snap_leaves_a_crest_point_hills_and_far_ground_alone():
+    z, step = _embankment()
+    # on the crest already
+    assert hm._crest_snap(z, 0.0, 1000.0, step, (210.0, 500.0), 130.0, 3.0, 300.0,
+                          150.0) is None
+    # the embankment is farther than the search distance
+    assert hm._crest_snap(z, 0.0, 1000.0, step, (20.0, 500.0), 130.0, 3.0, 100.0,
+                          150.0) is None
+    # a round hill has no long axis: not an embankment
+    xs = (np.arange(200) + 0.5) * step
+    gx, gy = np.meshgrid(xs, 1000.0 - xs)
+    hill = 130.0 - np.hypot(gx - 500.0, gy - 500.0) / 3.0
+    assert hm._crest_snap(hill, 0.0, 1000.0, step, (500.0, 400.0), 130.0, 3.0, 300.0,
+                          150.0) is None
+
+
+@test
+def v3264_dam_point_on_the_crest_is_not_moved():
+    if not _has_gdal():
+        print("  (skipped: no GDAL)")
+        return
+    d, r = _model()
+    try:
+        assert not any("from the embankment crest" in n for n in r["notes"]), r["notes"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
