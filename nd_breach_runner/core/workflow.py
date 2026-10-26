@@ -54,7 +54,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.26.4"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.26.5"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -935,6 +935,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     # 3.13.0: roads crossing the flow path = culvert / bridge CANDIDATES (report only)
     cands = structmod.culvert_candidates(getattr(st, "road_lines", None) or [], path,
                                          st.structures)
+    if cands and getattr(st, "crossings", None):
+        # 3.26.5: name the inventory crossing (NBI culvert / bridge) at each candidate
+        n_inv = gapsmod.inventory_near(cands, st.crossings)
+        if n_inv:
+            log("{} culvert candidate(s) have an inventory crossing within {:.0f} m "
+                "(culvert_candidates.csv, inventory columns)".format(
+                    n_inv, gapsmod.INVENTORY_MATCH_M))
     if cands:
         report["culvert_candidates"] = cands
         structmod.write_candidates_csv(os.path.join(model_dir, "culvert_candidates.csv"), cands)

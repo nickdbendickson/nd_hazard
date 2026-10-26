@@ -63,6 +63,95 @@ NOT_CUT = ("Not cut: opening the embankment lowers the water behind it, which th
            "whose span and rise are surveyed.")
 
 
+# 3.26.5: the NBI's own field names and codes (the offline pack's NBI_bridges layer, as the
+# DamSafety Runner's culvert_guess.inventory_record reads them). Item 43B = 19 is a culvert,
+# every other main structure type a bridge; item 48 (maximum span) is in metres; item 45 (main
+# unit spans) is the number of barrels for a culvert. The NBI has no culvert rise.
+NBI_CULVERT_43B = "19"
+INVENTORY_MATCH_M = 75.0  # a culvert candidate this close to an inventory crossing is that one
+
+
+def kind_from(value, field=""):
+    """'culvert' / 'bridge' from a kind attribute: an NBI item 43B code (the field is
+    STRUCTURE_TYPE_043B, or the value is a one- or two-digit code) is a culvert only for 19;
+    otherwise 'bridge' in the text is a bridge, any other text a culvert, no text a bridge."""
+    txt = str(value if value is not None else "").strip().strip("'").lower()
+    if "043b" in str(field or "").lower() or (txt.isdigit() and len(txt) <= 2):
+        if not txt:
+            return structmod.KIND_BRIDGE
+        return (structmod.KIND_CULVERT if txt.lstrip("0") == NBI_CULVERT_43B
+                else structmod.KIND_BRIDGE)
+    if "bridge" in txt:
+        return structmod.KIND_BRIDGE
+    return structmod.KIND_CULVERT if txt else structmod.KIND_BRIDGE
+
+
+def is_metres_field(field):
+    """True for a field the NBI writes in metres (MAX_SPAN_LEN_MT_048, ..._MT_...)."""
+    words = str(field or "").lower().replace("-", "_").split("_")
+    return any(w in ("mt", "m", "metre", "metres", "meter", "meters") for w in words[1:])
+
+
+def length_ft(value, field=""):
+    """A span / rise attribute in feet; metres fields (is_metres_field) are converted."""
+    v = _num(value)
+    if v is None:
+        return None
+    return round(v / FT, 2) if is_metres_field(field) else v
+
+
+def assume_rise(crossings, rise_ft):
+    """3.26.5: give the inventory culverts that have a span and no rise (every NBI culvert)
+    the engineer's rise, so they can be cut as gaps. Off (rise_ft 0 / None) by default: the
+    size is then half guessed, which is why the crossing's source says so, the row carries
+    rise_assumed, and blocking_rows keeps the rise below the embankment's own height.
+    Returns how many crossings took it."""
+    r = _num(rise_ft)
+    if not r or r <= 0:
+        return 0
+    n = 0
+    for c in crossings or []:
+        if (str(c.get("kind") or "") == structmod.KIND_CULVERT and _num(c.get("span_ft"))
+                and not _num(c.get("rise_ft"))):
+            c["rise_ft"] = float(r)
+            c["rise_assumed"] = True
+            c["source"] = "{} (rise {:g} ft assumed)".format(c.get("source") or "inventory",
+                                                            float(r))
+            n += 1
+    return n
+
+
+def inventory_near(candidates, crossings, match_m=INVENTORY_MATCH_M):
+    """3.26.5 (as the DamSafety Runner's culvert_guess.match_inventory, report only): each
+    culvert candidate (a road across the flow path) gets the nearest inventory crossing within
+    match_m - its name, kind, span, rise and barrels - so the candidate list says "NBI culvert,
+    2 x 12 ft" where there is one. An inventory crossing names at most one candidate. Nothing
+    is put in the model from this. Returns how many candidates were named."""
+    pairs = []
+    for ci, c in enumerate(candidates or []):
+        for xi, x in enumerate(crossings or []):
+            if x.get("x") is None or x.get("y") is None:
+                continue
+            d = math.hypot(float(x["x"]) - float(c["x"]), float(x["y"]) - float(c["y"]))
+            if d <= match_m:
+                pairs.append((d, ci, xi))
+    pairs.sort()
+    used_c, used_x = set(), set()
+    for d, ci, xi in pairs:
+        if ci in used_c or xi in used_x:
+            continue
+        x = crossings[xi]
+        candidates[ci]["inventory"] = {
+            "name": str(x.get("name") or ""), "kind": str(x.get("kind") or ""),
+            "source": str(x.get("source") or ""), "distance_m": round(d, 1),
+            "span_ft": _num(x.get("span_ft")),
+            "rise_ft": None if x.get("rise_assumed") else _num(x.get("rise_ft")),
+            "barrels": int(_num(x.get("barrels")) or 1)}
+        used_c.add(ci)
+        used_x.add(xi)
+    return len(used_c)
+
+
 def _num(v):
     try:
         f = float(v)
@@ -163,7 +252,7 @@ def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
                "invert_dn_ft": _num(c.get("invert_dn_ft")),
                "blocks_ft": None, "crown_ft": None, "bed_ft": None,
                "on_road": False, "surveyed": bool(span and span >= MIN_SPAN_FT and rise),
-               "reason": ""}
+               "rise_assumed": bool(c.get("rise_assumed")), "reason": ""}
         match = match_to_roads(c, roads, match_m)
         if match is None:
             row["reason"] = ("no road or railroad line within {:.0f} ft of it, so the "
@@ -192,6 +281,10 @@ def blocking_rows(crossings, roads, read_dem, cell_m, match_m=MATCH_M,
         row["crown_ft"] = round(crown / FT, 2)
         row["bed_ft"] = round(bed / FT, 2)
         row["blocks_ft"] = round(max(0.0, crown - bed) / FT, 2)
+        if row["rise_assumed"] and rise and row["blocks_ft"] and rise > row["blocks_ft"]:
+            # 3.26.5: an assumed rise never cuts deeper than the embankment stands
+            row["rise_ft"] = row["blocks_ft"]
+            row["surveyed"] = row["surveyed"] and bool(row["rise_ft"])
         row["line"] = line.tolist()
         row["point"] = list(match["point"])
         row["direction"] = list(match["direction"])
@@ -263,8 +356,11 @@ def markdown_lines(rows, cut=False, title="Road and railroad crossings as embank
         lines.append("| {} | {} | {} | {} | {} | {} |".format(
             r["name"], r["kind"],
             "" if r.get("blocks_ft") is None else r["blocks_ft"],
-            "{:g} x {:g}".format(r["span_ft"], r["rise_ft"]) if r.get("surveyed")
-            else "not surveyed",
+            ("{:g} x {:g}{}".format(r["span_ft"], r["rise_ft"],
+                                     " (rise assumed)" if r.get("rise_assumed") else "")
+             if r.get("surveyed") else
+             "span {:g}, no rise".format(r["span_ft"]) if r.get("span_ft")
+             else "not surveyed"),
             "yes" if (cut and r.get("surveyed")) else "no", r.get("reason") or ""))
     if len(rows) > 40:
         lines.append("| ... {} more | | | | | |".format(len(rows) - 40))

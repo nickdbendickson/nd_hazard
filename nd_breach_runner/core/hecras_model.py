@@ -2261,10 +2261,14 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         xy = to_model([(c["x"], c["y"]) for c in cands])
         paths["culvert_candidates"] = os.path.join(out, "GIS", "culvert_candidates.csv")
         with open(paths["culvert_candidates"], "w") as f:
-            f.write("name,x,y,along_mi,angle_deg,surveyed\n")
+            f.write("name,x,y,along_mi,angle_deg,surveyed,inventory,inventory_kind,"
+                    "inventory_span_ft,inventory_barrels\n")
             for c, (x, y) in zip(cands, xy):
-                f.write('"{}",{:.2f},{:.2f},{},{},no\n'.format(c["name"], x, y, c["along_mi"],
-                                                              c["angle_deg"]))
+                inv = c.get("inventory") or {}           # 3.26.5: NBI crossing near it
+                f.write('"{}",{:.2f},{:.2f},{},{},no,"{}",{},{},{}\n'.format(
+                    c["name"], x, y, c["along_mi"], c["angle_deg"], inv.get("name", ""),
+                    inv.get("kind", ""), "" if inv.get("span_ft") is None else inv["span_ft"],
+                    inv.get("barrels", "")))
         with open(paths["readme"], "a") as f:
             f.write("\n## Culvert candidates (not in the model)\n\n"
                     "{} road crossing(s) of the run's flow path have no culvert or bridge in the "

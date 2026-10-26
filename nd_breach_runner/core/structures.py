@@ -288,7 +288,14 @@ def culvert_candidates(roads, path, structures=(), merge_m=CANDIDATE_MERGE_M):
 
 def write_candidates_csv(path, cands):
     with open(path, "w") as f:
-        f.write("name,x,y,along_mi,road,angle_deg,source,surveyed\n")
+        # 3.26.5: the inventory crossing near the candidate, when the run had one (gaps.py)
+        f.write("name,x,y,along_mi,road,angle_deg,source,surveyed,inventory,inventory_kind,"
+                "inventory_span_ft,inventory_rise_ft,inventory_barrels,inventory_distance_m\n")
         for c in cands:
-            f.write('"{}",{},{},{},{},{},{},no\n'.format(c["name"], c["x"], c["y"], c["along_mi"],
-                                                         c["road"], c["angle_deg"], c["source"]))
+            inv = c.get("inventory") or {}
+            f.write('"{}",{},{},{},{},{},{},no,"{}",{},{},{},{},{}\n'.format(
+                c["name"], c["x"], c["y"], c["along_mi"], c["road"], c["angle_deg"],
+                c["source"], inv.get("name", ""), inv.get("kind", ""),
+                "" if inv.get("span_ft") is None else inv["span_ft"],
+                "" if inv.get("rise_ft") is None else inv["rise_ft"],
+                inv.get("barrels", ""), inv.get("distance_m", "")))
