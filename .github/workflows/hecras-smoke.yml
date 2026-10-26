@@ -1,0 +1,83 @@
+name: HEC-RAS smoke
+
+# Runs a Runner HEC-RAS 2D export in real HEC-RAS 6.6, headless, on Linux: Wine 9 with the
+# official Microsoft .NET 4.8 (winetricks dotnet48; no Wine-Mono) and HEC's own installer.
+# tools/hecras_smoke.py builds the synthetic test dam, exports it, builds the RAS terrain
+# (RasProcess.exe CreateTerrain), runs Ras.exe -c and checks the plan HDF: the solution
+# finished, the volume error is under 2% and the 2D area got wet. The same chain found the four
+# export bugs fixed in 3.26.4 (#24).
+#
+# Heavy (the Wine prefix is about 3.2 GB and takes about 15 min to build, then cached), so it
+# is NOT part of the merge gate in ci.yml: it runs by hand, weekly, and on pull requests that
+# touch the HEC-RAS export.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"          # Mondays 06:17 UTC
+  pull_request:
+    paths:
+      - "nd_breach_runner/core/hecras*.py"
+      - "tools/hecras_*"
+      - ".github/workflows/hecras-smoke.yml"
+
+concurrency:
+  group: hecras-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hecras-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      WINEPREFIX: /home/runner/pfx64
+      WINEARCH: win64
+      WINEDEBUG: -all
+      DISPLAY: ":77"
+      HECRAS_SETUP_URL: https://github.com/HydrologicEngineeringCenter/hec-downloads/releases/download/1.0.33/HEC-RAS_66_Setup.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Wine, winetricks, Xvfb and the Python packages
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            wine wine64 wine32:i386 winetricks cabextract xvfb xauth xdotool \
+            python3-gdal python3-h5py python3-numpy python3-scipy
+          wine --version
+          Xvfb :77 -screen 0 1280x1024x24 >/dev/null 2>&1 &
+          sleep 2
+
+      - name: Restore the Wine prefix (HEC-RAS 6.6 + .NET 4.8)
+        id: prefix
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/pfx64
+          key: hecras66-dotnet48-wine9-ubuntu2404-v1
+
+      - name: Build the Wine prefix (64-bit; .NET 4.8; HEC-RAS 6.6)
+        if: steps.prefix.outputs.cache-hit != 'true'
+        run: |
+          # 64-bit only: the HEC-RAS 6.6 installer exits 97 in a 32-bit prefix
+          wineboot -i
+          winetricks -q --unattended remove_mono dotnet48
+          wine reg query 'HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' /v Release
+          curl -sSL -o "$RUNNER_TEMP/HEC-RAS_66_Setup.exe" "$HECRAS_SETUP_URL"
+          wine "$RUNNER_TEMP/HEC-RAS_66_Setup.exe" /s /v/qn
+          wineserver -w
+          ls "$WINEPREFIX/drive_c/Program Files (x86)/HEC/HEC-RAS/6.6/Ras.exe"
+
+      - name: Export the synthetic dam, run it in HEC-RAS, check the results
+        run: python3 tools/hecras_smoke.py "$RUNNER_TEMP/smoke"
+
+      - name: Keep the model and the HEC-RAS log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hecras-smoke-model
+          path: |
+            ${{ runner.temp }}/smoke/**/_hecras/
+            !${{ runner.temp }}/smoke/**/Terrain/*.tif
+          if-no-files-found: ignore
+          retention-days: 7
