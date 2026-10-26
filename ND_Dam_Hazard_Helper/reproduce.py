@@ -17,6 +17,11 @@ result comes out. Three parts:
                      sets the run actually read (download cache files in
                      outputs/_downloads, project layers' files). Roles:
                      INPUT_ROLES;
+     "inputs_format" 2 (INPUTS_FORMAT): "inputs" holds each role's files in the
+                     order the run read them, and only those (both forks:
+                     DamSafety Hazard 2.18.62, ND Hazard 2.34.5 and later); a
+                     record without it lists every download in the order the
+                     downloads finished (_old_inputs_as_run);
      "files"         other files the result depends on: the review decisions
                      (review_file; also when none existed: "exists" False),
                      the damage curves, the HCOM tables, the peak raster;
@@ -61,7 +66,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from . import history as HIS
-from .constants import PLUGIN_NAME, PLUGIN_VERSION, SUBDIR_QA
+from .constants import PLUGIN_NAME, PLUGIN_VERSION, SUBDIR_QA, LIFELINE_SOURCES
 
 RUN_SETTINGS_FILE = "Run_Settings.json"
 PACKAGE_SETTINGS_FILE = "Run_Settings_package.json"
@@ -69,6 +74,9 @@ CHECK_FILE = "Reproduction_Check.csv"
 CHECK_TEXT = "Reproduction_Check.txt"
 RUN_SETTINGS_FORMAT = "ND_Dam_Hazard_Helper/run_settings"
 FORMAT_VERSION = 1
+# 2.34.5: "inputs_format" of a record whose "inputs" are as the run read them (both forks write
+# it; a record without it - of either fork - is put in run order when it is read)
+INPUTS_FORMAT = 2
 HASH_MAX_BYTES = 1 << 30           # 1 GB: bigger files get size + date only
 DATA_DIR = "data"
 RECORD_DIR = "02_Method_and_record"
@@ -302,6 +310,7 @@ def run_settings_dict(cfg, used_inputs=None, profile=None, scenarios=None, hash_
     cfg = dict(cfg or {})
     out = {"format": RUN_SETTINGS_FORMAT, "format_version": FORMAT_VERSION,
            "plugin": PLUGIN_NAME, "plugin_version": PLUGIN_VERSION, "created": _now_iso(),
+           "inputs_format": INPUTS_FORMAT,
            "dam_name": cfg.get("dam_name") or os.path.basename(os.path.normpath(
                cfg.get("dam_folder") or cfg.get("output_folder") or "")) or "Dam",
            "settings": {}, "layers": {}, "point_sources": "auto", "scenarios": [],
@@ -761,6 +770,121 @@ def _find_settings(package_folder):
                          package_folder))
 
 
+def _input_items(spec):
+    """2.34.5: ([(path, category or None)], [problem]) of one role's recorded inputs in any
+    shape (datafolder.local_items: a path, a list of paths, [path, category] pairs, one
+    unwrapped pair, nested lists) - the one normaliser the run itself uses."""
+    try:
+        from .datafolder import local_items
+    except Exception:                         # noqa: BLE001 - no QGIS: the record's own shape
+        return _input_paths(spec), []
+    return local_items(spec)
+
+
+_HPMS_RE = re.compile(r"^HPMS_ND_(\d{4})(?:_|$)", re.I)
+
+
+def _traffic_as_run(files, notes):
+    """2.34.5: the 'aadt' files of a record without INPUTS_FORMAT hold EVERY traffic download
+    (NDDOT counts, the county roads, each HPMS year that answered) in download order, but the
+    run read only the newest HPMS year (else NDDOT) plus the county roads, in that order
+    (pipeline._traffic_layers). Hand over what the run read, in its order; files with other
+    names (a data folder's own) stay, after them. `files`: the RECORDED files - a file the run
+    read that is gone now is then missing, never replaced by an older year."""
+    def kind(p):
+        b = os.path.basename(split_source(p)[0])
+        m = _HPMS_RE.match(b)
+        if m:
+            return "hpms", m.group(1)
+        if b.lower().startswith("nddot_traffic_counts"):
+            return "nddot", ""
+        if b.lower().startswith("nd_county_roads"):
+            return "county", ""
+        return "other", ""
+    kinds = [(kind(p), p, c) for p, c in files]
+    if not any(k[0] in ("hpms", "nddot") for k, _p, _c in kinds):
+        return files
+    hpms = sorted((k[1], p, c) for k, p, c in kinds if k[0] == "hpms")
+    keep, drop = [], []
+    if hpms:
+        keep.append([hpms[-1][1], hpms[-1][2]])
+        drop += [p for _y, p, _c in hpms[:-1]]
+        drop += [p for k, p, _c in kinds if k[0] == "nddot"]
+    else:
+        keep += [[p, c] for k, p, c in kinds if k[0] == "nddot"]
+    keep += [[p, c] for k, p, c in kinds if k[0] == "county"]
+    keep += [[p, c] for k, p, c in kinds if k[0] == "other"]
+    if drop or [k[0] for k in keep] != [p for p, _c in files]:
+        notes.append("input 'aadt': handed over as the run read it (newest HPMS year, else "
+                     "NDDOT counts, then the county roads){}".format(
+                         "; recorded but not read by the run: " + ", ".join(
+                             os.path.basename(split_source(p)[0]) for p in drop)
+                         if drop else ""))
+    return keep
+
+
+def _base_lower(path):
+    return os.path.basename(split_source(path)[0]).lower()
+
+
+def _bridge_rank(path):
+    """pipeline._collect_facilities reads the NBI download before the OSM crossings."""
+    b = _base_lower(path)
+    return 0 if b.startswith("nbi_bridges") else 1 if b.startswith("osm_crossings") else 2
+
+
+def _lifeline_rank(path):
+    """pipeline._collect_facilities reads the data-folder lifelines first, then the agency
+    downloads (lifeline_<key>_..., in LIFELINE_SOURCES order), then OpenStreetMap."""
+    b = _base_lower(path)
+    if b.startswith("osm_lifelines"):
+        return len(LIFELINE_SOURCES) + 1
+    for i, src in enumerate(LIFELINE_SOURCES):
+        if b.startswith("lifeline_{}_".format(src[0].lower())):
+            return i + 1
+    return 0
+
+
+def _order_as_run(role, files, rank, order, notes):
+    """[[path, category]] of `files` by rank(path) (equal ranks as recorded); a note when the
+    order changed."""
+    keep = [[p, c] for p, c in sorted(files, key=lambda pc: rank(pc[0]))]   # stable
+    if [k[0] for k in keep] != [p for p, _c in files]:
+        notes.append("input '{}': handed over in the order the run read it ({})".format(
+            role, order))
+    return keep
+
+
+def inputs_as_run(rec):
+    """2.34.5: True when the record's "inputs" are each role's files as the run read them, in
+    its order (INPUTS_FORMAT, written by both forks); False for any record without it, of
+    either fork (_old_inputs_as_run)."""
+    try:
+        return int((rec or {}).get("inputs_format") or 0) >= INPUTS_FORMAT
+    except (TypeError, ValueError):
+        return False
+
+
+def _old_inputs_as_run(role, files, notes):
+    """2.34.5: the recorded files of one role of a record without INPUTS_FORMAT, put as the
+    run read them. Such a record lists the downloads in the order they FINISHED
+    (download.parallel_map), and the data-folder lifelines after them; the run reads the
+    traffic as _traffic_as_run, the NBI bridges before the OSM crossings and the lifelines
+    data folder - agency - OSM, and facilities.dedupe keeps the first of two duplicates.
+    Other roles as recorded."""
+    if len(files) < 2:
+        return files
+    if role == "aadt":
+        return _traffic_as_run(files, notes)
+    if role == "bridges":
+        return _order_as_run(role, files, _bridge_rank,
+                             "the NBI bridges, then the OpenStreetMap crossings", notes)
+    if role == "lifelines":
+        return _order_as_run(role, files, _lifeline_rank, "the data-folder layers, then the "
+                             "agency downloads, then OpenStreetMap", notes)
+    return files
+
+
 def _local_data_supported():
     try:
         from .pipeline import DEFAULTS
@@ -854,27 +978,33 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
         else:
             cfg["point_sources"].append((item.get("family"), lyr))
     # ---- the data sets the run read
+    # 2.34.5: ONE shape for every role - [[path, category or None], ...] - from any recorded
+    # shape (old records: a path, or a list of paths and pairs); every file of a role is
+    # handed over (AADT, bridges, ... may come from several); an unreadable entry is missing.
+    # A record without INPUTS_FORMAT (either fork) is put as the run read it first, from the
+    # whole record: a file the run read that is gone is missing, nothing takes its place
+    as_run = inputs_as_run(rec)
     local = {}
     for role, spec in sorted((rec.get("inputs") or {}).items()):
         what = "input '{}'".format(role)
-        if isinstance(spec, list):
-            got = []
-            for item in spec:
-                p, cat = (item[0], item[1] if len(item) > 1 else None) \
-                    if isinstance(item, list) else (item, None)
-                full = R.source(p, what)
-                if full is None:
-                    missing.append("{} ({})".format(what, p))
-                    continue
-                got.append([full, cat] if isinstance(item, list) else full)
-            if got:
-                local[role] = got
-        else:
-            full = R.source(spec, what)
+        items, problems = _input_items(spec)
+        for prob in problems:
+            missing.append("{} - unreadable record entry: {}".format(what, prob))
+        if not as_run:
+            items = _old_inputs_as_run(role, items, notes)
+        got = []
+        for p, cat in items:
+            full = R.source(p, what)
             if full is None:
-                missing.append("{} ({})".format(what, spec))
-            else:
-                local[role] = full
+                missing.append("{} ({})".format(what, p))
+                continue
+            got.append([full, cat])
+        if got:
+            local[role] = got
+        elif items or problems:
+            n = len(items) + len(problems)
+            missing.append("{} - none of its {} entr{} is available: the role is NOT "
+                           "reproduced".format(what, n, "y" if n == 1 else "ies"))
     cfg["local_data"] = local
     if as_layers is None:
         as_layers = not _local_data_supported()
@@ -882,8 +1012,7 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
         notes.append("This pipeline reads no cfg['local_data']: the packaged data are "
                      "handed over as layers")
         for role, spec in sorted(local.items()):
-            one = spec[0] if isinstance(spec, list) else spec
-            one = one[0] if isinstance(one, list) else one
+            one = spec[0][0]                     # 2.34.5: [[path, category], ...]
             key = ROLE_CFG_KEYS.get(role)
             fam = ROLE_POINT_FAMILIES.get(role)
             if key:
@@ -893,9 +1022,13 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
                         notes.append("input '{}': only the first of {} files could be handed "
                                      "over as a layer".format(role, len(spec)))
             elif fam:
-                lyr = _make_layer("vector", one, role, _provider_for(one))
-                if lyr is not None:
-                    cfg["point_sources"].append((fam, lyr))
+                for path, _cat in spec:          # 2.34.5: every file of the role
+                    lyr = _make_layer("vector", path, role, _provider_for(path))
+                    if lyr is not None:
+                        cfg["point_sources"].append((fam, lyr))
+                    else:
+                        missing.append("input '{}' ({}) - could not be opened".format(role,
+                                                                                      path))
             else:
                 notes.append("input '{}' ({}) cannot be handed to this pipeline without "
                              "cfg['local_data'] - it is left out, the result may differ".format(
@@ -1035,6 +1168,22 @@ def _free_path(path):
         return "{}_{}{}".format(base, time.strftime("%Y%m%d_%H%M%S"), ext)
 
 
+def check_local_data(local_data):
+    """2.34.5: ({role: number of files that open}, [problem]) of a reproduction's
+    cfg["local_data"] - opened as the run opens them (datafolder.open_config_all), so a role
+    or file the run would leave out is named in the log and the check, never skipped
+    silently. ({}, []) without QGIS / datafolder."""
+    if not local_data:
+        return {}, []
+    try:
+        from .datafolder import open_config_all
+    except Exception:                         # noqa: BLE001 - no QGIS: not checked here
+        return {}, []
+    layers, notes = open_config_all(local_data)
+    loaded = {role: len(v) for role, v in layers.items()}
+    return loaded, list(notes)
+
+
 WORK_MARKER = "_Reproduction_Work_Folder.txt"
 
 
@@ -1112,6 +1261,11 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
             raise
     for m in plan["missing"]:
         say(">>> WARNING: not in the package: {}".format(m))
+    loaded, not_loaded = check_local_data(plan["cfg"].get("local_data"))
+    for role in sorted(loaded):
+        say(">>> Package data '{}': {} file(s) open".format(role, loaded[role]))
+    for m in not_loaded:
+        say(">>> WARNING: package data NOT loaded: {}".format(m))
     try:
         result = run(cfg, progress=progress, log=log)
     except Exception as e:                      # the check reports it
@@ -1134,6 +1288,11 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
     for m in plan["missing"]:
         rows.append(dict(zip(CHECK_FIELDS, ["Input", "Missing from the package", m, "", "",
                                             "", ""])))
+    for m in not_loaded:
+        rows.append(dict(zip(CHECK_FIELDS, ["Input", "Not loaded", m, "", "", "", ""])))
+    for role in sorted(loaded):
+        rows.append(dict(zip(CHECK_FIELDS, ["Input", "Loaded", role, "",
+                                            "{} file(s)".format(loaded[role]), "", ""])))
     for rel, prob in tampered:
         rows.append(dict(zip(CHECK_FIELDS, ["Package", "Package file " + prob, rel, "", "",
                                             "", ""])))
@@ -1159,6 +1318,12 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
     if plan["missing"]:
         summary.append("{} input(s) missing from the package - a difference may come from "
                        "them: {}".format(len(plan["missing"]), "; ".join(plan["missing"])))
+    if not_loaded:
+        summary.append("{} package data file(s) / role(s) NOT loaded - a difference may come "
+                       "from them: {}".format(len(not_loaded), "; ".join(not_loaded)))
+    if loaded:
+        summary.append("Package data loaded: {}".format(", ".join(
+            "{} ({})".format(r, loaded[r]) for r in sorted(loaded))))
     if tampered:
         summary.append("{} package file(s) missing or changed since the package was made "
                        "(MANIFEST.csv): {}".format(len(tampered), ", ".join(
@@ -1183,4 +1348,5 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
     return {"identical": status == "IDENTICAL", "status": status, "lines": summary,
             "rows": rows, "csv": cpath, "text": tpath, "missing": plan["missing"],
             "notes": plan["notes"], "result": result, "error": error,
+            "loaded": loaded, "not_loaded": not_loaded,
             "package_snapshot": before, "new_snapshot": now}

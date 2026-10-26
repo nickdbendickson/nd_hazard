@@ -657,6 +657,9 @@ def _c_repro(repro, asked):
     finding = lines[0] if lines else str(repro.get("status"))
     if repro.get("missing"):
         finding += "; {} input(s) missing from the package".format(len(repro["missing"]))
+    if repro.get("not_loaded"):                  # 2.34.5: package data that did not open
+        finding += "; {} package data file(s) / role(s) NOT loaded".format(
+            len(repro["not_loaded"]))
     return _item("C13", "Reproduction", finding, flag,
                  REPRO_DIR + "/Reproduction_Check.csv")
 

@@ -475,29 +475,35 @@ def dam_settings(dam_folder, base_cfg=None, config_json=None, downloads=False):
         # the data files the dam's run read, as a data folder for every run
         local = dict(kw.get("local_data") or {})
         multi = []
+        # 2.34.5: every file of a role, in one shape ([[path, category], ...]); a gone or
+        # unreadable entry is a note; a record without the inputs_format marker (either fork)
+        # is put as the run read it first, from the whole record (a gone file is not replaced)
+        from .datafolder import MULTI_SOURCE_ROLES
+        as_run = REP.inputs_as_run(rec)
         for role, spec in (rec.get("inputs") or {}).items():
             if role in local:
                 continue
-            items = spec if isinstance(spec, list) else [spec]
+            items, problems = REP._input_items(spec)
+            for prob in problems:
+                notes.append("Data '{}' of the dam's run: {} - not used".format(role, prob))
+            if not as_run:
+                items = REP._old_inputs_as_run(role, items, notes)
             keep = []
-            for it in items:
-                pth = it[0] if isinstance(it, list) else it
+            for pth, cat in items:
                 if pth and os.path.exists(REP.split_source(pth)[0]):
-                    keep.append(it)
+                    keep.append([pth, cat])
+                else:
+                    notes.append("Data '{}' the dam's run read is gone: {} - not used".format(
+                        role, pth))
             if not keep:
                 notes.append("Data '{}' the dam's run read is gone - not used".format(role))
                 continue
-            if role == "lifelines":
-                local[role] = [it if isinstance(it, list) else [it, None] for it in keep]
-            else:
-                one = keep[0][0] if isinstance(keep[0], list) else keep[0]
-                local[role] = one
-                if len(keep) > 1:
-                    multi.append("{} ({} files, the first used)".format(role, len(keep)))
+            local[role] = keep
+            if role not in MULTI_SOURCE_ROLES and len(keep) > 1:
+                multi.append("{} ({} files, the first used)".format(role, len(keep)))
         if multi:
             notes.append("Data read from several files by the dam's run and handed over as "
-                         "one: {} - e.g. road traffic counts can differ from the dam's own "
-                         "run (see the reference run)".format(", ".join(multi)))
+                         "one: {} (see the reference run)".format(", ".join(multi)))
         kw["local_data"] = local
         info["local"] = bool(local)
         if local:
@@ -517,9 +523,15 @@ def dam_settings(dam_folder, base_cfg=None, config_json=None, downloads=False):
             src = lyr.source().split("|")[0]
             notes.append("Building outlines: {}".format(os.path.basename(src) or lyr.name()))
             loc = kw.get("local_data") or {}
-            if isinstance(loc.get("usa"), str) and os.path.normcase(os.path.abspath(
-                    REP.split_source(loc["usa"])[0])) == os.path.normcase(os.path.abspath(src)):
-                loc.pop("usa")                # the same file: not twice
+            usa = [p for p, _c in REP._input_items(loc.get("usa"))[0]]
+            same = [p for p in usa if os.path.normcase(os.path.abspath(
+                REP.split_source(p)[0])) == os.path.normcase(os.path.abspath(src))]
+            if same:                          # the same file: not twice (2.34.5: any shape)
+                rest = [[p, None] for p in usa if p not in same]
+                if rest:
+                    loc["usa"] = rest
+                else:
+                    loc.pop("usa")
     if config_json:
         from .processing_provider import _read_worker_file
         extra, ignored, _res = _read_worker_file(config_json)

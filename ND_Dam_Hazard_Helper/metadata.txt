@@ -5,10 +5,28 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.34.4
+version=2.34.5
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.34.5 (2026-10-25; reproduce / data folder: every file of every role, or a warning)
+      * Reproduce: a role recorded as one file (roads, rail, NSI, USA Structures, ...) was
+        skipped without a word, and a role with several files (AADT: HPMS + county roads;
+        bridges: NBI + OSM) opened only its first. Now one shape for every role, old and
+        new packages alike, and every file is handed to the run.
+      * Run_Settings.json says its inputs are as the run read them ("inputs_format": 2,
+        written by both forks - DamSafety Hazard 2.18.62 too): traffic, crossings and
+        lifelines in the order the run reads them. A record without it (either fork, e.g.
+        DamSafety Hazard 2.18.61) lists every download in the order it finished: reproduce
+        and the ensemble hand over what the run read - newest HPMS, else NDDOT, then the
+        county roads; NBI before the OSM crossings; data-folder, agency, then OSM lifelines
+        (the first of two duplicates is kept) - decided from the whole record, so a file the
+        run read that is gone is missing, never replaced by an older HPMS year.
+      * AADT, bridges, NSI, address points, USA Structures, outlines and lifelines read
+        every data-folder file. A missing, unreadable or malformed file is a WARNING in the
+        run log and the reproduction check ('Loaded' / 'Not loaded'), never a silent skip;
+        a one-file role is one warning. The review-package checklist (C13) names the
+        package data not loaded.
     2.34.4 (2026-10-25; HEC-RAS plan import: arrival per pixel)
       * HEC-RAS plan import: Arrival_hr is now per pixel - the cell's water-surface series
         minus the pixel's terrain, interpolated between output steps, time of the maximum as

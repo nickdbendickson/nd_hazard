@@ -324,6 +324,7 @@ class Run(object):
         self.local_lines = []           # v2.9: what the data folder supplied (run log / sources)
         self.local_notes = []
         self.local_roles = set()        # v2.9: data-folder roles that opened
+        self.local_all = {}             # 2.34.5: every data-folder layer per role
         self.structs = None             # v2.9: the structure records (stage B)
         self.facility_review = None
         self.used_inputs = {}
@@ -581,10 +582,7 @@ def _local_data_sig(local):
     try:
         from . import datafolder as DF
         for role in sorted(local or {}):
-            v = local[role]
-            items = [v] if isinstance(v, str) else list(v or [])
-            for it in items:
-                uri, cat = (it[0], it[1]) if isinstance(it, (list, tuple)) else (it, None)
+            for uri, cat in DF.local_items(local[role])[0]:      # 2.34.5: any shape
                 pth = DF._file_of_uri(uri) if isinstance(uri, str) else ""
                 out.append([role, uri, cat, _file_sig(pth) if pth and os.path.isfile(pth)
                             else None])
@@ -865,8 +863,14 @@ def _apply_local_data(run, cfg):
     """v2.9: open the layers of cfg["local_data"] (the Data & Output tab's folder search)
     and let them take the place of the QGIS layer-tree layer and of the download: order
     of use is data folder, QGIS layer tree, internet. A layer the engineer picked by hand
-    in a list is not in local_data (the dialog leaves that role out)."""
+    in a list is not in local_data (the dialog leaves that role out).
+    2.34.5: any value shape (datafolder.local_items) and several files per role:
+    run.local_all[role] = [layer, ...]; run.local[role] = the first (lifelines: [(layer,
+    category)]). The roles of datafolder.MULTI_SOURCE_ROLES read every file; another role
+    reads the first and the others are a WARNING. Every file that is left out (missing,
+    unreadable, malformed) is a WARNING in the run log (run.local_notes)."""
     run.local, run.local_lines, run.local_notes, run.local_roles = {}, [], [], set()
+    run.local_all = {}
     local = cfg.get("local_data") or {}
     if not local:
         return
@@ -875,8 +879,7 @@ def _apply_local_data(run, cfg):
     # 2.17.0: a layer of the dam folder's data/ (Get data for this dam) only when its area
     # holds the study area; otherwise that data set is read / downloaded as before
     if dam and any(DF.is_dam_data(u, dam) for v in local.values()
-                   for u in ([x[0] for x in v if isinstance(x, (list, tuple)) and x]
-                             if isinstance(v, (list, tuple)) else [v])):
+                   for u, _c in DF.local_items(v)[0]):
         box, xbox = _study_boxes(run, cfg)
         local, dropped, _kept = DF.drop_uncovered(local, dam, box, xbox)
         cfg["local_data"] = local
@@ -884,7 +887,7 @@ def _apply_local_data(run, cfg):
             run.log(">>> " + n)
         if not local:
             return
-    layers, notes = DF.open_config(local)
+    layers, notes = DF.open_config_all(local)
     run.local_roles = set(layers)
     run.local_notes = ["Data folder: " + n for n in notes]
 
@@ -893,20 +896,43 @@ def _apply_local_data(run, cfg):
 
     def mark(lyr):
         return " (from dam folder)" if DF.is_dam_data(lyr.source(), dam) else ""
-    for role, lyr in layers.items():
+    for role, opened in layers.items():
         if role == "lifelines":
-            run.local[role] = list(lyr)
-            for one, cat in lyr:
+            run.local[role] = list(opened)
+            run.local_all[role] = [one for one, _c in opened]
+            for one, cat in opened:
                 run.local_lines.append("Lifeline facilities: {} '{}'{}{}".format(
                     where(one), one.name(), " ({})".format(cat) if cat else "", mark(one)))
             continue
         label = DF.ROLE_LABELS.get(role, role)
-        run.local_lines.append("{}: {} '{}'{}".format(label, where(lyr), lyr.name(), mark(lyr)))
+        lyrs = [one for one, _c in opened]
+        if role not in DF.MULTI_SOURCE_ROLES and len(lyrs) > 1:
+            run.local_notes.append("Data folder: {} ({}): {} files given - this role reads "
+                                   "ONE layer, only '{}' is used; NOT used: {}".format(
+                                       role, label, len(lyrs), lyrs[0].name(),
+                                       ", ".join("'{}'".format(x.name()) for x in lyrs[1:])))
+            lyrs = lyrs[:1]
+        run.local_all[role] = lyrs
+        for one in lyrs:
+            run.local_lines.append("{}: {} '{}'{}".format(label, where(one), one.name(),
+                                                         mark(one)))
         key = LOCAL_CFG_KEYS.get(role)
         if key:
-            cfg[key] = lyr
+            cfg[key] = lyrs[0]
         else:
-            run.local[role] = lyr
+            run.local[role] = lyrs[0]
+
+
+def _local_layers(run, role):
+    """2.34.5: every data-folder layer of a role (run.local_all; [] when none)."""
+    allr = getattr(run, "local_all", None) or {}
+    if role in allr:
+        return list(allr[role])
+    one = (getattr(run, "local", None) or {}).get(role)
+    if one is None:
+        return []
+    return [x[0] if isinstance(x, tuple) else x for x in one] if isinstance(one, list) \
+        else [one]
 
 
 def _study_boxes(run, cfg):
@@ -1952,10 +1978,10 @@ def _collect_inputs(run, clip):
         points = list(cfg["point_sources"] or [])
     for fam, lyr in points:
         run.sources.append("{} points: project layer '{}'".format(fam, lyr.name()))
-    if loc.get("nsi") is not None:
-        points.append(("NSI", loc["nsi"]))
-    if loc.get("address") is not None:
-        points.append(("NDGISHUB", loc["address"]))
+    for lyr in _local_layers(run, "nsi"):                # 2.34.5: every file of the role
+        points.append(("NSI", lyr))
+    for lyr in _local_layers(run, "address"):
+        points.append(("NDGISHUB", lyr))
     have_hub = any(f == "NDGISHUB" for f, _l in points)
     osm = cfg["osm_layer"]
     if osm == "auto":
@@ -2065,7 +2091,8 @@ def _collect_inputs(run, clip):
         run.sources.append("Building outlines (FEMA_Structures): {}".format(
             osm.source().split("|")[0] or osm.name()))
     if "usa" in loc:
-        outlines.append(("USA_STRUCTURES", loc["usa"]))
+        for lyr in _local_layers(run, "usa"):            # 2.34.5: every file of the role
+            outlines.append(("USA_STRUCTURES", lyr))
     if cfg["download_usa_structures"] and "usa" not in loc \
             and is_fema_structures_layer(osm, out, dam_folder):
         run.log(">>> FEMA USA Structures download skipped - the FEMA_Structures outline "
@@ -2090,6 +2117,8 @@ def _collect_inputs(run, clip):
         outlines.append(("OUTLINES", extra))
         run.sources.append("Additional building outlines: project layer '{}'".format(
             extra.name()))
+        for lyr in _local_layers(run, "outlines")[1:]:   # 2.34.5: the role's other files
+            outlines.append(("OUTLINES", lyr))
 
     # ---- roads, rail, crossings --------------------------------------------------
     if rail is None and "rail" in got:
@@ -2107,6 +2136,8 @@ def _collect_inputs(run, clip):
     elif cross is not None:
         run.sources.append("Rail crossings: project layer '{}'".format(cross.name()))
     aadt_layers = [aadt] if aadt is not None and aadt is not road else []
+    if aadt is not None and "aadt" in run.local_roles:   # 2.34.5: every data-folder file
+        aadt_layers += [x for x in _local_layers(run, "aadt")[1:] if x is not road]
     if road is not None:
         run.sources.append("Roads: project layer '{}'".format(road.name()))
         if aadt is not None and aadt is not road:
@@ -2201,7 +2232,27 @@ def _used_inputs(cfg, got, loc):
         if path:
             used.setdefault(role, []).append((path, cat) if cat else path)
     try:
-        for key, val in got.items():
+        # 2.34.5: the data-folder layers first - the run reads them before its downloads (a
+        # role is downloaded only without them; the lifelines are read from both)
+        from . import datafolder as DF
+        for role, v in (cfg.get("local_data") or {}).items():
+            for uri, cat in DF.local_items(v)[0]:                # 2.34.5: any shape
+                add(role, DF._file_of_uri(uri) if isinstance(uri, str) else "", cat)
+        # 2.34.5: the traffic counts, crossings and lifelines in the order the run reads
+        # them, and only those it reads (_traffic_layers: the newest HPMS year that answered,
+        # else NDDOT, plus the county roads; _collect_facilities: NBI before OSM, the agency
+        # lifelines in lifeline_downloads() order before OSM) - a reproduction hands them
+        # over as they are (reproduce.INPUTS_FORMAT)
+        ordered = [k for k in got if k.startswith("hpms_") and got[k] and got[k][0] is not None]
+        ordered = sorted(ordered, reverse=True)[:1]
+        nd = got.get("nddot")
+        if not ordered and nd and nd[0] is not None and (len(nd) < 2 or nd[1]):
+            ordered.append("nddot")
+        ordered += ["county", "nbi", "xosm"]
+        ordered += ["life_" + k for k, _l, _u, _c in lifeline_downloads()] + ["life_osm"]
+        for key in ordered + [k for k in got if k not in ordered and k != "nddot"
+                              and not k.startswith("hpms_")]:
+            val = got.get(key)
             if not val or val[0] is None:
                 continue
             path = val[2] if len(val) > 2 else None
@@ -2212,12 +2263,6 @@ def _used_inputs(cfg, got, loc):
             elif key.startswith("life_"):
                 cats = {k: c for k, _l, _u, c in lifeline_downloads()}
                 add("lifelines", path, cats.get(key[5:]))
-        from . import datafolder as DF
-        for role, v in (cfg.get("local_data") or {}).items():
-            items = [v] if isinstance(v, str) else list(v or [])
-            for it in items:
-                uri, cat = (it[0], it[1]) if isinstance(it, (list, tuple)) else (it, None)
-                add(role, DF._file_of_uri(uri) if isinstance(uri, str) else "", cat)
     except Exception:                                    # noqa: BLE001 - a record only
         pass
     return used
@@ -2416,8 +2461,7 @@ def _collect_facilities(run, clip, ext4326, got):
                     "be missing".format(", ".join(failed)))
     crossings = []
     cross_on = False
-    if run.local.get("bridges") is not None:
-        one = run.local["bridges"]
+    for one in _local_layers(run, "bridges"):           # 2.34.5: every file of the role
         crossings += FAC.read_crossings(one, "data folder '{}'".format(one.name()), acrs,
                                         run.ctx, clip)
         cross_on = True
