@@ -2069,6 +2069,16 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                 refine.append({"cell": fc, "radius": rr_})
                 inner = rr_
             pts = np.vstack(keep_pts)
+    # v3.26.8: HEC-RAS stops with '1 face errors detected on the perimeter of the mesh' on a
+    # cell the perimeter cuts in two (a grid point beside a narrow notch of the perimeter;
+    # Absaraka with roads, 2026-10-26). Drop those points, as the DamSafety Runner's
+    # perimeter pre-check does (3.10.22); their neighbours take the area.
+    split = perimeter_split_cells(perim, pts, cell)
+    if split is not None and len(split):
+        pts = np.delete(pts, split, axis=0)
+        notes.append("Perimeter pre-check: {} computation point(s) whose cell the perimeter "
+                     "cut in two were removed (HEC-RAS stops with 'face errors detected on "
+                     "the perimeter of the mesh').".format(len(split)))
     # v3.26.6: HEC-RAS stops ("has a weir elevation lower than the cells they are connected
     # to ... has a weir breach lower than the cells") when the dam weir or the breach bottom is
     # below the lowest ground of a 2D cell along the connection. Raise them to it.
@@ -2297,6 +2307,34 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         info["culvert_candidates"] = len(cands)
     progress(100, "done")
     return {"folder": out, "paths": paths, "model": m, "info": info, "notes": notes}
+
+
+def perimeter_split_cells(perimeter, points, cell, reach=3.0):
+    """v3.26.8: indices of the points whose Voronoi cell, clipped to the perimeter, falls
+    in two or more pieces (checked within `reach` cells of the perimeter), or None without
+    scipy. HEC-RAS counts such a cell as a face error on the perimeter and stops."""
+    try:
+        from scipy.spatial import Voronoi
+    except ImportError:
+        return None
+    pts = np.asarray(points, float)
+    per = np.asarray(perimeter, float)
+    if len(pts) < 4:
+        return np.zeros(0, np.int64)
+    poly = _polygon(per)
+    xmin, ymin = per.min(axis=0) - 10 * cell
+    xmax, ymax = per.max(axis=0) + 10 * cell
+    vor = Voronoi(np.vstack([pts, [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]]))
+    d = point_segment_distance(pts[:, 0], pts[:, 1], list(map(tuple, per)) + [tuple(per[0])])
+    out = []
+    for i in np.nonzero(d < reach * cell)[0]:
+        reg = vor.regions[vor.point_region[i]]
+        if not reg or -1 in reg:
+            continue
+        piece = _polygon(vor.vertices[reg]).Intersection(poly)
+        if piece is not None and not piece.IsEmpty() and len(_rings(piece)) > 1:
+            out.append(int(i))
+    return np.asarray(out, np.int64)
 
 
 def mesh_check(perimeter, points, cell):
