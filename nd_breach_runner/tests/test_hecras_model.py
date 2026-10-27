@@ -53,11 +53,12 @@ def _tif(path, a, x0, ytop, cell, epsg, unit=None):
 
 
 def make_run(folder, dem_feet=False, flood_crs=5070, scenario="sunny", method=br.METHOD_PIPING,
-             rot_deg=0.0, hills=False):
+             rot_deg=0.0, hills=False, zfn=None, dam_kw=None):
     """A finished run: dam folder with Depth (Max).tif, _breach_model/run_report.json and
     breach_hydrograph.csv, and a DEM in UTM 14N. `rot_deg` turns the valley (flow towards
     that bearing from east, counter-clockwise); `hills` puts ground above the top of dam
-    beyond 400 m from the valley axis, as abutments."""
+    beyond 400 m from the valley axis, as abutments. `zfn` replaces the terrain
+    (synthetic.valley) and `dam_kw` changes the dam's data (_dam)."""
     from osgeo import gdal
     cell = 10.0
     xs = np.arange(-6000, 9000, cell) + cell / 2
@@ -66,7 +67,7 @@ def make_run(folder, dem_feet=False, flood_crs=5070, scenario="sunny", method=br
     t = math.radians(rot_deg)
     X = Xg * math.cos(t) + Yg * math.sin(t)          # along the valley
     Y = -Xg * math.sin(t) + Yg * math.cos(t)         # across it
-    z = valley(X, Y)
+    z = (zfn or valley)(X, Y)
     if hills:
         z = z + np.where(np.abs(Y) > 400, (np.abs(Y) - 400) * 0.08, 0.0)
     dem = os.path.join(folder, "dem.tif")
@@ -87,7 +88,7 @@ def make_run(folder, dem_feet=False, flood_crs=5070, scenario="sunny", method=br
     gdal.Warp(os.path.join(dfold, "Depth (Max).tif"), tmp,
               options=gdal.WarpOptions(dstSRS=s.ExportToWkt(), xRes=10, yRes=10,
                                        srcNodata=-9999, dstNodata=-9999))
-    dam = _dam()
+    dam = _dam(**(dam_kw or {}))
     hy = br.make_hydrograph(dam, method)
     md = os.path.join(dfold, hecras.MODEL_FOLDER)
     os.makedirs(md, exist_ok=True)
