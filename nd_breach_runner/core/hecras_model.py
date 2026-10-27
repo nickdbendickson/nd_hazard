@@ -79,6 +79,26 @@ MAX_ARC_POINTS = 400
 # intersects the perimeter ... it must be entirely outside"), so it is drawn this many cells
 # outside the perimeter, along it (found running the export in HEC-RAS 6.6 itself)
 BC_OFFSET_CELLS = 0.25
+# v3.26.4: a dam point off the embankment moves to the crest found nearby (_crest_snap) only
+# when the crest's normal is within SNAP_TURN_MAX_DEG of the flow direction at the dam
+# (DWR-2801's turned about 65 degrees, its inflow point off to the side of the pool point; an
+# abutment hillside's contour runs along the valley, about 90), the dam point is within
+# SNAP_OFFSET_MAX_DEG of that normal (upstream or downstream of the crest, not beside it) and
+# the crest passes the DamSafety Runner's crest test (hecras_crest._judge): the highest ground
+# across it is within the tolerance of the top of dam (higher is an abutment; lower by no more
+# than the tolerance plus what the DEM can read a crest narrower than a cell low, _snap_low)
+# and stands max(SNAP_PROM_MIN_FT, SNAP_PROM_FRAC x dam height) above the ground half a toe
+# distance to a toe distance away on each side (an embankment, not a hillside; a crest the DEM
+# reads low is credited that allowance, up to half the prominence). The highest ground across
+# is found as hecras_crest._ridge does: of equal highs the nearer (SNAP_CENTRE_BIAS per unit
+# off the centre), the middle of a level stretch (within SNAP_PLATEAU_FRAC of the sample
+# spacing) on a flat crest
+SNAP_TURN_MAX_DEG = 75.0
+SNAP_OFFSET_MAX_DEG = 45.0
+SNAP_PROM_MIN_FT = 2.0
+SNAP_PROM_FRAC = 0.1
+SNAP_CENTRE_BIAS = 1e-3
+SNAP_PLATEAU_FRAC = 0.05
 # v3.26.8: a cell the perimeter cuts in two stops HEC-RAS. Points whose cell is cut in two are
 # removed in up to SPLIT_PASSES passes; when there are any, the 2D area is also drawn with its
 # notches narrower than NOTCH_CLOSE_CELLS cells closed, and the better of the two is written
@@ -904,38 +924,293 @@ def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=
     return out
 
 
-def _crest_snap(z, x0, y0, step, P, top, tol, search, half):
-    """v3.26.6: when the ground at the dam point P is more than `tol` below the top of dam
-    (a dam.json point on the pool or the toe), the nearest ground within `search` that is
-    within `tol` of the top, and the direction of the embankment there (the long axis of that
-    high ground within `half` of it). Returns (point, unit axis) or None when P is on the
-    crest, nothing is high enough or the high ground has no clear long axis (a hill, not an
-    embankment). z: north-up array in model units, x0/y0 its top-left corner."""
-    P = np.asarray(P, float)
-    zp = _sample(z, x0, y0, step, [P])[0]
-    if np.isfinite(zp) and zp >= top - tol:
+def _snap_ridge(z, x0, y0, step, C, nu, w, ds, interior=False):
+    """v3.26.4 (the DamSafety Runner's hecras_crest._ridge): the highest ground on the
+    cross-section C + t nu, |t| <= w, sampled ds apart, as (point, z): of equal highs the
+    nearer to C, on a flat crest the middle of the level stretch around it. None when the
+    cross-section has no ground, and with `interior` also when that highest ground is not
+    higher than both ends of the cross-section: ground still rising to an end (a face) or
+    level throughout (a flat) is not a ridge."""
+    C = np.asarray(C, float)
+    nu = np.asarray(nu, float)
+    tt = np.arange(-w, w + 1e-9, ds)
+    zz = _sample(z, x0, y0, step, C[None, :] + tt[:, None] * nu[None, :])
+    if not np.isfinite(zz).any():
         return None
+    zb = np.where(np.isfinite(zz), zz, -np.inf)
+    k = int(np.argmax(zb - SNAP_CENTRE_BIAS * np.abs(tt)))
+    lvl = zb[k] - SNAP_PLATEAU_FRAC * ds
+    i, j = k, k
+    while i > 0 and zb[i - 1] >= lvl:
+        i -= 1
+    while j < len(zb) - 1 and zb[j + 1] >= lvl:
+        j += 1
+    if interior and not (zb[k] > zb[0] and zb[k] > zb[-1]):
+        return None
+    if j > i:
+        R = C + 0.5 * (tt[i] + tt[j]) * nu
+        zr = float(_sample(z, x0, y0, step, R[None, :])[0])
+        if np.isfinite(zr):
+            return R, zr
+    return C + tt[k] * nu, float(zz[k])
+
+
+def _snap_sides(z, x0, y0, step, R, nu, toe):
+    """v3.26.4 (hecras_crest._judge): the higher of the lowest ground on each side of R along
+    nu, from half the toe distance to the toe distance away (NaN when neither side has ground;
+    one side off the DEM is left out, as in the DamSafety Runner)."""
+    tt = np.linspace(0.5 * toe, toe, 4)[:, None]
+    lows = []
+    for sg in (1.0, -1.0):
+        a = _sample(z, x0, y0, step, R[None, :] + sg * tt * nu[None, :])
+        if np.isfinite(a).any():
+            lows.append(float(np.nanmin(a)))
+    return max(lows) if lows else float("nan")
+
+
+def _snap_low(dem_cell, crest_w, side_h):
+    """v3.26.4: how much lower than the top of dam a DEM with `dem_cell` cells can read a crest
+    crest_w wide with side_h:1 sides: (dem_cell - crest_w) / (2 side_h), never negative (a
+    crest narrower than a cell is read between its cells, on the side slopes)."""
+    return max(0.0, float(dem_cell) - float(crest_w or 0.0)) / (
+        2.0 * max(float(side_h or 3.0), 0.1))
+
+
+def _snap_stands(z, x0, y0, step, R, nu, zr, top, low, toe, prom):
+    """v3.26.4 (hecras_crest._judge's embankment test): (ridge stands, higher side) for the
+    ridge R (ground zr) on a cross-section along nu: it stands `prom` above the ground half a
+    toe distance to a toe distance away on both sides (_snap_sides). A crest the DEM reads
+    low is credited the read-low allowance `low` (_snap_low), up to the top of dam and to half
+    of `prom`: the ridge must still stand at least half of `prom` above both sides as the DEM
+    reads it, so a flat (a pool, a basin floor) never stands."""
+    hi = _snap_sides(z, x0, y0, step, np.asarray(R, float), nu, toe)
+    if not np.isfinite(hi) or not np.isfinite(zr):
+        return False, hi
+    credit = min(float(low), max(float(top) - zr, 0.0), 0.5 * float(prom))
+    return zr + credit - hi >= prom, hi
+
+
+def _snap_judge(z, x0, y0, step, R, nu, zr, top, tol, toe, prom, u="", low=0.0):
+    """v3.26.4 (the DamSafety Runner's hecras_crest._judge): '' when R, the highest ground (zr)
+    on a cross-section along nu, is an embankment crest at the top of dam, else why not. A
+    crest the DEM reads low may be up to `low` (_snap_low) more than the tolerance below the
+    top of dam, and is credited that allowance in _snap_stands."""
+    if not np.isfinite(zr):
+        return "the DEM has no ground across it"
+    if zr > top + tol:
+        return ("abutment: the ridge across it rises above the top of dam ({:.1f} {u}, more than "
+                "the {:.1f} {u} tolerance above it)".format(zr, tol, u=u))
+    if zr < top - tol - low:
+        return ("the ridge across it is below the crest ({:.1f} {u}, more than the {:.1f} {u} "
+                "tolerance{} below the top of dam)".format(
+                    zr, tol, " and the {:.1f} {u} the DEM can read a crest low".format(low, u=u)
+                    if low > 0 else "", u=u))
+    ok, hi = _snap_stands(z, x0, y0, step, R, nu, zr, top, low, toe, prom)
+    if not ok:
+        return ("it does not stand {:.1f} {u} above the ground {:.0f} to {:.0f} {u} away on both "
+                "sides across it (ridge {:.1f}, higher side {}): a hillside or an abutment "
+                "tie-in, not an embankment".format(
+                    prom, 0.5 * toe, toe, zr, "{:.1f}".format(hi) if np.isfinite(hi) else
+                    "off the DEM", u=u))
+    return ""
+
+
+def _near_text(snap, top, tol, u):
+    """v3.26.4: why the dam point looked off the embankment, for the crest snap's notes."""
+    if np.isfinite(snap["z_near"]):
+        t = ("the ground at the dam point is {:.1f} {u} below the top of dam, more than the "
+             "{:.1f} {u} tolerance, the dam point is not on the embankment's side slope next to "
+             "its crest".format(top - snap["z_near"], tol, u=u))
+    else:
+        t = "the DEM has no ground at the dam point"
+    t += " and it is not on a ridge across the flow direction"
+    low = snap.get("low") or 0.0
+    if np.isfinite(snap["z_near"]) and low > 0 and snap["z_near"] >= top - tol - low and \
+            not snap.get("flat"):
+        t += (" (the DEM's {:.0f} {u} cells can read a crest this narrow up to {:.1f} {u} "
+              "low, so it may be on a crest the DEM does not show: no ridge there stands above "
+              "the ground on both sides)".format(snap.get("dem_cell") or 0.0, low, u=u))
+    return t
+
+
+def _crest_snap(z, x0, y0, step, P, top, tol, search, half, toe, prom, d=None, crest_w=0.0,
+                u="", dem_cell=None, side_h=3.0):
+    """v3.26.4: where the dam line should go when the dam point P is off the embankment (a
+    dam.json point on the pool or the toe). z: north-up array in model units, x0/y0 its
+    top-left corner, `step` its cell, `dem_cell` the source DEM's cell (default `step`),
+    `side_h` the embankment's side slope (H in H:1V), `u` the unit name in the reasons.
+    `low` (_snap_low) is how much low the DEM can read a crest narrower than a cell, and
+    r_near = crest_w / 2 + one DEM cell.
+
+    None when there is nothing to move. P is on the crest when (a) the ground at P is within
+    `tol` of the top of dam; (a2) P is on the embankment's side slope next to its crest: ground
+    no more than tol + low below the top of dam is within r_near of P and P stands `tol` above
+    the lowest ground within r_near (on a pool or a basin floor it does not: that ground is
+    level with it); or (b) the highest ground on the cross-section through P along d within
+    r_near is a ridge inside it (higher than both ends: not a face still rising there, nor a
+    flat), no more than tol + low below the top of dam, standing `prom` above the ground toe / 2
+    to toe away on both sides along d (_snap_stands, with the read-low credit). Also None when
+    no ground within `search` of P is in the crest band: no more than tol above and tol (then
+    tol + low) below the top of dam.
+
+    Otherwise a dict: 'point' (the highest ground on the cross-section through the crest-band
+    ground nearest P, along the band's normal, within max(toe, 3 DEM cells): the crest), 'axis'
+    (unit, the band's long axis within `half`: the embankment), 'normal' (unit, across it,
+    towards d), 'dist' (P to the nearest crest-band ground), 'z_near' (the ground at P),
+    'r_near', 'low', 'dem_cell', 'flat' (P is on a flat, below), 'band_low' (0, or `low` for
+    the band reaching that much lower), 'z_crest' (the ground at 'point'), 'off_crest' /
+    'off_along' (P's offset from 'point' across / along the crest), 'turn' (degrees between
+    the normal and d), 'on_crest' and 'why'.
+
+    'on_crest' True (and 'why' ''): (c) the crest passes hecras_crest._judge and P is no more
+    than r_near (plus side_h x band_low for the lower band, which reaches that much farther
+    down the side slopes) from 'point' across the crest and along it: P is on that crest as
+    far as the DEM can tell, and is not moved. Else 'why' is '' for a good snap, or why it is
+    rejected: no clear long axis (a hill), P beside that ground rather than upstream or
+    downstream of it (more than SNAP_OFFSET_MAX_DEG off the normal), a turn of more than
+    SNAP_TURN_MAX_DEG from d, or a crest that fails hecras_crest._judge (the ridge rises above
+    the top of dam: an abutment; it is more than tol + low below it; it does not stand `prom`
+    above the ground on both sides: a hillside), or the only band ground in range is the flat
+    P is on.
+
+    The band is |z - top| <= tol first; when the DEM can read the crest low (low > 0) and that
+    band gives no good snap, the band reaching `low` lower is tried. When P is on a flat (no
+    ground within r_near is a quarter of `prom` lower: a pool or a basin floor), ground no more
+    than a quarter of `prom` above P is left out of both: a crest stands above the flat the
+    dam point is on, and a high pool in the band would hide the embankment's long axis. A
+    rejection is that of the first band with ground in range."""
+    P = np.asarray(P, float)
+    dem_cell = float(dem_cell or step)
+    low = _snap_low(dem_cell, crest_w, side_h)
+    r_near = 0.5 * float(crest_w or 0.0) + dem_cell
     ny, nx = z.shape
     X = x0 + (np.arange(nx) + 0.5) * step
     Y = y0 - (np.arange(ny) + 0.5) * step
     GX, GY = np.meshgrid(X, Y)
-    with np.errstate(invalid="ignore"):
-        high = np.isfinite(z) & (z >= top - tol)
+    fin = np.isfinite(z)
     dist = np.hypot(GX - P[0], GY - P[1])
-    cand = high & (dist <= search)
-    if not cand.any():
+    z_near = float(_sample(z, x0, y0, step, P[None, :])[0])
+    flat = False
+    if np.isfinite(z_near):
+        if z_near >= top - tol:
+            return None                                     # (a) on the crest
+        zn = z[fin & (dist <= r_near)]
+        if zn.size and float(zn.max()) >= top - tol - low and \
+                z_near - float(zn.min()) >= tol:
+            return None                                     # (a2) on the side slope
+        # P on a flat (a pool, a basin floor): no ground within r_near is much lower
+        flat = not zn.size or z_near - float(zn.min()) < 0.25 * float(prom)
+    if d is not None:
+        d = np.asarray(d, float)
+        rr = _snap_ridge(z, x0, y0, step, P, d, r_near, 0.5 * step, interior=True)
+        if rr is not None and rr[1] >= top - tol - low and \
+                _snap_stands(z, x0, y0, step, rr[0], d, rr[1], top, low, toe, prom)[0]:
+            return None                                     # (b) on a crest the DEM reads low
+    above = z_near + 0.25 * float(prom) if flat else -np.inf
+    info = dict(z_near=z_near, r_near=r_near, low=low, dem_cell=dem_cell, flat=flat,
+                on_crest=False)
+    first = None
+    for band_low in ((0.0, low) if low > 0 else (0.0,)):
+        with np.errstate(invalid="ignore"):
+            band = fin & (z <= top + tol) & (z >= top - tol - band_low)
+            cand = band & (dist <= search)
+            if not cand.any():
+                continue
+            if not (cand & (z > above)).any():
+                if first is None:
+                    i = np.argmin(np.where(cand, dist, np.inf))
+                    first = dict(info, point=np.array([GX.flat[i], GY.flat[i]]), axis=None,
+                                 normal=None, dist=float(dist.flat[i]), z_crest=float("nan"),
+                                 off_crest=float("nan"), off_along=float("nan"), turn=None,
+                                 band_low=band_low, crest_ok=False,
+                                 why="that ground is the flat the dam point is on (a pool or a "
+                                     "basin floor), not a crest standing above it")
+                continue
+            band &= z > above
+            cand &= z > above
+        out = _snap_at(z, x0, y0, step, P, GX, GY, band, cand, dist, top, tol, half, toe, prom,
+                       d, u, dem_cell, low)
+        out.update(info, band_low=band_low)
+        zone = r_near + float(side_h or 3.0) * band_low
+        if out["crest_ok"] and out["off_crest"] <= zone and out["off_along"] <= zone:
+            out.update(on_crest=True, why="")               # (c) on that crest
+            return out
+        if not out["why"]:
+            return out
+        if first is None:
+            first = out
+    return first
+
+
+def _snap_axis(pts, d):
+    """v3.26.4: (long axis, normal towards d) of the points `pts` (n x 2), both unit, or None
+    when they have no clear long axis (the larger spread less than twice the smaller)."""
+    C = pts.mean(axis=0)
+    w, v = np.linalg.eigh(np.cov((pts - C).T))
+    if not (w[0] <= 0 or w[1] / w[0] >= 2.0):
         return None
+    t = v[:, 1] / np.hypot(*v[:, 1])
+    nq = np.array([-t[1], t[0]])
+    if d is not None and float(np.dot(nq, d)) < 0:
+        nq = -nq
+    return t, nq
+
+
+def _snap_at(z, x0, y0, step, P, GX, GY, band, cand, dist, top, tol, half, toe, prom, d, u,
+             dem_cell, low):
+    """v3.26.4: _crest_snap's result for the crest-band ground `band` (cand: that ground
+    within the search distance of P)."""
     i = np.argmin(np.where(cand, dist, np.inf))
     Q = np.array([GX.flat[i], GY.flat[i]])
-    loc = high & (np.hypot(GX - Q[0], GY - Q[1]) <= half)
+    out = {"point": Q, "axis": None, "normal": None, "dist": float(dist.flat[i]),
+           "z_crest": float("nan"), "turn": None, "why": "", "crest_ok": False,
+           "off_crest": float("nan"), "off_along": float("nan")}
+    loc = band & (np.hypot(GX - Q[0], GY - Q[1]) <= half)
     if loc.sum() < 3:
-        return None
+        out["why"] = "too little ground there within the tolerance of the top of dam"
+        return out
     pts = np.column_stack([GX[loc], GY[loc]])
-    w, v = np.linalg.eigh(np.cov((pts - pts.mean(axis=0)).T))
-    if w[0] <= 0 or w[1] / w[0] >= 2.0:
-        t = v[:, 1]
-        return Q, t / np.hypot(*t)
-    return None
+    ax = _snap_axis(pts, d)
+    if ax is None:
+        out["why"] = "that ground has no clear long axis (a hill, not an embankment)"
+        return out
+    t, nq = ax
+    # the crest: the highest ground on the cross-section through Q across the band
+    w_x = max(float(toe), 3.0 * dem_cell)
+    rr = _snap_ridge(z, x0, y0, step, Q, nq, w_x, 0.5 * step)
+    R, zc = (rr if rr is not None else (Q, float("nan")))
+    # round 3 of the review: near an abutment the band's contour up the hillside, beside the
+    # crest, turned the axis (8 degrees 45 m from an abutment): the axis again from the band
+    # within half that cross-section of the crest's line
+    sel = np.abs((pts - np.asarray(R, float)) @ nq) <= 0.5 * w_x
+    ax = _snap_axis(pts[sel], d) if sel.sum() >= 3 else None
+    if ax is not None:
+        t, nq = ax
+        rr = _snap_ridge(z, x0, y0, step, Q, nq, w_x, 0.5 * step)
+        R, zc = (rr if rr is not None else (Q, float("nan")))
+    out.update(point=np.asarray(R, float), axis=t, normal=nq, z_crest=zc,
+               off_crest=abs(float(np.dot(P - np.asarray(R, float), nq))),
+               off_along=abs(float(np.dot(P - np.asarray(R, float), t))))
+    why = []
+    off = Q - P
+    L = float(np.hypot(*off))
+    if L > 0 and abs(float(np.dot(off, nq))) < math.cos(math.radians(SNAP_OFFSET_MAX_DEG)) * L:
+        why.append("the dam point is beside that ground ({:.0f} degrees off its normal), not "
+                   "upstream or downstream of it".format(math.degrees(math.acos(min(
+                       1.0, abs(float(np.dot(off, nq))) / L)))))
+    if d is not None:
+        out["turn"] = math.degrees(math.acos(max(-1.0, min(1.0, float(np.dot(nq, d))))))
+        if out["turn"] > SNAP_TURN_MAX_DEG:
+            why.append("its normal is {:.0f} degrees from the flow direction at the dam (more "
+                       "than {:.0f}: the dam line would run nearly along the flow)".format(
+                           out["turn"], SNAP_TURN_MAX_DEG))
+    judged = _snap_judge(z, x0, y0, step, np.asarray(R, float), nq, zc, top, tol, toe, prom,
+                         u=u, low=low)
+    if judged:
+        why.append(judged)
+    out["crest_ok"] = not judged
+    out["why"] = "; ".join(why)
+    return out
 
 
 def _connection_cell_mins(pts, A, B, d, z, x0, y0, step, cell):
@@ -2493,6 +2768,8 @@ def _rings(geom):
     out = []
     for p in polys:
         r = p.GetGeometryRef(0)
+        if r is None or r.GetPointCount() < 3:
+            continue                     # v3.26.4: an empty polygon (a sliver simplified away)
         a = np.asarray(r.GetPoints(), dtype=float)[:, :2]
         # (np.allclose's test, written out: it is called for every cell the checks clip)
         if len(a) > 1 and all(u == v or (math.isfinite(u) and math.isfinite(v) and
@@ -2678,21 +2955,46 @@ def _dam_lonlat(dam_folder):
 def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
-    <dam folder>/_hecras/model). Returns a dict with the paths, the Model and notes."""
-    return _build_model(dam_folder, out_folder, dem_path, crs, options, log, progress)
+    <dam folder>/_hecras/model). Returns a dict with the paths, the Model and notes.
+
+    v3.26.4: when the dam line was moved to the crest found near the dam point (_crest_snap)
+    and the model cannot be built from it, it is built again with the dam line through the
+    dam point, with a note: the snap never makes an export fail."""
+    log = log or (lambda m: None)
+    snapped = {}
+    try:
+        return _build_model(dam_folder, out_folder, dem_path, crs, options, log, progress,
+                            snapped=snapped)
+    except Exception as e:
+        if not snapped:
+            raise
+        why = "{}: {}".format(type(e).__name__, e) if not isinstance(e, HecRasModelError) \
+            else str(e)
+    note = ("The dam line was moved {:,.0f} {u} from the dam point to the embankment crest "
+            "found there, but the model could not be built along it ({}); it is built with the "
+            "dam line through the dam point, across the flow direction, as without the move. "
+            "Check the dam point, the top of dam and the dam line in RAS Mapper.".format(
+                snapped["moved"], why.rstrip("."), u=snapped["u"]))
+    log(note)
+    o = dict(options or {})
+    o["snap_crest"] = False
+    return _build_model(dam_folder, out_folder, dem_path, crs, o, log, progress,
+                        first_notes=[note])
 
 
 def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
-                 log=None, progress=None, plain=None):
-    """build_model. v3.26.8: with `plain` (the measures of the 2D area as drawn, whose
-    cells the perimeter cuts in two) it is the candidate with the area's narrow notches
-    closed: it is written only when _closed_better puts it first, else it returns
-    {'rejected': [reasons], 'terrain_tif': its terrain GeoTIFF, to delete}."""
+                 log=None, progress=None, plain=None, snapped=None,
+                 first_notes=()):
+    """build_model's work; `snapped` (a dict) gets 'moved' and 'u' when the dam line is moved
+    to the crest, `first_notes` start the notes. v3.26.8: with `plain` (the measures of
+    the 2D area as drawn, whose cells the perimeter cuts in two) it is the candidate with
+    the area's narrow notches closed: it is written only when _closed_better puts it first,
+    else it returns {'rejected': [reasons], 'terrain_tif': its terrain GeoTIFF, to delete}."""
     log = log or (lambda m: None)
     progress = progress or (lambda p, m="": None)
     o = dict(DEFAULTS)
     o.update({k: v for k, v in (options or {}).items() if v is not None})
-    notes = []
+    notes = list(first_notes)
     progress(2, "reading the run")
     hy, dam, params = hecras.load_run(dam_folder)
     model_dir = os.path.join(dam_folder, hecras.MODEL_FOLDER)
@@ -2777,9 +3079,11 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
         v = np.array([wx[near].mean() - P[0], wy[near].mean() - P[1]])
         d = v / (np.hypot(*v) or 1.0)
         notes.append("Flow direction at the dam taken from the flooded area near it.")
-    # v3.26.6: a dam point off the embankment (on the pool or the toe) put the dam line through
+    # v3.26.4: a dam point off the embankment (on the pool or the toe) put the dam line through
     # the reservoir and across the flow direction to the toe, not across the embankment;
-    # move it to the crest found nearby and across the embankment's own direction
+    # move it to the crest found nearby and across the embankment's own direction, when that
+    # crest is an embankment across the flow (_crest_snap's guards). A snap considered (crest-
+    # band ground found near a dam point off the crest) and rejected is a note.
     res_near = None
     if o.get("snap_crest", True):
         toe_s = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
@@ -2789,16 +3093,38 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
         tol_s = units.from_ft(max(3.0, 0.1 * dam.dam_height_ft))
         top_s = units.from_ft(dam.top_of_dam_ft)
         dsrs_s = srs_from(dem_wkt) if dem_wkt else srs
-        step_s = max(units.from_ft(5.0), abs(dem_gt[1]) * (
-            dsrs_s.GetLinearUnits() if dsrs_s.IsProjected() else 111320.0) / units.L)
+        dem_cell_s = abs(dem_gt[1]) * (dsrs_s.GetLinearUnits() if dsrs_s.IsProjected() else
+                                       111320.0) / units.L
+        step_s = max(units.from_ft(5.0), dem_cell_s)
         r_s = search + half + 2 * step_s
         zs, sx0, sy0 = _warp(dem_path, srs, step_s, alg="bilinear",
                              bounds=(P[0] - r_s, P[1] - r_s, P[0] + r_s, P[1] + r_s))
         zs = zs * _z_factor(report, dem_path)[0] / units.L
-        snap = _crest_snap(zs, sx0, sy0, step_s, P, top_s, tol_s, search, half)
-        if snap is not None:
-            Q, t = snap
-            nq = np.array([-t[1], t[0]])
+        prom_s = units.from_ft(max(SNAP_PROM_MIN_FT, SNAP_PROM_FRAC * dam.dam_height_ft))
+        snap = _crest_snap(zs, sx0, sy0, step_s, P, top_s, tol_s, search, half, toe_s, prom_s,
+                           d=d, crest_w=units.from_ft(dam.crest_width_ft or 20.0),
+                           u=units.len_name, dem_cell=dem_cell_s, side_h=dam.ds_slope_h or 3.0)
+        if snap is not None and snap.get("on_crest"):
+            # (c) as far as the DEM can tell the dam point is on the crest found: not moved;
+            # a note when it is off the crest's top (on its side slope, or a pool beside it)
+            zone = snap["r_near"] + (dam.ds_slope_h or 3.0) * snap["band_low"]
+            if snap["off_crest"] > 0.5 * units.from_ft(dam.crest_width_ft or 20.0):
+                notes.append("The dam point is {:,.0f} {u} off the line of the embankment crest "
+                             "found there (ground {:.1f} {u}), within half the crest width and "
+                             "one DEM cell{} ({:,.0f} {u}) of it: as far as the DEM can tell it "
+                             "is on the crest, so the dam line is not moved and goes through "
+                             "the dam point, across the flow direction ({:.0f} degrees from the "
+                             "crest's normal). Check the dam point and the dam line in RAS "
+                             "Mapper.".format(
+                                 snap["off_crest"], snap["z_crest"],
+                                 " and the {:.1f} {u} the DEM can read the crest low, down its "
+                                 "side slopes".format(snap["band_low"], u=units.len_name)
+                                 if snap["band_low"] > 0 else "", zone, snap["turn"] or 0.0,
+                                 u=units.len_name))
+                log(notes[-1])
+            snap = None
+        if snap is not None and not snap["why"]:
+            Q, nq = snap["point"], snap["normal"]
             near_w = np.hypot(wx - Q[0], wy - Q[1]) <= max(units.from_ft(1000.0), 3 * half)
             sgn = (wx[near_w] - Q[0]) * nq[0] + (wy[near_w] - Q[1]) * nq[1]
             npos, nneg = int((sgn > 0).sum()), int((sgn < 0).sum())
@@ -2807,14 +3133,37 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
             elif float(np.dot(d, nq)) < 0:
                 nq = -nq
             turn = math.degrees(math.acos(max(-1.0, min(1.0, float(np.dot(d, nq))))))
-            notes.append("The dam point is {:,.0f} {u} from the embankment crest (its ground is "
-                         "more than {:.1f} {u} below the top of dam): the dam line goes through "
-                         "the crest found there, across the embankment ({:.0f} degrees from the "
-                         "direction to the run's inflow point). Check it in RAS Mapper.".format(
-                             float(np.hypot(*(Q - P))), tol_s, turn, u=units.len_name))
+            if turn > SNAP_TURN_MAX_DEG:
+                snap["why"] = ("the flooded side of it is not the side the flow goes to (its "
+                               "normal towards the flood is {:.0f} degrees from the flow "
+                               "direction at the dam)".format(turn))
+            else:
+                moved = float(np.hypot(*(Q - P)))
+                notes.append("The dam point is {:,.0f} {u} from the embankment crest: {}. "
+                             "The dam line goes through the crest found there (ground {:.1f} "
+                             "{u}), across the embankment ({:.0f} degrees from the direction "
+                             "to the run's inflow point). Check it in RAS Mapper.".format(
+                                 moved, _near_text(snap, top_s, tol_s, units.len_name),
+                                 snap["z_crest"], turn, u=units.len_name))
+                log(notes[-1])
+                P, d = Q, nq
+                res_near = search    # the pool is just behind the crest, not the lowest ground
+                if snapped is not None:
+                    snapped.update(moved=moved, u=units.len_name)
+        if snap is not None and snap["why"]:
+            t_ = _near_text(snap, top_s, tol_s, units.len_name)
+            ext = (" (or as much as {:.1f} {u} more below it, as the DEM's {:.0f} {u} cells "
+                   "can read the crest that much low)".format(
+                       snap["band_low"], snap["dem_cell"], u=units.len_name)
+                   if snap.get("band_low") else "")
+            notes.append("{}{}, so it looked off the embankment; the nearest ground within the "
+                         "tolerance of the top of dam{}, {:,.0f} {u} away, was considered as "
+                         "the crest to move the dam line to and rejected: {}. The dam line goes "
+                         "through the dam point, across the flow direction. Check the dam "
+                         "point, the top of dam and the dam line in RAS Mapper.".format(
+                             t_[:1].upper(), t_[1:], ext, snap["dist"], snap["why"],
+                             u=units.len_name))
             log(notes[-1])
-            P, d = Q, nq
-            res_near = search    # the pool is just behind the crest, not the lowest ground
     n_left = np.array([-d[1], d[0]])
     wet_poly = _poly_from_mask(wet, dx0, dy0, acell, srs)
     # the end of the inundation: the flooded cells farthest from the dam
@@ -2961,7 +3310,9 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
         if reach.sum() >= 4:
             rp = _poly_from_mask(reach, zx0, zy0, rc_cell, srs)
             if rp is not None:
-                rp = rp.Simplify(rc_cell)
+                # v3.26.4: a pool one cell wide simplifies to nothing; keep it unsimplified
+                rs = rp.Simplify(rc_cell)
+                rp = rs if rs is not None and not rs.IsEmpty() else rp
                 rings = _rings(rp)
                 if rings:
                     reservoir = rings[0][1]

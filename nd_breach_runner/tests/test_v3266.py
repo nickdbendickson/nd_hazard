@@ -117,10 +117,11 @@ def _embankment(top=130.0):
 @test
 def v3266_crest_snap_moves_an_off_crest_dam_point_onto_the_embankment():
     z, step = _embankment()
-    r = hm._crest_snap(z, 0.0, 1000.0, step, (120.0, 500.0), 130.0, 3.0, 300.0, 150.0)
-    assert r is not None
-    q, t = r
-    assert 180.0 <= q[0] <= 200.0 and abs(q[1] - 500.0) <= step, q
+    r = hm._crest_snap(z, 0.0, 1000.0, step, (120.0, 500.0), 130.0, 3.0, 300.0, 150.0, 100.0, 3.0)
+    assert r is not None and not r.get("on_crest")
+    q = r["point"]
+    t = r["axis"]
+    assert 190.0 <= q[0] <= 230.0 and abs(q[1] - 500.0) <= 2 * step, q
     assert abs(abs(t[1]) - 1.0) < 1e-6, t
 
 
@@ -129,16 +130,17 @@ def v3266_crest_snap_leaves_a_crest_point_hills_and_far_ground_alone():
     z, step = _embankment()
     # on the crest already
     assert hm._crest_snap(z, 0.0, 1000.0, step, (210.0, 500.0), 130.0, 3.0, 300.0,
-                          150.0) is None
+                          150.0, 100.0, 3.0) is None
     # the embankment is farther than the search distance
     assert hm._crest_snap(z, 0.0, 1000.0, step, (20.0, 500.0), 130.0, 3.0, 100.0,
-                          150.0) is None
+                          150.0, 100.0, 3.0) is None
     # a round hill has no long axis: not an embankment
     xs = (np.arange(200) + 0.5) * step
     gx, gy = np.meshgrid(xs, 1000.0 - xs)
     hill = 130.0 - np.hypot(gx - 500.0, gy - 500.0) / 3.0
-    assert hm._crest_snap(hill, 0.0, 1000.0, step, (500.0, 400.0), 130.0, 3.0, 300.0,
-                          150.0) is None
+    r = hm._crest_snap(hill, 0.0, 1000.0, step, (500.0, 400.0), 130.0, 3.0, 300.0,
+                        150.0, 100.0, 3.0)
+    assert r is None or r.get("why"), r
 
 
 @test
