@@ -50,13 +50,14 @@ def v3268_a_plain_grid_has_no_split_cells():
 
 
 @test
-def v3268_a_cut_culvert_runs_from_the_higher_bed_in_hecras_and_whole_in_the_models():
+def v3268_a_cut_culvert_without_a_channel_keeps_the_runs_line_and_is_whole_in_the_models():
     """Absaraka NBI 9117181: the gap line (120 m) went to HEC-RAS as a 394 ft barrel whose
     inlet sat on a field 10 ft above the channel, so no water went through it. The HEC-RAS
-    barrel now runs from the toe on one side of the road to the other (upstream on the higher
-    side without a flow path), with the ground there as inverts; LISFLOOD-FP, the built-in
-    engine and ANUGA still get the whole gap line with the inventory's inverts (none), as in
-    3.26.7."""
+    barrel now runs from the channel on one side of the road to the other, but only where
+    the channel was found on both sides: here the ground beside the road is only a step (no
+    channel, 'ground'), so the export keeps the run's line as before, with a WARNING.
+    LISFLOOD-FP, the built-in engine and ANUGA still get the whole gap line with the
+    inventory's inverts (none), as in 3.26.7."""
     from nd_breach_runner.core import gaps as gp
     from nd_breach_runner.core.grid import Grid
 
@@ -83,13 +84,11 @@ def v3268_a_cut_culvert_runs_from_the_higher_bed_in_hecras_and_whole_in_the_mode
     # the models: the whole gap line, no inverts (3.26.7)
     assert np.allclose(s.line, rows[0]["line"]) and s.invert_up_m is None is s.invert_dn_m
     assert abs(np.hypot(*(np.asarray(s.line)[-1] - np.asarray(s.line)[0])) - 120.0) < 1e-6
-    # HEC-RAS: north (higher bed) toe first, the beds as inverts
+    # HEC-RAS: no barrel (no channel was found), and why
     u = hm.Units(True)
     line, bar, notes = hm.crossing_barrel(s, b, lambda a: np.asarray(a, float).reshape(-1, 2),
                                           u, 10.0)
-    assert line[0][1] > 0 > line[-1][1]
-    assert 8.0 <= line[0][1] <= 12.0 and -12.0 <= line[-1][1] <= -8.0, line
-    assert abs(bar["inverts"][0] - 100.0) < 0.01 and abs(bar["inverts"][1] - 98.0) < 0.01
-    assert bar["from"] == [hm.GROUND_LABEL, hm.GROUND_LABEL]
-    assert "higher ground at the toe" in notes[0] and "no flow path" in notes[0]
-    assert sum(n.startswith("WARNING: no channel was found") for n in notes) == 2, notes
+    assert line is None and bar is None, (line, bar)
+    assert notes == ["no channel (a valley at least 1 ft deep in the toes of the embankment) "
+                     "was found beside the road on each side within {:,.0f} m of the "
+                     "inventory's point".format(max(b["search_m"]))], notes

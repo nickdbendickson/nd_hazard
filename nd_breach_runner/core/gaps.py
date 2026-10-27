@@ -38,9 +38,10 @@ output. So:
 3.26.8: each row also carries row["barrel"] (barrel_toes: where the channel leaves the road
 embankment on each side, beyond the outermost carriageway, searched along the road either
 side of the crossing point, and the channel bed there), which only the HEC-RAS export uses,
-to lay a culvert's barrel from the channel on one side to the other
-(hecras_model.crossing_barrel). The models cut the row's whole gap line, as before, and a
-failure in barrel_toes leaves only that row without a barrel.
+to lay a culvert's barrel from the channel on one side to the other where both sides found
+it (hecras_model.crossing_barrel; else the export keeps the run's line). The models cut the
+row's whole gap line, as before, and a failure in barrel_toes leaves only that row without
+a barrel.
 
 `crossings` are plain dicts, as the caller reads them from the dam's data layers
 (damdata roles "bridges" = NBI_bridges and "crossings" = FRA grade crossings) or from the
@@ -70,12 +71,16 @@ MIN_SPAN_FT = 1.0         # a smaller opening is not a crossing we can cut
 # further out. Toes are found every grid cell along the road, TOE_SEARCH_M either side of
 # the crossing line (more on a wide fill, up to TOE_SEARCH_MAX_M), and the channel is the
 # valley of them (at least CHANNEL_DEPTH_FT deep) nearest the line, a toe TOE_NEAR_SLOPE
-# per metre further from the road counting higher; without a valley, an end in a hollow
-# CHANNEL_DEPTH_FT below the ground RING_M around it is in a channel too. A toe whose ground
-# rises MERGE_RISE_M again within CLEAR_M up to a further road line is the median of a
-# divided highway (up to MAX_MERGES more carriageways). The barrel's end is the lowest
-# terrain cell from the toe to TOE_BED_M beyond it and either side, a cell END_NEAR_SLOPE
-# per metre further out counting higher.
+# per metre further from the road counting higher. Only such a valley is a channel: without
+# one (a field, a cross-slope along the road), or with a column next to it that has no
+# terrain, is still falling at the end of the walk or meets another road (a road line, or a
+# bend of this one, more than CARRIAGEWAY_ANGLE_DEG to this one, within CLEAR_M of the walk
+# from the carriageway to CLEAR_M beyond its toe: that toe can be on the other road's fill),
+# the side has no channel and the export keeps the run's line. A toe whose ground rises
+# MERGE_RISE_M again within CLEAR_M up to a further road line is the median of a divided
+# highway (up to MAX_MERGES more carriageways). The barrel's end is the lowest terrain cell
+# from the toe to TOE_BED_M beyond it and either side, a cell END_NEAR_SLOPE per metre further
+# out counting higher. The terrain is read SEARCH_PAD_M beyond the area searched.
 TOE_TOL_FT = 1.0
 TOE_BED_M = 5.0
 CARRIAGEWAY_ANGLE_DEG = 30.0
@@ -86,7 +91,7 @@ TOE_SEARCH_MAX_M = 100.0
 TOE_NEAR_SLOPE = 0.05
 END_NEAR_SLOPE = 0.01
 CHANNEL_DEPTH_FT = 1.0
-RING_M = (10.0, 30.0)
+SEARCH_PAD_M = 30.0
 MERGE_RISE_M = 1.0
 MAX_MERGES = 2
 BLOCK_NOTE = ("A crossing that the terrain closes: bare-earth LiDAR leaves the road "
@@ -261,11 +266,13 @@ def _crown_and_bed(grid, point, direction, corridor_m=CORRIDOR_M, reach_m=REACH_
     return crown, bed
 
 
-def _road_segments(roads, direction, max_angle_deg=CARRIAGEWAY_ANGLE_DEG, box=None):
+def _road_segments(roads, direction, max_angle_deg=CARRIAGEWAY_ANGLE_DEG, box=None,
+                   side=False):
     """3.26.8: (road index, segment starts, segment ends) of the road lines' segments that run
     with the crossing's road (within max_angle_deg of `direction`): the carriageways a barrel
     passes under. A road meeting the crossing line end-on is not one. With `box` (xmin, ymin,
-    xmax, ymax), only the segments that reach into it (the area searched)."""
+    xmax, ymax), only the segments that reach into it (the area searched). With `side`, the
+    other segments instead: the roads that meet or cross this one."""
     cos_min = math.cos(math.radians(max_angle_deg))
     ids, C, D = [], [], []
     for ri, road in enumerate(roads or []):
@@ -279,8 +286,9 @@ def _road_segments(roads, direction, max_angle_deg=CARRIAGEWAY_ANGLE_DEG, box=No
         v = pts[1:] - pts[:-1]
         nv = np.hypot(v[:, 0], v[:, 1])
         with np.errstate(invalid="ignore", divide="ignore"):
-            keep = (nv > 0.0) & (np.abs(v[:, 0] * direction[0] + v[:, 1] * direction[1]) /
-                                 np.where(nv > 0.0, nv, 1.0) >= cos_min)
+            along = np.abs(v[:, 0] * direction[0] + v[:, 1] * direction[1]) / \
+                np.where(nv > 0.0, nv, 1.0) >= cos_min
+            keep = (nv > 0.0) & (~along if side else along)
         keep &= np.isfinite(pts[:-1]).all(axis=1) & np.isfinite(pts[1:]).all(axis=1)
         if box is not None:
             with np.errstate(invalid="ignore"):
@@ -318,6 +326,32 @@ def _crossings(p0, p1, segs, only=None):
     hit = ok & (t >= -1e-9) & (t <= 1.0 + 1e-9) & (w >= -1e-9) & (w <= 1.0 + 1e-9)
     n = float(np.hypot(*r))
     return [(float(t[i]) * n, int(ids[i])) for i in np.nonzero(hit)[0]]
+
+
+def _seg_distance(p0, p1, C, D):
+    """3.26.8: the shortest distance from the segment p0-p1 to each segment C[i]-D[i]."""
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+
+    def to_seg(q, a, b):                               # points q to segments a-b
+        ab = b - a
+        L2 = (ab ** 2).sum(axis=-1)
+        t = np.clip(((q - a) * ab).sum(axis=-1) / np.where(L2 > 0.0, L2, 1.0), 0.0, 1.0)
+        w = a + ab * t[..., None] - q
+        return np.hypot(w[..., 0], w[..., 1])
+    m = len(C)
+    out = np.minimum.reduce([to_seg(np.broadcast_to(p0, (m, 2)), C, D),
+                             to_seg(np.broadcast_to(p1, (m, 2)), C, D),
+                             to_seg(C, np.broadcast_to(p0, (m, 2)), np.broadcast_to(p1, (m, 2))),
+                             to_seg(D, np.broadcast_to(p0, (m, 2)), np.broadcast_to(p1, (m, 2)))])
+    r, sv = p1 - p0, D - C
+    den = r[0] * sv[:, 1] - r[1] * sv[:, 0]
+    ok = np.abs(den) > 1e-12
+    q = C - p0[None, :]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t = (q[:, 0] * sv[:, 1] - q[:, 1] * sv[:, 0]) / np.where(ok, den, 1.0)
+        w = (q[:, 0] * r[1] - q[:, 1] * r[0]) / np.where(ok, den, 1.0)
+    out[ok & (t >= 0.0) & (t <= 1.0) & (w >= 0.0) & (w <= 1.0)] = 0.0
+    return out
 
 
 def _search_grid(have, read_dem, corners, cell):
@@ -387,16 +421,19 @@ def _pick_channel(status, toe, bed, d, v):
     from the gap line): the valley (toes at least CHANNEL_DEPTH_FT below the toes on both
     sides of it) nearest the gap line, and in it the lowest toe, a toe further from the road
     counting TOE_NEAR_SLOPE per metre higher (so that the toe is where the channel leaves the
-    embankment, not further down the channel); without a valley, the lowest toe. Equal toes:
-    the one nearest the gap line. Returns (column or None, valley found, 'nodata' / 'beyond'
-    / None: a column without terrain or still falling next to that valley, or anywhere
+    embankment, not further down the channel); without a valley, the lowest toe (not a
+    channel: barrel_toes calls that side 'ground'). Equal toes: the one nearest the gap line.
+    Returns (column or None, valley found, 'nodata' / 'road' / 'beyond' / None: a column
+    without terrain, on another road or still falling next to that valley, or anywhere
     without one)."""
     ok = status == "ok"
 
     def unknown(sl):
         st = status[sl]
-        return "nodata" if (st == "nodata").any() else ("beyond" if (st == "beyond").any()
-                                                        else None)
+        for word in ("nodata", "road", "beyond"):
+            if (st == word).any():
+                return word
+        return None
     if not ok.any():
         return None, False, unknown(slice(None)) or "nodata"
     cost = np.full(len(v), np.nan)
@@ -431,21 +468,6 @@ def _pick_channel(status, toe, bed, d, v):
         return (lowest(range(r[0], r[1] + 1)), True,
                 unknown(slice(max(0, r[0] - 2), r[1] + 3)))
     return lowest(np.nonzero(ok)[0]), False, unknown(slice(None))
-
-
-def _in_hollow(g, end, bed, outward, nrm):
-    """3.26.8: True when the ground around `end` beyond the embankment (RING_M from it, on the
-    side away from the road) stands at least CHANNEL_DEPTH_FT above `bed` (its median): the
-    end is in a channel, ditch or other hollow beside the road, not on a field."""
-    th = np.radians(np.arange(-90.0, 90.1, 15.0))
-    dirs = np.cos(th)[:, None] * outward[None, :] + np.sin(th)[:, None] * nrm[None, :]
-    rs = np.linspace(RING_M[0], RING_M[1], 5)
-    P = np.asarray(end, float)[None, None, :] + rs[:, None, None] * dirs[None, :, :]
-    z = g.sample_bilinear(P[..., 0].ravel(), P[..., 1].ravel())
-    z = z[np.isfinite(z)]
-    if len(z) < 0.5 * P[..., 0].size:
-        return False
-    return bool(bed <= float(np.median(z)) - CHANNEL_DEPTH_FT * FT)
 
 
 def _toe_low(g, toe, bed, outward, nrm):
@@ -495,16 +517,22 @@ def barrel_toes(grid, line, roads, direction, width_m=0.0, reach_m=REACH_M,
     channel skewed to the road or bent at it; the barrel then follows it. The terrain is
     the row's `grid`, or `read_dem` of the area searched where the grid does not cover it.
 
-    Each side is 'channel' (a valley, or a hollow in the ground around the toe: _in_hollow),
-    'ground' (no channel within the search: the lowest ground at the toe), 'nodata' (no
-    terrain before a toe was found, next to the valley or, without one, anywhere searched)
-    or 'beyond' (still falling at the end of the walk). Returns {"ends": [[x, y] or None,
-    ..] (the side of the gap line's first end, then of its second end), "beds_ft": [ft or
-    None, ..] (the lowest ground from the toe to TOE_BED_M beyond it), "status": [.., ..],
-    "clear": [status 'channel' or 'ground', ..], "offsets_m": [along the road from the gap
-    line, ..], "toes_m": [from the outermost carriageway, ..], "search_m": [half width, ..],
-    "roads": carriageways, "stations_m": [first side, second side] (the outermost carriageway
-    on each side, m from the line's middle), "walk_m"}; None for a line of no length."""
+    Each side is 'channel' (a valley of the toes: positive evidence of the channel there, the
+    only status the HEC-RAS export lays a barrel to), 'ground' (no valley within the search:
+    the end is the lowest ground at the toe, which can be a field at the edge of the search;
+    not a channel), 'nodata' (no terrain before a toe was found, next to the valley or,
+    without one, anywhere searched), 'road' (a column next to the valley, or without one
+    anywhere searched, meets another road: a road line, or a bend of this one, more than
+    CARRIAGEWAY_ANGLE_DEG to this one and on this side of the carriageway, within CLEAR_M of
+    the walk from the carriageway to CLEAR_M beyond the toe, so the toe can be on that
+    road's fill) or 'beyond' (still falling at the end of the walk). Returns {"ends": [[x,
+    y] or None, ..] (the side of the gap line's first end, then of its second end),
+    "beds_ft": [ft or None, ..] (the lowest ground from the toe to TOE_BED_M beyond it),
+    "status": [.., ..], "clear": [an end was found, ..], "offsets_m": [along the road from
+    the gap line, ..], "toes_m": [from the outermost carriageway, ..], "search_m": [half
+    width, ..], "roads": carriageways, "stations_m": [first side, second side] (the
+    outermost carriageway on each side, m from the line's middle), "walk_m"}; None for a
+    line of no length."""
     line = np.asarray(line, dtype=float)
     a, b = line[0], line[-1]
     total = float(np.hypot(*(b - a)))
@@ -518,11 +546,15 @@ def barrel_toes(grid, line, roads, direction, width_m=0.0, reach_m=REACH_M,
     bed_rows = int(math.ceil(TOE_BED_M / h - 1e-9))
     R = max(float(reach_m), TOE_WALK_M)
     d = h * np.arange(int(math.ceil(R / h - 1e-9)) + 1, dtype=float)
-    ring = RING_M[1] + h
+    ring = SEARCH_PAD_M + h
     # only the road segments that reach into the area searched (a road layer can be large)
     far = 0.5 * total + R + max(TOE_SEARCH_MAX_M, 0.5 * float(width_m or 0.0)) + 2.0 * ring
-    segs = _road_segments(roads, direction,
-                          box=(mid[0] - far, mid[1] - far, mid[0] + far, mid[1] + far))
+    box = (mid[0] - far, mid[1] - far, mid[0] + far, mid[1] + far)
+    segs = _road_segments(roads, direction, box=box)
+    # the roads that meet or cross this one (a junction, or a bend of this one: segments more
+    # than CARRIAGEWAY_ANGLE_DEG to it): a toe near one is not evidence of the channel (it can
+    # be on that road's fill)
+    sides = _road_segments(roads, direction, box=box, side=True)
     # the carriageways the gap line crosses (the crossing's own road at its middle)
     gap = {}
     for t, ri in _crossings(a, b, segs):
@@ -567,6 +599,25 @@ def barrel_toes(grid, line, roads, direction, width_m=0.0, reach_m=REACH_M,
                                   np.nan_to_num(P[..., 1], nan=1e30))
         status, toe, bed = _column_toes(Z, tol_m, clear, bed_rows)
         status[~np.isfinite(edge)] = "off"
+        # a road that meets or crosses this one (or a bend of this one) on this side within
+        # CLEAR_M of the walk from the carriageway to CLEAR_M beyond the toe: 'road', not a
+        # toe of this embankment (that road's fill can cover the channel there)
+        if len(sides[0]):
+            C, D = sides[1], sides[2]
+            pc, pd = (C - mid) @ u, (D - mid) @ u
+            beyond = np.maximum(side * (pc - edge0), side * (pd - edge0)) > 0.0
+            C, D, pc, pd = C[beyond], D[beyond], pc[beyond], pd[beyond]
+            # only the part beyond the carriageway (the line through edge0 along the road):
+            # a road meeting this one on the other side is not on this side's fill
+            fc = np.where(side * (pc - edge0) < 0.0, (edge0 - pc) / np.where(
+                pd != pc, pd - pc, 1.0), 0.0)
+            fd = np.where(side * (pd - edge0) < 0.0, (edge0 - pd) / np.where(
+                pc != pd, pc - pd, 1.0), 0.0)
+            C, D = C + fc[:, None] * (D - C), D + fd[:, None] * (C - D)
+            for j in np.nonzero(status == "ok")[0] if len(C) else []:
+                k = min(int(toe[j]) + clear, len(d) - 1)
+                if float(np.min(_seg_distance(P[0, j], P[k, j], C, D))) < CLEAR_M:
+                    status[j] = "road"
         return g, P, Z, edge, edge0, status, toe, bed
 
     # the search width each side: wide enough for a channel skewed up to about 60 degrees to
@@ -575,7 +626,7 @@ def barrel_toes(grid, line, roads, direction, width_m=0.0, reach_m=REACH_M,
     widths = []
     for side in (-1.0, 1.0):
         _, _, _, _, edge0, st0, toe0, _ = walk(side, gap, np.zeros(1), None)
-        far = abs(edge0) + float(d[toe0[0]]) if st0[0] == "ok" else None
+        far = abs(edge0) + float(d[toe0[0]]) if st0[0] in ("ok", "road") else None
         widths.append(min(TOE_SEARCH_MAX_M, max(
             TOE_SEARCH_M, TOE_SEARCH_MAX_M if far is None else 20.0 + 2.5 * far,
             0.5 * float(width_m or 0.0) + h)))
@@ -621,10 +672,9 @@ def barrel_toes(grid, line, roads, direction, width_m=0.0, reach_m=REACH_M,
             continue
         i = int(toe[pick])
         end, zb = _toe_low(g, P[i, pick], float(bed[pick]), side * u, nrm)
-        found = valley or _in_hollow(g, end, zb, side * u, nrm)
         out["ends"].append([round(float(end[0]), 3), round(float(end[1]), 3)])
         out["beds_ft"].append(round(zb / FT, 2))
-        out["status"].append("channel" if found else "ground")
+        out["status"].append("channel" if valley else "ground")
         out["clear"].append(True)
         out["offsets_m"].append(round(float((end - mid) @ nrm), 1))
         out["toes_m"].append(round(float(d[i]), 1))
