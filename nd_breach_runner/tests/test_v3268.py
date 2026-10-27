@@ -53,9 +53,10 @@ def v3268_a_plain_grid_has_no_split_cells():
 def v3268_a_cut_culvert_runs_from_the_higher_bed_in_hecras_and_whole_in_the_models():
     """Absaraka NBI 9117181: the gap line (120 m) went to HEC-RAS as a 394 ft barrel whose
     inlet sat on a field 10 ft above the channel, so no water went through it. The HEC-RAS
-    barrel now runs from the toe on the higher bed's side to the other toe, with the channel
-    beds there as inverts; LISFLOOD-FP, the built-in engine and ANUGA still get the whole gap
-    line with the inventory's inverts (none), as in 3.26.7."""
+    barrel now runs from the toe on one side of the road to the other (upstream on the higher
+    side without a flow path), with the ground there as inverts; LISFLOOD-FP, the built-in
+    engine and ANUGA still get the whole gap line with the inventory's inverts (none), as in
+    3.26.7."""
     from nd_breach_runner.core import gaps as gp
     from nd_breach_runner.core.grid import Grid
 
@@ -75,7 +76,8 @@ def v3268_a_cut_culvert_runs_from_the_higher_bed_in_hecras_and_whole_in_the_mode
                               "span_ft": 10.0, "rise_ft": 4.0, "barrels": 2}],
                             roads, read_dem, 3.0)
     b = rows[0]["barrel"]
-    assert b["clear"] == [True, True] and b["roads"] == 1
+    # no channel either side, only a step in the ground: 'ground', not 'channel'
+    assert b["status"] == ["ground", "ground"] and b["roads"] == 1, b
     structs, _ = gp.structures_from(rows, 3.0)
     s = structs[0]
     # the models: the whole gap line, no inverts (3.26.7)
@@ -88,4 +90,6 @@ def v3268_a_cut_culvert_runs_from_the_higher_bed_in_hecras_and_whole_in_the_mode
     assert line[0][1] > 0 > line[-1][1]
     assert 8.0 <= line[0][1] <= 12.0 and -12.0 <= line[-1][1] <= -8.0, line
     assert abs(bar["inverts"][0] - 100.0) < 0.01 and abs(bar["inverts"][1] - 98.0) < 0.01
-    assert bar["from"] == [hm.BED_LABEL, hm.BED_LABEL] and "higher channel bed" in notes[0]
+    assert bar["from"] == [hm.GROUND_LABEL, hm.GROUND_LABEL]
+    assert "higher ground at the toe" in notes[0] and "no flow path" in notes[0]
+    assert sum(n.startswith("WARNING: no channel was found") for n in notes) == 2, notes
