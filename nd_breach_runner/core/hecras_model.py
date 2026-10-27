@@ -62,6 +62,7 @@ import numpy as np
 
 from . import breach as brmod
 from . import conditioning as cond             # v3.12.0: polygon and polyline helpers
+from . import gaps as gapsmod                  # 3.26.8: the crossings' toe search
 from . import hecras
 from . import structures as structmod          # v3.12.0: the run's culverts and bridges
 from .units import ACFT, CFS, FT, US_FT, MILE
@@ -126,6 +127,28 @@ CULVERT_EXIT_LOSS = 1.0
 STRUCT_WEIR_COEF = 2.6         # road overflow, US units (HEC-RAS's default weir coefficient)
 STRUCT_RISE_FT = 10.0          # the connection line runs along the road until the ground is
 STRUCT_MAX_HALF_FT = 1000.0    # this far above the road at the structure, or this far each side
+# 3.26.8: a culvert the run cut as a gap from the crossings (gaps.barrel_toes) runs from where
+# the channel leaves the road embankment on one side to the other, at least BARREL_MIN_CELLS
+# 2D cells long (and longer where needed) so its two ends fall in different cells, each invert
+# at least BARREL_FIT_MARGIN_FT above the lowest ground of the cell at that end (as DamSafety
+# Runner 3.10.56 fit_to_cells: HEC-RAS refuses a culvert invert below its cell)
+BARREL_MIN_CELLS = 1.0
+BARREL_FIT_MARGIN_FT = 0.05
+BARREL_REACH_FT = 1.0          # the cell at a barrel end reaches within this of its invert:
+BARREL_REACH_GAIN_FT = 0.25    # the barrel is lengthened for that only when it gains this,
+BARREL_MAX_EXTRA_CELLS = 1.0   # and by at most this many cells in all (or this many terrain
+BARREL_MAX_EXTRA_PIXELS = 4.0  # cells, where they are the larger: the toe smeared across them)
+BARREL_SPLIT_EXTRA_CELLS = 2.0  # lengthening so that its two ends fall in two cells
+BARREL_MAX_SKEW_DEG = 60.0     # a channel crossing the road at a sharper angle is not laid
+BARREL_SNAP_M = 5.0            # each end onto the lowest terrain pixel this close to it, a
+BARREL_SNAP_SLOPE = 0.05       # pixel this much per unit further away counting higher
+CREST_PICK_FT = 1.0            # carriageway crests within this of the highest can take the line
+FLOW_PATH_NEAR_FT = 1000.0     # the run's flow path tells the direction this close to it,
+FLOW_PATH_MIN_DEG = 14.5       # crossing the road at this angle or more
+PERCH_FT = 0.5                 # an invert more than this above the channel bed found: WARNING
+BED_LABEL = "channel bed beside the road"
+PRE_3268 = ("the run recorded no toes of the road embankment for it (a run made before "
+            "3.26.8)")
 
 # computation intervals HEC-RAS offers (seconds), and their labels
 COMP_INTERVALS = ((0.1, "0.1SEC"), (0.2, "0.2SEC"), (0.25, "0.25SEC"), (0.3, "0.3SEC"),
@@ -491,8 +514,8 @@ def structure_block(c, now):
             num(culv["exit"], 3), culv["chart"], culv["scale"], num(culv["inv_up"], 2),
             num(culv["inv_dn"], 2), int(culv["barrels"]), CULVERT_GROUP.ljust(12)))
         st = []
-        for s in culv["stations"]:
-            st += [s, s]                         # upstream and downstream station of a barrel
+        for s_up, s_dn in barrel_stations(culv):
+            st += [s_up, s_dn]                   # upstream and downstream station of a barrel
         L += lines8(st)
         L.append("Conn Culv Bottom n={}".format(num(culv["n"], 4)))
     L.append("Conn Outlet Rating Curve= 0 ,False,,")
@@ -1262,7 +1285,7 @@ def structure_crest(line, ground, step, flat=0.0):
 
 
 def structure_connection(s, line, ground, perimeter, cell, step, units, name, avoid=(),
-                         neighbours=()):
+                         neighbours=(), barrel=None):
     """One Runner structure (structures.Structure) as a connection inside the 2D area.
 
     `line` is the structure's line in the model CRS (upstream end first), `ground(xy)` the
@@ -1282,7 +1305,16 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     * A culvert is one culvert group of the Runner's size, in project units: a box (shape 2,
       chart 8 scale 1) or a concrete pipe (shape 1, chart 1 scale 1), its line's length,
       Manning's n, the inverts the run used or else the terrain at the line's ends, and
-      barrels side by side about the crest station.
+      barrels side by side about the crest station. 3.26.8: with `barrel` (a culvert the run
+      cut as a gap from the crossings, see crossing_barrel), `line` runs from the channel at
+      the toe of the embankment on the upstream side to the downstream one (skewed to the road
+      where the channel is) and the inverts are barrel["inverts"] (labelled barrel["from"];
+      None = the terrain at that end). The connection line runs along the road
+      (perpendicular to barrel["across"], the run's crossing line) over the carriageway crest
+      _barrel_crest picks; HEC-RAS lays a barrel centred on the connection line, each end
+      half its length across it at the end's own centreline station (barrel_stations), so
+      the barrel is long enough to reach both toes from the crest, at least
+      BARREL_MIN_CELLS cells, and a skewed barrel's two stations differ.
     * A bridge or a notch is a gap in the weir as wide as its span (times barrels) down to the
       invert (the structure's, else the lowest ground near each end of its line, as the
       Runner's notch cut): an open cut, as LISFLOOD-FP had it - no deck, piers or pressure
@@ -1308,14 +1340,27 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     group = nb * span * (1.1 if culvert else 1.0)      # width of the barrels or of the opening
     # --- the embankment crest along the structure line -----------------------------
     tol = units.from_ft(0.1)
-    crest = structure_crest(line, ground, step, tol)
+    # 3.26.8: a crossing barrel's line is sampled every quarter terrain cell, so that the crest
+    # of each carriageway it passes under shows (a 10 m top on a 10 m terrain cell)
+    crest = structure_crest(line, ground, step / 4.0 if barrel else step, tol)
     if crest is None:
         return None, "no terrain under its line"
     C, k, along, zl, dense, notes = crest
     total = float(along[-1])
+    if barrel:
+        # 3.26.8: a crossing culvert's barrel runs from the channel on one side of the road to
+        # the other (skewed to the road where the channel is); its connection line runs along
+        # the road (across the run's crossing line), over a carriageway's crest
+        d = np.asarray(barrel.get("across") if barrel.get("across") is not None else
+                       line[-1] - line[0], dtype=float).reshape(2)
+        d = d / (float(np.hypot(*d)) or 1.0)
+        k, cnotes = _barrel_crest(dense, zl, k, d, tol, units)
+        C = dense[k]
+        notes = notes + cnotes
+    else:
+        t = dense[min(k + 1, len(dense) - 1)] - dense[max(k - 1, 0)]
+        d = t / (np.hypot(*t) or 1.0)
     zc = float(zl[k]) if np.isfinite(zl[k]) else float(np.nanmax(zl))
-    t = dense[min(k + 1, len(dense) - 1)] - dense[max(k - 1, 0)]
-    d = t / (np.hypot(*t) or 1.0)
     n_left = np.array([-d[1], d[0]])
     # --- connection line: along the road each way ------------------------------------
     rise = units.from_ft(STRUCT_RISE_FT)
@@ -1370,21 +1415,64 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     if culvert:
         out["weir"] = _profile(st, el, tol, MAX_WEIR_POINTS)
         zends = ground(line[[0, -1]])
-        inv = [units.length(v) if v is not None else float(z)
-               for v, z in zip((s.invert_up_m, s.invert_dn_m), zends)]
+        if barrel:
+            vals = list(barrel["inverts"])
+            froms = [f if v is not None else "terrain" for v, f in zip(vals, barrel["from"])]
+            inv = [float(v) if v is not None else float(z) for v, z in zip(vals, zends)]
+        else:
+            inv = [units.length(v) if v is not None else float(z)
+                   for v, z in zip((s.invert_up_m, s.invert_dn_m), zends)]
+            froms = ["run" if v is not None else "terrain"
+                     for v in (s.invert_up_m, s.invert_dn_m)]
         if not all(math.isfinite(v) for v in inv):
             return None, "no terrain at an end of its line and no invert given"
-        given = [v is not None for v in (s.invert_up_m, s.invert_dn_m)]
+        length = cond.polyline_length(line)
+        shift = 0.0
+        if barrel:
+            # 3.26.8: HEC-RAS lays each barrel centred on the connection line, each end half
+            # the barrel length across it at that end's centreline station: long enough from
+            # the crest to reach the channel on both sides, its stations apart along the road
+            # by as much as the channel crosses it at an angle
+            tl = (B - A) / (float(np.hypot(*(B - A))) or 1.0)
+            ax = line[-1] - line[0]
+            ax = ax / (float(np.hypot(*ax)) or 1.0)
+            cosk = float(ax @ d)
+            skew = math.degrees(math.acos(max(-1.0, min(1.0, cosk))))
+            if skew > BARREL_MAX_SKEW_DEG:
+                return None, ("the channel found either side of the road would make its barrel "
+                              "cross the road at {:.0f} degrees (more than {:g})".format(
+                                  skew, BARREL_MAX_SKEW_DEG))
+            shift = float(ax @ tl) / cosk
+            p_up = float((C - line[0]) @ d)
+            p_dn = float((line[-1] - C) @ d)
+            reach = 2.0 * max(p_up, p_dn, 0.0)
+            need = BARREL_MIN_CELLS * float(cell)
+            u_ = units.len_name
+            if reach > p_up + p_dn + max(step, units.from_ft(1.0)):
+                notes.append("HEC-RAS centres the barrel on the connection line, on the road "
+                             "crest {:,.0f} {u} from the channel upstream and {:,.0f} {u} from it "
+                             "downstream: the barrel is {:,.0f} {u} long so that it reaches "
+                             "both, and its {} end lies {:,.0f} {u} beyond the toe of the "
+                             "embankment".format(max(p_up, 0.0), max(p_dn, 0.0), reach,
+                                                 "upstream" if p_dn > p_up else "downstream",
+                                                 abs(p_dn - p_up), u=u_))
+            if need > reach + 1e-6:
+                notes.append("its barrel is {:,.0f} {u} long, {:g} x the 2D cell, so that its two "
+                             "ends can fall in different cells".format(need, BARREL_MIN_CELLS,
+                                                                        u=u_))
+            length = max(reach, need)
         shape, chart, scale, ke = CULVERT_TYPES["pipe" if pipe else "box"]
         rise_u = span if pipe else units.length(s.height_m)
         spacing = 1.1 * span
         stations = [round(sc + (i - 0.5 * (nb - 1)) * spacing, 2) for i in range(nb)]
         out["culvert"] = {"shape": shape, "chart": chart, "scale": scale, "entrance": ke,
                           "exit": CULVERT_EXIT_LOSS, "rise": rise_u, "span": span,
-                          "length": round(cond.polyline_length(line), 2),
+                          "length": round(length, 2),
                           "n": float(s.manning or 0.013), "inv_up": round(inv[0], 2),
                           "inv_dn": round(inv[1], 2), "barrels": nb, "stations": stations,
-                          "inverts_from": " / ".join("run" if g else "terrain" for g in given)}
+                          "inverts_from": " / ".join(froms)}
+        if barrel:
+            out["culvert"]["shift"] = round(shift, 5)
         road = el[np.abs(st - sc) <= 0.5 * group + step]
         if len(road) and float(road.min()) < max(inv) + rise_u - tol:
             notes.append("the road in the terrain at the culvert ({:.1f} {u}) is lower than the "
@@ -1422,6 +1510,837 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
         out["desc"] = "{} {} from the ND Dam Breach Runner (open gap)".format(
             kind.capitalize(), label)
     return out, None
+
+
+# ---- 3.26.8: culverts the run cut as gaps from the crossings (gaps.barrel_toes) ----------
+def crossing_barrels(report):
+    """3.26.8: [(gap line, barrel)] of the crossings a run cut as gaps (CROSSING_GAPS), from
+    run_report.json 'crossing_gaps' rows (gaps.barrel_toes), in the run's CRS; a row without
+    a barrel (a run before 3.26.8, or barrel_toes failed on it) as {"problem": why}, so that
+    the export can say why that culvert keeps the run's line. [] for a run whose crossings
+    were only reported."""
+    cg = report.get("crossing_gaps") or {}
+    out = []
+    if not isinstance(cg, dict) or not cg.get("cut"):
+        return out
+    for r in cg.get("rows") or []:
+        if not isinstance(r, dict) or not r.get("line"):
+            continue
+        b = r.get("barrel")
+        if not isinstance(b, dict):
+            b = {"problem": PRE_3268}
+        else:
+            # the inventory's own inverts (ft), by the end they belong to (upstream, downstream)
+            b = dict(b, given_ft=[r.get("invert_up_ft"), r.get("invert_dn_ft")])
+        try:
+            out.append((np.asarray(r["line"], dtype=float).reshape(-1, 2), b))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def barrel_of(s, barrels, tol=0.01):
+    """The crossing barrel of a culvert the run cut as a gap (gaps.structures_from keeps the
+    row's gap line as the structure's line), else None."""
+    if s.kind != structmod.KIND_CULVERT or not barrels:
+        return None
+    try:
+        line = np.asarray(s.line, dtype=float).reshape(-1, 2)
+    except (TypeError, ValueError):
+        return None
+    for ln, b in barrels:
+        if ln.shape == line.shape and np.allclose(ln, line, atol=tol, rtol=0.0):
+            return b
+    return None
+
+
+def flow_direction(path, at, across, units):
+    """3.26.8: which way the run's flow path (model CRS, downstream) runs across a road at
+    `at`: (True when it runs against `across`, False with it, or None, why not). The path
+    tells only where it passes within FLOW_PATH_NEAR_FT of `at` and its segment nearest `at`
+    crosses the road at FLOW_PATH_MIN_DEG (14.5 degrees) or more: at least that far from
+    the road's direction (perpendicular to `across`)."""
+    if path is None or len(path) < 2:
+        return None, "the run recorded no flow path"
+    P = np.asarray(path, dtype=float).reshape(-1, 2)
+    seg = np.diff(P, axis=0)
+    L2 = (seg ** 2).sum(axis=1)
+    if not (L2 > 0).any():
+        return None, "the run's flow path has no length"
+    m = np.asarray(at, dtype=float).reshape(2)
+    t = np.clip(((m - P[:-1]) * seg).sum(axis=1) / np.where(L2 > 0, L2, 1.0), 0.0, 1.0)
+    dist = np.where(L2 > 0, np.hypot(*(P[:-1] + seg * t[:, None] - m).T), np.inf)
+    j = int(np.argmin(dist))
+    if dist[j] > units.from_ft(FLOW_PATH_NEAR_FT):
+        return None, "the run's flow path passes {:,.0f} {} from it".format(
+            float(dist[j]), units.len_name)
+    v = seg[j]
+    c = float(v @ np.asarray(across, dtype=float)) / max(
+        float(np.hypot(*v)) * float(np.hypot(*across)), 1e-12)
+    # c is the cosine of the angle to the crossing line: the sine of the angle to the road
+    if math.degrees(math.asin(min(1.0, abs(c)))) < FLOW_PATH_MIN_DEG:
+        return None, "the run's flow path runs along the road there (less than {:g} degrees " \
+            "to it)".format(FLOW_PATH_MIN_DEG)
+    return c < 0, ""
+
+
+def oriented_line(line, path, units):
+    """3.26.8: a crossing culvert's line (the run's gap line, whose first end is arbitrary)
+    turned so that it starts upstream when the run's flow path tells (flow_direction).
+    Returns (line, how)."""
+    line = np.asarray(line, dtype=float).reshape(-1, 2)
+    if len(line) < 2:
+        return line, ""
+    d = line[-1] - line[0]
+    flip, why = flow_direction(path, 0.5 * (line[0] + line[-1]), d, units)
+    if flip is None:
+        return line, ("upstream is the end the run's line starts from, which is arbitrary ({}); "
+                      "check which way it runs".format(why))
+    return (line[::-1].copy() if flip else line), "upstream is the side the run's flow path " \
+                                                  "comes from"
+
+
+def _no_barrel_why(b, units):
+    """Why a crossing barrel has no channel to run to on a side (gaps.barrel_toes 'status')."""
+    st = list(b.get("status") or [])
+    walk = b.get("walk_m")
+
+    def sides(word):
+        return "each" if st.count(word) == 2 else "one"
+    if "nodata" in st:
+        return "the terrain has no data before the toe of the road embankment on {} side" \
+            .format(sides("nodata"))
+    if "road" in st:
+        return ("another road (or a bend of this one) meets or crosses it on {} side, within "
+                "{:g} m of where the toe of the embankment was looked for, so the toe found "
+                "there can be on that road's fill".format(sides("road"), gapsmod.CLEAR_M))
+    if "beyond" in st:
+        return ("beyond the road embankment the ground keeps falling more than {:g} ft in {:g} m "
+                "out to {} from the road on {} side (a steep channel or valley side), so the "
+                "toe of the embankment was not found".format(
+                    gapsmod.TOE_TOL_FT, gapsmod.CLEAR_M,
+                    "{:,.0f} m".format(float(walk)) if walk else "the end of the search",
+                    sides("beyond")))
+    if "ground" in st:
+        sm_ = [float(v) for v in (b.get("search_m") or []) if v is not None]
+        return ("no channel (a valley at least {:g} ft deep in the toes of the embankment) was "
+                "found beside the road on {} side within {} of the inventory's point".format(
+                    gapsmod.CHANNEL_DEPTH_FT, sides("ground"),
+                    "{:,.0f} m".format(max(sm_)) if sm_ else "the search"))
+    return "the toes of the road embankment were not found ({})".format(" / ".join(
+        map(str, st)) or "no status")
+
+
+def crossing_barrel(s, b, to_model, units, cell, path=None):
+    """3.26.8: the HEC-RAS barrel of a culvert the run cut as a gap from the crossings, from
+    where gaps.barrel_toes found the channel leaving the road embankment on each side.
+
+    Returns (line, barrel, notes): `line` from the upstream end to the downstream one in the
+    model CRS (skewed to the road where the channel is; structure_connection makes it long
+    enough); `barrel` for structure_connection ({'inverts': [up, dn] in project units,
+    'from': [label, label], 'beds': [up, dn] the channel bed found at each end, 'across':
+    the unit vector across the road from upstream to downstream (the run's crossing line),
+    'status': [up, dn]}); (None, None, [why]) unless the channel was found on both sides
+    (status 'channel': a valley of the toes; not 'ground', 'road', 'nodata' or 'beyond', nor
+    a run before 3.26.8): the export then keeps the run's line.
+
+    Upstream is the side the run's flow path comes from (`path`, model CRS, flow_direction)
+    when it tells; else the side with the higher channel bed (a WARNING with both beds); else
+    the end the run's crossing line starts from (arbitrary: a WARNING). A note says when the
+    beds disagree with the path. The inverts are the run's (after its LiDAR check) where the
+    inventory gave them (b['given_ft'], from the row), each at its own physical end (the
+    inventory's upstream invert at the upstream end; an adverse slope is noted), else the
+    channel bed at each end (BED_LABEL)."""
+    if not isinstance(b, dict):
+        return None, None, [PRE_3268]
+    if b.get("problem"):
+        return None, None, [str(b["problem"])]
+    ends = list(b.get("ends") or [])
+    status = list(b.get("status") or [])
+    if len(ends) != 2 or len(status) != 2:
+        return None, None, ["the run recorded the toes of the road embankment in an older "
+                            "form"]
+    if any(e is None for e in ends) or any(st != "channel" for st in status):
+        return None, None, [_no_barrel_why(b, units)]
+    u_ = units.len_name
+    e = np.asarray(to_model([tuple(map(float, q)) for q in ends]), dtype=float)
+    beds = [None if v is None else units.length(float(v) * FT)
+            for v in (list(b.get("beds_ft") or []) + [None, None])[:2]]
+    if None in beds:
+        return None, None, ["the run recorded no channel bed at the toe of the embankment"]
+    run = np.asarray(to_model(np.asarray(s.line, dtype=float).reshape(-1, 2)), dtype=float)
+    d = run[-1] - run[0]
+    across = d / max(float(np.hypot(*d)), 1e-12)
+    by_beds = None
+    if abs(beds[0] - beds[1]) >= units.from_ft(0.05):
+        by_beds = beds[1] > beds[0]
+    by_path, why = flow_direction(path, 0.5 * (e[0] + e[1]), across, units)
+    notes, warn = [], []
+    if by_path is not None:
+        flip = by_path
+        how = "upstream is the side the run's flow path comes from"
+    elif by_beds is not None:
+        flip = by_beds
+        how = "upstream is the side with the higher channel bed at the toe"
+        hi_, lo_ = max(beds), min(beds)
+        warn.append("WARNING: which way it runs is from the ground, not the run's flow path "
+                    "({}): upstream is the side whose channel bed at the toe is higher, {:.2f} "
+                    "{u} against {:.2f} {u} downstream; a ditch, pond or scour hole at the toe "
+                    "can make that the wrong way round; check it".format(why, hi_, lo_, u=u_))
+    else:
+        flip = False
+        how = "upstream is the end the run's crossing line starts from"
+        warn.append("WARNING: which way it runs is a guess: neither the run's flow path ({}) "
+                    "nor the channel beds either side of the road ({:.2f} and {:.2f} {u}) "
+                    "tell, so upstream is the end the run's crossing line starts from, which "
+                    "is arbitrary; check it".format(why, beds[0], beds[1], u=u_))
+    order = [1, 0] if flip else [0, 1]
+    if by_path is not None and by_beds is not None and by_beds != by_path:
+        notes.append("the ground at the toe is lower on its upstream side ({:.2f} {u}) than on "
+                     "its downstream side ({:.2f} {u}): a ditch, pond or scour hole at the toe, "
+                     "or a bend in the channel; the run's flow path decides which way it "
+                     "runs".format(beds[order[0]], beds[order[1]], u=u_))
+    # the inventory's upstream / downstream inverts as the run used them (after its LiDAR
+    # check), each at its own physical end; an end the inventory does not give (one the run's
+    # LiDAR check filled in at an end of its arbitrary line) takes the channel bed there
+    run_inv = (s.invert_up_m, s.invert_dn_m)
+    given = (list(b.get("given_ft")) + [None, None])[:2] if b.get("given_ft") is not None \
+        else [True, True]
+    inv, frm, gv = [], [], []
+    for k, i in enumerate(order):
+        if run_inv[k] is not None and given[k] is not None:
+            inv.append(units.length(run_inv[k]))
+            frm.append("run")
+            gv.append(units.from_ft(given[k]) if isinstance(given[k], (int, float)) and
+                      not isinstance(given[k], bool) else None)
+        else:
+            inv.append(beds[i])
+            frm.append(BED_LABEL)
+            gv.append(None)
+    line = e[order]
+    toe = float(np.hypot(*(line[1] - line[0])))
+    if toe <= 0:
+        return None, None, ["the ends found either side of the road are one point"]
+    dn = across * (-1.0 if flip else 1.0)
+    n_roads = int(b.get("roads") or 1)
+    offs = [b.get("offsets_m", [None, None])[i] for i in order]
+    where = ""
+    if any(o is not None and abs(float(o)) >= 3.0 for o in offs):
+        where = ", {} along the road from the inventory's point".format(" and ".join(
+            "{:.0f} m {}".format(abs(float(o)), side) for o, side in zip(offs, ("upstream",
+                                                                               "downstream"))
+            if o is not None))
+    notes.insert(0, "a culvert the run cut as a gap through the road: in HEC-RAS its barrel "
+                    "runs from where the channel leaves the road embankment{} on one side to "
+                    "the other ({:,.0f} {u} apart, found in the terrain beside the road{}), "
+                    "{}{}".format(
+                        "s (beyond the outer of {} carriageways)".format(n_roads)
+                        if n_roads > 1 else "", toe, where, how,
+                        "; its inverts with no value from the run are the {} at each end (the "
+                        "ground there, not an inventory elevation)".format(BED_LABEL)
+                        if BED_LABEL in frm else "", u=u_))
+    if inv[0] < inv[1] - units.from_ft(0.01):
+        notes.append("its upstream invert ({:.2f} {u}) is below its downstream one ({:.2f} {u}): "
+                     "the barrel rises downstream (an adverse slope){}".format(
+                         inv[0], inv[1], " - the inventory's inverts, kept at their own ends"
+                         if frm == ["run", "run"] else "", u=u_))
+    bar = {"inverts": inv, "from": frm, "beds": [beds[i] for i in order], "given": gv,
+           "across": [float(dn[0]), float(dn[1])], "status": [status[i] for i in order]}
+    return line, bar, notes + warn
+
+
+def _barrel_crest(dense, zl, k0, d, tol, units):
+    """3.26.8: where a crossing culvert's connection line crosses its barrel line (`dense`,
+    from the upstream end; `zl` the ground along it; `d` the direction across the road,
+    downstream): on the crest of a carriageway within CREST_PICK_FT of the highest ground
+    (structure_crest's point k0), anywhere on its flat top (within `tol`). HEC-RAS centres
+    the barrel on the connection line, so the point taken is the one that puts the upstream
+    end at the upstream toe rather than beyond it (the downstream carriageway of a divided
+    highway, the downstream edge of the top where the downstream toe is further out: the
+    extra length then lies downstream, below the downstream toe, where the channel is lower),
+    then the shortest barrel, when that gains at least 3 ft. Returns (index, notes)."""
+    ok = np.isfinite(zl)
+    if not ok.any():
+        return k0, []
+    zmax = float(np.nanmax(zl))
+    hi = ok & (zl >= zmax - units.from_ft(CREST_PICK_FT))
+    cands, i, n = [], 0, len(zl)
+    while i < n:
+        if not hi[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and hi[j + 1]:
+            j += 1
+        km = i + int(np.nanargmax(zl[i:j + 1]))
+        a = c = km
+        while a > i and zl[a - 1] >= zl[km] - tol:
+            a -= 1
+        while c < j and zl[c + 1] >= zl[km] - tol:
+            c += 1
+        cands += list(range(a, c + 1))              # anywhere on its flat top
+        if i <= k0 <= j and int(k0) not in cands:
+            cands.append(int(k0))
+        i = j + 1
+    if len(cands) < 2:
+        return k0, []
+
+    def key(kk):
+        p_up = float((dense[kk] - dense[0]) @ d)
+        p_dn = float((dense[-1] - dense[kk]) @ d)
+        return (max(0.0, p_dn - p_up), max(p_up, p_dn))
+    best = min(cands, key=key)
+    # only for a real gain (the upstream end at least 3 ft nearer its toe, or the barrel at
+    # least 3 ft shorter with it no further)
+    gain = units.from_ft(3.0)
+    kb, k0_ = key(best), key(k0)
+    if not (kb[0] < k0_[0] - gain or (kb[0] <= k0_[0] + 1e-9 and kb[1] < k0_[1] - gain)):
+        return k0, []
+    # the same carriageway: its top's edge on the downstream side; another: its crest
+    same = hi[min(best, k0):max(best, k0) + 1].all()
+    return best, [("its connection line is on the {} edge of the road's top ({:.2f} {u}, the "
+                   "crest {:.2f} {u})" if same else "its connection line is on the crest of the {} "
+                   "carriageway ({:.2f} {u}; the highest ground on its line is {:.2f} {u})")
+                  .format("downstream" if best > k0 else "upstream", float(zl[best]), zmax
+                          if not same else float(zl[k0]), u=units.len_name) +
+                  ": HEC-RAS centres the barrel on the connection line, and from there its "
+                  "upstream end reaches nearer the upstream toe"]
+
+
+def snap_barrel_ends(line, raster, units, radius=None):
+    """3.26.8: a crossing barrel's two ends (`line`, from gaps.barrel_toes in the run's DEM)
+    moved each onto the lowest pixel of the model's terrain (`raster`: array, x0, ytop, pixel)
+    whose centre is within `radius` of it (BARREL_SNAP_M, at least 0.75 pixel), a pixel
+    BARREL_SNAP_SLOPE per unit further away counting higher (an end on a steep channel does not
+    slide down it): where the terrain is coarse, the channel can be one row of pixels, and a 2D
+    cell whose pixels miss it does not reach the channel bed (HEC-RAS takes a cell's lowest
+    ground from the pixels in it). Returns (line, distance moved at each end, the pixel's
+    elevation at each end (None where it did not move))."""
+    line = np.asarray(line, dtype=float).reshape(-1, 2).copy()
+    if raster is None:
+        return line, [0.0, 0.0], [None, None]
+    a, x0, y0, pc = raster
+    a = np.asarray(a, dtype=float)
+    pc = float(pc)
+    r = max(units.length(BARREL_SNAP_M) if radius is None else float(radius), 0.75 * pc)
+    moved, zs = [], []
+    for i in (0, len(line) - 1):
+        e = line[i]
+        c0 = max(0, int(math.floor((e[0] - r - x0) / pc)))
+        c1 = min(a.shape[1], int(math.ceil((e[0] + r - x0) / pc)) + 1)
+        r0 = max(0, int(math.floor((y0 - e[1] - r) / pc)))
+        r1 = min(a.shape[0], int(math.ceil((y0 - e[1] + r) / pc)) + 1)
+        if c1 <= c0 or r1 <= r0:
+            moved.append(0.0)
+            zs.append(None)
+            continue
+        X, Y = np.meshgrid(x0 + (np.arange(c0, c1) + 0.5) * pc, y0 - (np.arange(r0, r1) + 0.5) * pc)
+        z = a[r0:r1, c0:c1]
+        dd = np.hypot(X - e[0], Y - e[1])
+        ok = np.isfinite(z) & (dd <= r)
+        if not ok.any():
+            moved.append(0.0)
+            zs.append(None)
+            continue
+        cost = np.where(ok, z + BARREL_SNAP_SLOPE * dd, np.inf)
+        k = np.unravel_index(int(np.argmin(cost)), cost.shape)
+        line[i] = (X[k], Y[k])
+        moved.append(float(dd[k]))
+        zs.append(float(z[k]))
+    return line, moved, zs
+
+
+def place_barrel(line, bar, raster, units):
+    """3.26.8 (build_model): a crossing barrel's ends onto the model's terrain
+    (snap_barrel_ends), and an invert that is the ground the run found there (not the run's
+    own) lowered to the pixel the end moved onto where that is lower: the run reads its terrain
+    at 3 m, which fills a narrow ditch or channel the model's terrain has. The channel bed
+    found at an end (bar['beds'], what perch_notes measures the inverts from) goes down to that
+    pixel too. Returns (line, bar, notes)."""
+    line, moved, zs = snap_barrel_ends(line, raster, units)
+    bar = dict(bar, inverts=list(bar["inverts"]))
+    if bar.get("beds") is not None:
+        bar["beds"] = [v if v is None or z is None else min(float(v), z)
+                       for v, z in zip(bar["beds"], zs)]
+    notes = []
+    for j, word in ((0, "upstream"), (1, "downstream")):
+        z = zs[j]
+        if z is None or bar["from"][j] == "run" or bar["inverts"][j] is None:
+            continue
+        if z < bar["inverts"][j] - units.from_ft(0.01):
+            notes.append("its {} invert is the lowest ground of the model's terrain at that end, "
+                         "{:.2f} {u} (the run read the terrain there in cells of up to 3 m: "
+                         "{:.2f} {u})".format(word, z, bar["inverts"][j], u=units.len_name))
+            bar["inverts"][j] = z
+    return line, bar, notes
+
+
+def barrel_stations(cv):
+    """3.26.8: the (upstream, downstream) centreline station of each barrel of a culvert
+    connection (structure_connection 'culvert'): its station on the connection line, less /
+    plus the skew `shift` times half the barrel length (a barrel at an angle to the road)."""
+    sh = float(cv.get("shift") or 0.0)
+    h = 0.5 * float(cv.get("length") or 0.0)
+    return [(round(float(sb) - sh * h, 2), round(float(sb) + sh * h, 2))
+            for sb in cv.get("stations", [])]
+
+
+def barrel_ends(c):
+    """3.26.8 (as DamSafety Runner 3.10.56): the (headwater end, tailwater end) of each
+    culvert barrel of connection `c`, as HEC-RAS lays a barrel with no centreline of its
+    own: half the barrel length across the connection line on each side, the headwater end
+    at its upstream centreline station and the tailwater end at its downstream one
+    (barrel_stations; the same station unless the barrel is skewed). The line is drawn left
+    to right looking downstream, so the headwater side is on its right."""
+    cv = c.get("culvert") or {}
+    A = np.asarray(c["line"][0], float)
+    B = np.asarray(c["line"][-1], float)
+    t = (B - A) / (float(np.hypot(*(B - A))) or 1.0)
+    down = np.array([-t[1], t[0]])                 # left of the line = downstream
+    h = 0.5 * float(cv.get("length") or 0.0)
+    sh = float(cv.get("shift") or 0.0)
+    out = []
+    for sb in cv.get("stations", []):
+        sb = float(sb)
+        out.append((tuple(A + t * (sb - sh * h) - down * h),
+                    tuple(A + t * (sb + sh * h) + down * h)))
+    return out
+
+
+def cell_min_ground(points, k, ground, perimeter, step, max_samples=200000, raster=None):
+    """3.26.8 (as DamSafety Runner's hecras_breaklines.cell_min_elevations): the lowest ground
+    of the 2D cell of computation point k (its Voronoi cell inside the perimeter), as the
+    higher of two readings, so that HEC-RAS takes an invert raised to it whichever it uses:
+    `ground(xy)` (bilinear) sampled every min(step / 8, a 40th of the distance to the
+    nearest point), and the terrain pixels whose centres lie in the cell - from `raster`
+    (array, x0, ytop, pixel), else the bilinear samples at least 1.5 pixels (`step`) inside
+    the cell, which a pixel outside it does not reach (an upper bound of the pixel minimum).
+    On Absaraka the DamSafety Runner found the bilinear reading at or above the cell minimum
+    HEC-RAS 6.6 reports; at a sharp step on a cell edge the pixel reading is higher."""
+    P = np.asarray(points, float).reshape(-1, 2)
+    p = P[int(k)]
+    dd = np.hypot(P[:, 0] - p[0], P[:, 1] - p[1])
+    nn = np.sort(dd)[1:9]
+    if not len(nn) or nn[0] <= 0:
+        z = ground(p[None, :])
+        return float(z[0]) if np.isfinite(z[0]) else float("nan")
+    R = float(nn.max())
+    idx = np.nonzero(dd <= 2.0 * R + 1e-9)[0]        # every point that can own a sample
+    me = int(np.nonzero(idx == int(k))[0][0])
+    Q = P[idx]
+    per = None if perimeter is None else np.asarray(perimeter, float)
+
+    def owned(xy, inset=0.0):
+        """the points of xy in the cell (and the perimeter), `inset` inside its edges"""
+        own = np.zeros(len(xy), bool)
+        others = np.delete(Q, me, axis=0)
+        gap = np.maximum(np.hypot(*(others - p).T), 1e-12)
+        for i in range(0, len(xy), 20000):
+            q = xy[i:i + 20000]
+            d2 = ((q[:, None, :] - Q[None, :, :]) ** 2).sum(-1)
+            o = np.argmin(d2, axis=1) == me
+            if inset > 0 and len(others):
+                # distance to the edge with each neighbour: (|q-pj|^2 - |q-pk|^2) / 2|pj-pk|
+                dj = ((q[:, None, :] - others[None, :, :]) ** 2).sum(-1)
+                dk = ((q - p) ** 2).sum(-1)
+                o &= ((dj - dk[:, None]) / (2.0 * gap[None, :])).min(axis=1) >= inset
+            own[i:i + 20000] = o
+        if per is not None:
+            own &= cond.points_in_polygon(xy[:, 0], xy[:, 1], per)
+            if inset > 0 and own.any():
+                ring = list(map(tuple, per)) + [tuple(per[0])]
+                w = np.nonzero(own)[0]
+                own[w] = point_segment_distance(xy[w, 0], xy[w, 1], ring) >= inset
+        return own
+
+    h = max(min(float(step) / 8.0, float(nn[0]) / 40.0), 2.0 * R / math.sqrt(max_samples),
+            1e-6)
+    g = np.arange(-R, R + 0.5 * h, h)
+    X, Y = np.meshgrid(p[0] + g, p[1] + g)
+    xy = np.column_stack([X.ravel(), Y.ravel()])
+    own = owned(xy)
+    z = ground(np.vstack([xy[own], p[None, :]]))
+    bil = float(np.nanmin(z)) if np.isfinite(z).any() else float("nan")
+    pix = float("nan")
+    if raster is not None:
+        a, x0, y0, pc = raster
+        a = np.asarray(a, float)
+        c0 = max(0, int(math.floor((p[0] - R - x0) / pc)))
+        c1 = min(a.shape[1], int(math.ceil((p[0] + R - x0) / pc)) + 1)
+        r0 = max(0, int(math.floor((y0 - p[1] - R) / pc)))
+        r1 = min(a.shape[0], int(math.ceil((y0 - p[1] + R) / pc)) + 1)
+        if c1 > c0 and r1 > r0:
+            PX, PY = np.meshgrid(x0 + (np.arange(c0, c1) + 0.5) * pc,
+                                 y0 - (np.arange(r0, r1) + 0.5) * pc)
+            cen = np.column_stack([PX.ravel(), PY.ravel()])
+            zp = a[r0:r1, c0:c1].ravel()[owned(cen)]
+            if np.isfinite(zp).any():
+                pix = float(np.nanmin(zp))
+    else:
+        inner = owned(xy, 1.5 * float(step))
+        if inner.any():
+            zi = ground(xy[inner])
+            if np.isfinite(zi).any():
+                pix = float(np.nanmin(zi))
+    vals = [v for v in (bil, pix) if math.isfinite(v)]
+    return max(vals) if vals else float("nan")
+
+
+def fit_barrel(c, points, ground, perimeter, cell, step, units, raster=None, lengthen=True):
+    """3.26.8: a crossing culvert's barrels (barrel_ends) with their two ends in two
+    different 2D cells inside the 2D area, and each invert at least BARREL_FIT_MARGIN_FT
+    above the lowest ground of the cell at its end (cell_min_ground, with the terrain's
+    `raster` when given), as DamSafety Runner 3.10.56 cells_check / fit_to_cells: HEC-RAS
+    refuses a barrel with both ends in one cell or an invert below its cell. In place, with
+    a note for each change:
+
+    * lengthened half a cell at a time (at most BARREL_SPLIT_EXTRA_CELLS cells, never out of
+      the 2D area) until both ends of every barrel fall in different cells;
+    * then lengthened further only where that brings the cells at its ends down towards the
+      inverts laid there (the HEC-RAS terrain can still be the embankment's slope at the
+      toe) by at least BARREL_REACH_GAIN_FT, to the shortest length that does, at most
+      BARREL_MAX_EXTRA_CELLS cells (or BARREL_MAX_EXTRA_PIXELS terrain cells, `step`) more;
+    * then each invert still below its cell + BARREL_FIT_MARGIN_FT is raised to that.
+
+    At each length the two ends of a crossing barrel (one with a skew 'shift' from
+    structure_connection) slide along the connection line, each up to BARREL_SNAP_M (at least
+    0.75 terrain pixel), onto the 2D cell that reaches lowest: on coarse terrain the channel
+    can be one row of pixels that a cell beside it misses; its layout note (barrel_layout_note)
+    is the last note, with the final stations. With `lengthen` False (a culvert that keeps the
+    run's line: export_crossing) it is not lengthened to reach the inverts and a raised invert
+    is a WARNING. cv['raised'] keeps each invert's value before a raise (None: not raised).
+    Returns (notes, None), or (None, why it cannot be exported)."""
+    cv = c["culvert"]
+    P = np.asarray(points, float).reshape(-1, 2)
+    per = np.asarray(perimeter, float)
+    notes = []
+    u_ = units.len_name
+    was = float(cv["length"])
+    want = [float(cv["inv_up"]), float(cv["inv_dn"])]
+    reach = units.from_ft(BARREL_REACH_FT)
+    cache = {}
+
+    def cmin(k):
+        if k not in cache:
+            cache[k] = cell_min_ground(P, k, ground, per, step, raster=raster)
+        return cache[k]
+
+    def nearest(q):
+        return int(np.argmin((P[:, 0] - q[0]) ** 2 + (P[:, 1] - q[1]) ** 2))
+    # a crossing barrel (structure_connection gave it a skew 'shift'): each end slides along
+    # the connection line, up to BARREL_SNAP_M (at least 0.75 terrain pixel), onto the 2D cell
+    # that reaches lowest, its upstream and downstream stations apart as needed
+    base_st = [float(v) for v in cv.get("stations", [])]
+    has_shift = "shift" in cv
+    base_sh = float(cv.get("shift") or 0.0)
+    A = np.asarray(c["line"][0], float)
+    B = np.asarray(c["line"][-1], float)
+    tl = (B - A) / (float(np.hypot(*(B - A))) or 1.0)
+    pc = float(raster[3]) if raster is not None else float(step)
+    r_sl = max(units.length(BARREL_SNAP_M), 0.75 * pc)
+    n_sl = int(math.ceil(r_sl / max(min(0.25 * float(cell), 0.5 * pc), 1e-6)))
+    offs = np.linspace(-r_sl, r_sl, 2 * n_sl + 1)
+    offs = offs[np.argsort(np.abs(offs), kind="stable")]       # the nearest first
+    slid = {"by": (0.0, 0.0)}
+
+    def slide(ends, j):
+        best = None
+        for o in offs:
+            qs = np.array([np.asarray(pair[j], float) + tl * o for pair in ends])
+            if not cond.points_in_polygon(qs[:, 0], qs[:, 1], per).all():
+                continue
+            v = max(cmin(nearest(q)) for q in qs)
+            if math.isfinite(v) and (best is None or v < best[0] - 1e-9):
+                best = (v, float(o))
+        return 0.0 if best is None else best[1]
+
+    def state(k):
+        cv["length"] = round(was + k * 0.5 * float(cell), 2)
+        if has_shift and base_st:
+            cv["stations"], cv["shift"] = list(base_st), base_sh
+            h = 0.5 * float(cv["length"])
+            ends = barrel_ends(c)
+            du, dd = slide(ends, 0), slide(ends, 1)
+            if h > 0 and (du or dd):
+                cv["stations"] = [round(v + 0.5 * (du + dd), 3) for v in base_st]
+                cv["shift"] = round(base_sh + (dd - du) / (2.0 * h), 6)
+            slid["by"] = (du, dd)
+        ends = barrel_ends(c)
+        ks = [tuple(nearest(q) for q in pair) for pair in ends]
+        e = np.array([q for pair in ends for q in pair], float)
+        return ks, bool(cond.points_in_polygon(e[:, 0], e[:, 1], per).all())
+
+    def ends_min(ks):
+        return [max(cmin(pair[j]) for pair in ks) for j in (0, 1)]
+
+    def excess(ks):
+        # how far the cells at the ends stay above the inverts laid there (+ BARREL_REACH_FT)
+        return sum(max(0.0, m - w - reach) for m, w in zip(ends_min(ks), want)
+                   if math.isfinite(m))
+    ks, inside = state(0)
+    if not inside:
+        cv["length"] = round(was, 2)
+        return None, ("its barrel ({:,.0f} {} long, from the channel on one side of the road to "
+                      "the other) would end outside the 2D area".format(was, u_))
+    # 1. the two ends of every barrel in two cells
+    k0 = None
+    for k in range(int(round(2 * BARREL_SPLIT_EXTRA_CELLS)) + 1):
+        ks, inside = state(k)
+        if not inside:
+            break
+        if all(a != b for a, b in ks):
+            k0 = k
+            break
+    if k0 is None:
+        cv["length"] = round(was, 2)
+        return None, "both ends of its barrel stay in one 2D cell"
+    # 2. the cells at the ends down towards the inverts, where that gains something
+    ks0, _ = state(k0)
+    e0 = excess(ks0)
+    tried = [(k0, e0, ks0)]
+    if e0 > 0.0 and lengthen:
+        steps = int(math.floor(2.0 * max(BARREL_MAX_EXTRA_CELLS * float(cell),
+                                         BARREL_MAX_EXTRA_PIXELS * float(step)) / float(cell)
+                               + 1e-9))
+        for k in range(k0 + 1, k0 + max(steps, 1) + 1):
+            ks, inside = state(k)
+            if not inside or any(a == b for a, b in ks):
+                break
+            tried.append((k, excess(ks), ks))
+    e_min = min(t[1] for t in tried)
+    k, ks = k0, ks0
+    if e0 - e_min >= units.from_ft(BARREL_REACH_GAIN_FT):
+        k, _, ks = next(t for t in tried if t[1] <= e_min + units.from_ft(0.05))
+    state(k)
+    if k:
+        parts = []
+        if k0:
+            parts.append("its two ends fall in different 2D cells (HEC-RAS refuses a barrel "
+                         "with both ends in one cell)")
+        if k > k0:
+            before, after = ends_min(ks0), ends_min(ks)
+            ch = ["{} end {:.2f} to {:.2f} {u}".format(w, b_, a_, u=u_)
+                  for w, a_, b_ in zip(("upstream", "downstream"), after, before)
+                  if b_ > a_ + 1e-6]
+            parts.append("the 2D cells at its ends reach nearer the inverts laid there (their "
+                         "lowest ground: {}; the HEC-RAS terrain at the toe is still the slope "
+                         "of the embankment)".format("; ".join(ch) or "unchanged"))
+        notes.append("its barrel was lengthened from {:,.0f} to {:,.0f} {u} so that {}".format(
+            was, cv["length"], " and ".join(parts), u=u_))
+    moved = [(w, o) for w, o in zip(("upstream", "downstream"), slid["by"]) if abs(o) > 0.005]
+    if moved:
+        notes.append("{} along the road onto the 2D cell near it that reaches lowest (the "
+                     "barrel's upstream and downstream centreline stations are now {})".format(
+                         " and ".join("its {} end was moved {:,.1f} {u}".format(w, abs(o), u=u_)
+                                      for w, o in moved),
+                         ", ".join("{:,.1f} / {:,.1f}".format(a_, b_)
+                                   for a_, b_ in barrel_stations(cv))))
+    m = units.from_ft(BARREL_FIT_MARGIN_FT)
+    mins = ends_min(ks)
+    cv["raised"] = [None, None]
+    for key, j, word in (("inv_up", 0, "upstream"), ("inv_dn", 1, "downstream")):
+        need = mins[j]
+        if math.isfinite(need) and cv[key] < need + m - 1e-9:
+            new = round(math.ceil((need + m) * 100.0) / 100.0, 2)
+            notes.append("{}its {} invert was raised from {:.2f} to {:.2f} {u}, {:g} ft above "
+                         "the lowest ground of the 2D cell at that end of the barrel ({:.2f} "
+                         "{u}): HEC-RAS refuses a culvert invert below its cell{}".format(
+                             "" if lengthen else "WARNING: ", word, cv[key], new,
+                             BARREL_FIT_MARGIN_FT, need,
+                             "; the cells there ({:,.0f} {u}) do not reach the ground the "
+                             "invert was found on".format(float(cell), u=u_)
+                             if new - cv[key] > units.from_ft(0.5) else "", u=u_))
+            cv["raised"][j] = cv[key]
+            cv[key] = new
+    cv["cell_min"] = [round(v, 3) for v in mins]
+    if has_shift:
+        lay = barrel_layout_note(cv, units)
+        if lay:
+            notes.append(lay)
+    return notes, None
+
+
+def barrel_layout_note(cv, units):
+    """3.26.8: the note on a skewed crossing barrel (cv: structure_connection 'culvert', after
+    fit_barrel): its skew to the road, its final upstream and downstream centreline stations
+    and its length along the channel; '' for a barrel square to the road (under 2 degrees)."""
+    sh = float(cv.get("shift") or 0.0)
+    skew = math.degrees(math.atan(abs(sh)))
+    if skew < 2.0:
+        return ""
+    L = float(cv.get("length") or 0.0)
+    u_ = units.len_name
+    return ("the channel crosses the road at an angle: its barrel is skewed {:.0f} degrees to "
+            "the road, its upstream and downstream centreline stations {} ({:,.1f} {u} apart "
+            "along the connection line; HEC-RAS lays each end half the barrel length across "
+            "the line at its own station; check the barrel in RAS Mapper). Its length, {:,.0f} "
+            "{u}, is measured across the road; the barrel along the channel is {:,.0f} {u} "
+            "long".format(skew, ", ".join("{:,.1f} / {:,.1f}".format(a, b)
+                                         for a, b in barrel_stations(cv)),
+                          abs(sh) * L, L, L * math.hypot(1.0, sh), u=u_))
+
+
+def _ft(v, units):
+    """A length in project units, in feet."""
+    return float(v) * units.L / FT
+
+
+def _old_line_note(why, line, how, cv, units):
+    """3.26.8: the WARNING for a culvert cut from the crossings that keeps the run's line (cv:
+    its structure_connection 'culvert', before fit_barrel)."""
+    u_ = units.len_name
+    return ("WARNING: a culvert the run cut as a gap through the road: its barrel could not be "
+            "laid from the channel on one side of the embankment to the other ({}), so it is "
+            "exported as before 3.26.8: the run's {:,.0f} {u} crossing line, {}; its inverts are "
+            "{:.2f} / {:.2f} {u} ({}; 'terrain' is the ground at that end of the line, which can "
+            "be a field or the embankment's slope, not the channel bed)".format(
+                why, cond.polyline_length(np.asarray(line, dtype=float).reshape(-1, 2)), how,
+                float(cv["inv_up"]), float(cv["inv_dn"]), cv["inverts_from"], u=u_))
+
+
+def perch_notes(cv, beds, units, cell, given=None):
+    """3.26.8: a WARNING for each invert of a culvert the run cut as a gap from the crossings
+    (cv: its structure_connection 'culvert' after fit_barrel) that is more than PERCH_FT above
+    the channel bed found beside the road at that end (`beds`: [upstream, downstream] in
+    project units, None where no channel was found), with the numbers and why it is there:
+    raised to the lowest ground of its 2D cell (cv['raised']), the inventory's invert as the
+    run used it (`given`: the inventory's own, where known), or the ground at the end of the
+    run's line. HEC-RAS holds the water back to that invert."""
+    out = []
+    if not beds:
+        return out
+    froms = str(cv.get("inverts_from") or "").split(" / ")
+    raised = list(cv.get("raised") or [None, None]) + [None, None]
+    cmin = list(cv.get("cell_min") or [None, None]) + [None, None]
+    given = list(given or []) + [None, None]
+    u_ = units.len_name
+    for j, (key, word) in enumerate((("inv_up", "upstream"), ("inv_dn", "downstream"))):
+        bed = beds[j] if j < len(beds) else None
+        if bed is None or not math.isfinite(float(bed)):
+            continue
+        inv = float(cv[key])
+        if inv <= float(bed) + units.from_ft(PERCH_FT):
+            continue
+        frm = froms[j] if j < len(froms) else ""
+        low = "{:.2f} {}".format(float(cmin[j]), u_) if cmin[j] is not None else "not known"
+        if raised[j] is not None and float(raised[j]) <= float(bed) + units.from_ft(PERCH_FT):
+            why = ("it was raised from {:.2f} {u} to clear the lowest ground of the 2D cell at "
+                   "that end ({}): the {:,.0f} {u} cells there do not reach the channel bed"
+                   .format(float(raised[j]), low, float(cell), u=u_))
+        elif frm == "run":
+            why = ("it is the inventory's invert as the run used it{} (the run's LiDAR check can "
+                   "move an inventory invert onto the ground at the ends of its crossing line, "
+                   "and the inventory's datum can differ from the terrain's)".format(
+                       "" if given[j] is None or abs(float(given[j]) - inv) < units.from_ft(0.01)
+                       else " (the inventory gives {:.2f} {u})".format(float(given[j]), u=u_)))
+        elif frm == "terrain":
+            why = "it is the ground at that end of the run's crossing line, not the channel"
+        else:
+            why = "it is the {}".format(frm or "invert laid there")
+        if raised[j] is not None and float(raised[j]) > float(bed) + units.from_ft(PERCH_FT):
+            why += ", then raised from {:.2f} {} to clear the lowest ground of its 2D cell " \
+                "({})".format(float(raised[j]), u_, low)
+        out.append("WARNING: its {} invert, {:.2f} {u}, is {:.2f} ft above the channel bed found "
+                   "beside the road at that end ({:.2f} {u}): {}; HEC-RAS holds the water back "
+                   "to that invert; check it".format(word, inv, _ft(inv - float(bed), units),
+                                                     float(bed), why, u=u_))
+    return out
+
+
+def crossing_plan(s, b, line_u, to_model, units, cell, path):
+    """3.26.8 (build_model): how a culvert the run cut as a gap from the crossings goes to
+    HEC-RAS (`b` its gaps.barrel_toes row, crossing_barrels; `line_u` the run's line in the
+    model CRS; `path` the run's flow path in the model CRS): {"line", "bar", "notes": its
+    barrel from crossing_barrel, or None (and "why" not); "run": the run's line, turned to
+    start upstream where the flow path tells (oriented_line), "how": which way it runs, and
+    "run_beds": the channel bed barrel_toes found on the side of each of its ends (project
+    units; None where it found none) - what export_crossing falls back to}."""
+    try:
+        bl, bar, bnotes = crossing_barrel(s, b, to_model, units, cell, path)
+    except Exception as e:                               # noqa - it keeps the run's line
+        bl, bar, bnotes = None, None, ["{}: {}".format(type(e).__name__, e)]
+    run, how = oriented_line(line_u, path, units)
+    beds = [None, None]
+    if isinstance(b, dict) and not b.get("problem"):
+        st, bf = list(b.get("status") or []), list(b.get("beds_ft") or [])
+        if len(st) == 2 and len(bf) == 2:
+            beds = [units.length(float(v) * FT) if v is not None and x == "channel" else None
+                    for v, x in zip(bf, st)]
+    if len(run) >= 2 and len(line_u) >= 2 and not np.allclose(run[0], line_u[0]):
+        beds = beds[::-1]                                # turned: its first end is the other
+    return {"line": bl, "bar": bar if bl is not None else None,
+            "notes": list(bnotes) if bl is not None else [],
+            "why": "" if bl is not None else (bnotes[0] if bnotes else "no reason recorded"),
+            "run": run, "how": how, "run_beds": beds}
+
+
+def export_crossing(s, plan, connect, points, ground, perimeter, cell, step, units,
+                    raster=None):
+    """3.26.8 (build_model): the HEC-RAS connection of a culvert the run cut as a gap from the
+    crossings (`plan`: crossing_plan). `connect(line, barrel)` is structure_connection for it
+    (build_model's, with the other structures). Returns (connection, None, line) or (None, why
+    it is left out, line).
+
+    * With a barrel (the channel found on both sides): its ends onto the lowest pixel of the
+      model's terrain near them (place_barrel), the connection, fit_barrel; then a WARNING if
+      the export before 3.26.8 (the run's line) left this culvert out, and perch_notes.
+    * Otherwise, or where that cannot be exported: exactly the export before 3.26.8 - the
+      run's line (turned to start upstream where the run's flow path tells), its inverts the
+      run's or the terrain at the line's ends, left out where that was - with a WARNING that
+      says why; then fit_barrel without lengthening to reach the inverts (HEC-RAS refuses a
+      barrel with both ends in one cell or an invert below its cell: it is left out, with a
+      WARNING, where that cannot be met; a raised invert is a WARNING) and perch_notes against
+      the channel bed barrel_toes found on each side."""
+    run = plan["run"]
+    try:
+        c_old, why_old = connect(run, None)
+    except Exception as e:                               # noqa - the barrel may still do
+        if plan.get("bar") is None:
+            raise
+        c_old, why_old = None, "{}: {}".format(type(e).__name__, e)
+    why_bar = plan.get("why") or ""
+    if plan.get("bar") is not None:
+        line, fnotes, pnotes = plan["line"], [], []
+        try:
+            line, bar, pnotes = place_barrel(plan["line"], plan["bar"], raster, units)
+            c, why_bar = connect(line, bar)
+            if not why_bar:
+                fnotes, why_bar = fit_barrel(c, points, ground, perimeter, cell, step, units,
+                                             raster=raster)
+        except Exception as e:                           # noqa - the run's line instead
+            c, why_bar = None, "{}: {}".format(type(e).__name__, e)
+        if not why_bar:
+            notes = list(plan["notes"]) + pnotes + c["notes"] + fnotes
+            if why_old:
+                notes.append("WARNING: the HEC-RAS export before 3.26.8 left this culvert out "
+                             "({}, with the run's {:,.0f} {} crossing line); it is in now "
+                             "because the channel was found on both sides of the road and its "
+                             "barrel from one to the other lies in the model's terrain inside "
+                             "the 2D area; check it".format(
+                                 why_old, cond.polyline_length(run), units.len_name))
+            notes += perch_notes(c["culvert"], bar.get("beds"), units, cell, bar.get("given"))
+            c["notes"] = notes
+            return c, None, line
+    if why_old:
+        return None, ("{} (its barrel from the channel on one side of the road to the other "
+                      "could not be laid either: {})".format(why_old, why_bar)), run
+    cv = c_old["culvert"]
+    if cv is None:                                       # not a culvert: as before 3.26.8
+        return c_old, None, run
+    warn = _old_line_note(why_bar, run, plan["how"], cv, units)
+    try:
+        fnotes, why = fit_barrel(c_old, points, ground, perimeter, cell, step, units,
+                                 raster=raster, lengthen=False)
+    except Exception as e:                               # noqa - left out, with why
+        fnotes, why = None, "{}: {}".format(type(e).__name__, e)
+    if why:
+        return None, ("WARNING: left out: as the run's {:,.0f} {} crossing line (its barrel from "
+                      "the channel on one side of the road to the other could not be laid: {}), "
+                      "{}, which HEC-RAS refuses".format(cond.polyline_length(run),
+                                                         units.len_name, why_bar, why)), run
+    c_old["notes"] = [warn] + c_old["notes"] + fnotes + perch_notes(cv, plan["run_beds"], units,
+                                                                    cell)
+    return c_old, None, run
 
 
 def _breakline_name(text):
@@ -2453,10 +3372,22 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
     if structs:
         progress(84, "culverts and bridges")
     todo = []
+    # 3.26.8: a culvert the run cut as a gap from the crossings gets a barrel from the channel
+    # on one side of the embankment to the other where the channel was found on both sides
+    # (crossing_plan, export_crossing; the run's own models cut its whole gap line); else, or
+    # where that cannot be exported, it is exported as before 3.26.8, with a WARNING
+    barrels = crossing_barrels(report) if structs else []
+    plans = []
     for s in structs:
         label = s.name or s.kind or "?"
         line_u = to_model(np.asarray(s.line, dtype=float)) if (
             to_model is not None and len(s.line)) else np.zeros((0, 2))
+        b = barrel_of(s, barrels) if to_model is not None else None
+        plan = None
+        if b is not None and len(line_u) >= 2:
+            plan = crossing_plan(s, b, line_u, to_model, units, cell, path_m)
+            line_u = plan["line"] if plan["line"] is not None else plan["run"]
+        plans.append(plan)
         if to_model is None:
             todo.append((s, label, line_u, None, "the run did not record its model coordinate "
                                                  "system"))
@@ -2466,8 +3397,9 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
             continue
         # the terrain around it: the model's own terrain GeoTIFF, as HEC-RAS will have it
         pad = units.from_ft(STRUCT_MAX_HALF_FT) + 4 * cell
-        sb = (line_u[:, 0].min() - pad, line_u[:, 1].min() - pad,
-              line_u[:, 0].max() + pad, line_u[:, 1].max() + pad)
+        both = line_u if plan is None else np.vstack([line_u, plan["run"]])
+        sb = (both[:, 0].min() - pad, both[:, 1].min() - pad,
+              both[:, 0].max() + pad, both[:, 1].max() + pad)
         todo.append((s, label, line_u, _tif_window(terrain_tif, sb, srs), None))
     # the crest of each structure in the 2D area, so that connections on one road stay apart
     crests = []
@@ -2482,13 +3414,22 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
         if whynot is None:
             ground = (lambda xy, g=g: _sample(g[0], g[1], g[2], g[3], xy))
             avoid = [(e["name"], e["line"]) for e in sinfo["exported"]]
-            c, whynot = structure_connection(s, line_u, ground, perim, cell, g[3], units, "",
-                                             avoid, [(lab, q) for j, lab, q in crests if j != i])
-            if whynot and any(j > i for j, _, _ in crests):
-                # two structures too close for a connection each: the first one takes it
-                c, whynot = structure_connection(s, line_u, ground, perim, cell, g[3], units, "",
-                                                 avoid, [(lab, q) for j, lab, q in crests
-                                                         if j in done])
+
+            def connect(ln, br, i=i, s=s, ground=ground, avoid=avoid, g=g):
+                c, why = structure_connection(s, ln, ground, perim, cell, g[3], units, "",
+                                              avoid, [(lab, q) for j, lab, q in crests if j != i],
+                                              barrel=br)
+                if why and any(j > i for j, _, _ in crests):
+                    # two structures too close for a connection each: the first one takes it
+                    c, why = structure_connection(s, ln, ground, perim, cell, g[3], units, "",
+                                                  avoid, [(lab, q) for j, lab, q in crests
+                                                          if j in done], barrel=br)
+                return c, why
+            if plans[i] is None:
+                c, whynot = connect(line_u, None)
+            else:
+                c, whynot, line_u = export_crossing(s, plans[i], connect, pts, ground, perim,
+                                                    cell, g[3], units, raster=g)
         if whynot:
             sinfo["skipped"].append({"name": label, "kind": s.kind, "why": whynot,
                                      "line": [tuple(p) for p in line_u]})
@@ -3638,12 +4579,24 @@ def structures_readme(m, sinfo):
         out.append("")
         for c in ex:
             out += ["- {}: {}.".format(c["name"], n) for n in c["notes"]]
+        froms = " ".join((c.get("culvert") or {}).get("inverts_from") or "" for c in ex)
+        crossing = any((c.get("culvert") or {}).get("shift") is not None for c in ex)
         out += ["- Inverts: 'run' is the structure's invert as the run used it, 'terrain' the "
                 "ground at that end of its line (a culvert) or the lowest ground near that end "
-                "(a gap).", "- The barrels sit side by side about the crossing of the two "
+                "(a gap){}.".format(
+                    ", '{}' the channel bed where the channel leaves the road embankment on "
+                    "that side, found in the terrain for a culvert the run cut as a gap from "
+                    "the crossings (not an inventory elevation)".format(BED_LABEL)
+                    if BED_LABEL in froms else ""),
+                "- The barrels sit side by side about the crossing of the two "
                 "lines, {:g} x the span apart, on HEC-RAS's default barrel centrelines (across "
-                "the connection line). The Runner's own lines are in the layout GeoPackage "
-                "(layer 'Structures from the run').".format(1.1), ""]
+                "the connection line){}. The Runner's own lines are in the layout GeoPackage "
+                "(layer 'Structures from the run').".format(
+                    1.1, "; a culvert the run cut as a gap from the crossings runs from the "
+                    "channel on one side of the road to the other, its connection line along "
+                    "the road over a carriageway's crest, and where the channel crosses the "
+                    "road at an angle its upstream and downstream centreline stations differ "
+                    "(check the barrel in RAS Mapper)" if crossing else ""), ""]
     sk = sinfo.get("skipped") or []
     if sk:
         out += ["Not exported (add them in HEC-RAS if they matter):", ""]

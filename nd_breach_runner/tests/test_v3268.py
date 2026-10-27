@@ -1320,3 +1320,47 @@ def v3268_build_model_mends_a_cell_by_adding_a_point():
     finally:
         hm.close_notches, hm._drop_split = close0, drop0
         shutil.rmtree(d, ignore_errors=True)
+
+@test
+def v3268_a_cut_culvert_without_a_channel_keeps_the_runs_line_and_is_whole_in_the_models():
+    """Absaraka NBI 9117181: the gap line (120 m) went to HEC-RAS as a 394 ft barrel whose
+    inlet sat on a field 10 ft above the channel, so no water went through it. The HEC-RAS
+    barrel now runs from the channel on one side of the road to the other, but only where
+    the channel was found on both sides: here the ground beside the road is only a step (no
+    channel, 'ground'), so the export keeps the run's line as before, with a WARNING.
+    LISFLOOD-FP, the built-in engine and ANUGA still get the whole gap line with the
+    inventory's inverts (none), as in 3.26.7."""
+    from nd_breach_runner.core import gaps as gp
+    from nd_breach_runner.core.grid import Grid
+
+    def z_at(Y):
+        # a road along y = 0; the ground falls to the south (bed 98 m south, 100 m north)
+        return np.where(np.abs(Y) < 8.0, 104.0, np.where(Y > 0, 100.0, 98.0))
+
+    def read_dem(bounds, cell):
+        x0, y0, x1, y1 = bounds
+        nx, ny = max(4, int((x1 - x0) / cell)), max(4, int((y1 - y0) / cell))
+        g = Grid(np.zeros((ny, nx)), x0, y1, cell)
+        _X, Y = np.meshgrid(g.x_centers(), g.y_centers())
+        return Grid(z_at(Y), x0, y1, cell)
+
+    roads = [np.array([[-200.0, 0.0], [200.0, 0.0]])]
+    rows = gp.blocking_rows([{"name": "C", "x": 0.0, "y": 1.0, "kind": "culvert",
+                              "span_ft": 10.0, "rise_ft": 4.0, "barrels": 2}],
+                            roads, read_dem, 3.0)
+    b = rows[0]["barrel"]
+    # no channel either side, only a step in the ground: 'ground', not 'channel'
+    assert b["status"] == ["ground", "ground"] and b["roads"] == 1, b
+    structs, _ = gp.structures_from(rows, 3.0)
+    s = structs[0]
+    # the models: the whole gap line, no inverts (3.26.7)
+    assert np.allclose(s.line, rows[0]["line"]) and s.invert_up_m is None is s.invert_dn_m
+    assert abs(np.hypot(*(np.asarray(s.line)[-1] - np.asarray(s.line)[0])) - 120.0) < 1e-6
+    # HEC-RAS: no barrel (no channel was found), and why
+    u = hm.Units(True)
+    line, bar, notes = hm.crossing_barrel(s, b, lambda a: np.asarray(a, float).reshape(-1, 2),
+                                          u, 10.0)
+    assert line is None and bar is None, (line, bar)
+    assert notes == ["no channel (a valley at least 1 ft deep in the toes of the embankment) "
+                     "was found beside the road on each side within {:,.0f} m of the "
+                     "inventory's point".format(max(b["search_m"]))], notes
