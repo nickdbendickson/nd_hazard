@@ -1180,3 +1180,15 @@ writing) and the real ND hazard plugin's interface; try those once on real data.
   *J. Hydrology* 387.
 - Roberts, S. et al. ANUGA: open-source hydrodynamic modelling, Geoscience Australia /
   Australian National University.
+
+## Ported from DamSafety (DWR) 2026-10-28
+
+- **Outflow_boundary** (anuga_worker.py): outer mesh edges no longer gain water.
+  Transmissive for outflow, mirrored normal momentum for inflow. Matches the
+  DamSafety Runner 3.10.55 fix.
+- **channel_bed / thalweg_profile / channel_slope** (structures.py): slope-aware
+  channel bed at culvert ends. Matches the DamSafety Runner 3.11.1 fix.
+
+Still to review against DamSafety:
+- volume_balance operator split and notes (anuga_model.py)
+- basemap label probe / timeout handling (Hazard)
