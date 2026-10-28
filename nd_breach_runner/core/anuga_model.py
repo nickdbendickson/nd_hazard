@@ -297,3 +297,57 @@ def check_anuga(python, workdir):
         return {"ok": False, "message": (out.stdout + out.stderr)[-1500:]}
     ver = out.stdout.strip().splitlines()[-1]
     return {"ok": True, "message": "ANUGA {} (Python {})".format(*ver.split()[:2])}
+
+
+# --- Ported from DamSafety Runner 3.11.1 / #209 ---
+
+VOLUME_GAIN_LIMIT = 1.02
+VOLUME_CHECK_LIMIT = 1.005
+SOLVER_RESIDUAL_LIMIT = 0.005
+POSITIVE_EDGE_INFLOW = 0.001
+
+
+def structures_net(stats):
+    """The culvert / bridge operators' net volume (added - removed, m3)."""
+    rows = stats.get("operator_volumes")
+    if rows:
+        last = {}
+        for r in rows:
+            last[r.get("op")] = r
+        return float(sum(float(r.get("added_m3") or 0.0) - float(r.get("removed_m3") or 0.0)
+                         for r in last.values()))
+    if not stats.get("culverts"):
+        return 0.0
+    return None
+
+
+def operator_share(stats, vb):
+    """How much of a volume gain the inflow operators booked."""
+    ops, inj = vb.get("operators_m3"), stats.get("injected_m3")
+    if ops is None or inj is None:
+        return None
+    extra = float(vb.get("in_domain_m3") or 0.0) - float(vb.get("supplied_m3") or 0.0)
+    if extra <= 0:
+        return None
+    ex = float(ops) - float(inj)
+    st = structures_net(stats)
+    share = ex / extra if extra else 0.0
+    return {"excess_m3": ex, "share": share, "structures_net_m3": st,
+            "inlet_excess_m3": (ex - st) if st is not None else None}
+
+
+def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
+    """A one-line note when the domain gained more water than was supplied."""
+    vb = stats.get("volume_balance") or {}
+    supplied = float(vb.get("supplied_m3") or 0.0)
+    in_dom = float(vb.get("in_domain_m3") or 0.0)
+    if supplied <= 0 or in_dom <= supplied * limit:
+        return ""
+    gain = in_dom / supplied
+    sh = operator_share(stats, vb)
+    if sh and sh.get("structures_net_m3") is not None:
+        return ("ANUGA volume: domain holds {:.1%} of the supply; the breach inlet added "
+                "{:,.0f} m3 and the structure operators netted {:+,.0f} m3.".format(
+                    gain, sh.get("inlet_excess_m3") or 0.0, sh["structures_net_m3"]))
+    return ("ANUGA volume: domain holds {:.1%} of the supply; ANUGA's operators added "
+            "{:,.0f} m3.".format(gain, (sh or {}).get("excess_m3") or 0.0))

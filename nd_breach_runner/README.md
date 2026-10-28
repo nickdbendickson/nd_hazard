@@ -1192,3 +1192,7 @@ writing) and the real ND hazard plugin's interface; try those once on real data.
 Still to review against DamSafety:
 - volume_balance operator split and notes (anuga_model.py)
 - basemap label probe / timeout handling (Hazard)
+
+## Ported from DamSafety (2026-10-28)
+- volume_note / structures_net / operator_share (anuga_model.py): volume gain notes
+- suite_offline / probe_error_text / probe_key / label_checks (basemap.py): probe helpers

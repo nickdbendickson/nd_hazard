@@ -195,6 +195,39 @@ def offline_only():
         return False
 
 
+def suite_offline():
+    """True only when ND_DAM_OFFLINE is set to 1 / true / yes / on."""
+    import os
+    v = os.environ.get("ND_DAM_OFFLINE", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def probe_error_text(message, elapsed_s, timeout_ms):
+    """A short reason for a failed probe, naming a timeout when one happened."""
+    msg = str(message or "")
+    if elapsed_s is not None and timeout_ms and elapsed_s * 1000 >= 0.9 * timeout_ms:
+        return "did not answer within {:.0f} s (timed out)".format(timeout_ms / 1000.0)
+    if "timed out" in msg.lower() or "canceled" in msg.lower():
+        return "did not answer within the timeout"
+    return msg[:120] or "no answer"
+
+
+def probe_key(url, request_url=None):
+    """Cache key for a probe: the URL plus its query, without BBOX / WIDTH / HEIGHT."""
+    from urllib.parse import urlparse, parse_qsl, urlencode
+    u = request_url or url or ""
+    p = urlparse(u)
+    q = [(k, v) for k, v in parse_qsl(p.query) if k.upper() not in ("BBOX", "WIDTH", "HEIGHT")]
+    return p.scheme + "://" + p.netloc + p.path + "?" + urlencode(q)
+
+
+def label_checks(lonlat=None, timeout_ms=3000):
+    """Probe one tile per label service. Returns {service: True/False}."""
+    # Placeholder: the full probe loop lives in DamSafety_Hazard/basemap.py.
+    # This port keeps the signature so callers can be wired later.
+    return {}
+
+
 def forget_probe():
     """Forget the cached service checks (tests; a changed connection)."""
     _PROBES.clear()
