@@ -122,6 +122,89 @@ def lidar_bed(grid, xy, radius):
         return None
 
 
+CHANNEL_REACH_M = 30.0     # how far past each end the channel bed is looked for
+CHANNEL_NEAR_M = 10.0      # the bed at the end is read over the first 10 m
+CHANNEL_BED_PCT = 10.0     # low percentile of the slope-corrected thalweg
+CHANNEL_MIN_BINS = 4       # thalweg points needed to fit the channel's slope
+CHANNEL_MIN_DROP_M = 0.15
+
+
+def thalweg_profile(grid, line, end, half, reach=CHANNEL_REACH_M):
+    """(along, bed) arrays of the channel beyond one end of a culvert line: the
+    lowest finite ground in each 1 m (or one-cell) bin of a strip from the end outward
+    along the line's own direction (0..reach m), up to `half` (at least a cell) to either
+    side. None without ground there."""
+    line = np.asarray(line, dtype=float)
+    p, q = (line[0], line[1]) if end == 0 else (line[-1], line[-2])
+    u = p - q
+    n_ = float(np.hypot(*u))
+    if n_ <= 0:
+        return None
+    u = u / n_
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    z = grid.masked()
+    dx, dy = X - p[0], Y - p[1]
+    along = dx * u[0] + dy * u[1]
+    across = np.abs(-dx * u[1] + dy * u[0])
+    w = max(float(half), float(abs(grid.dx)))
+    near = (along >= 0) & (along <= reach) & (across <= w) & np.isfinite(z)
+    if not near.any():
+        return None
+    a, b = along[near], z[near]
+    step = max(1.0, float(abs(grid.dx)))
+    k = np.floor(a / step).astype(int)
+    bins = np.unique(k)
+    return (np.array([(i + 0.5) * step for i in bins]),
+            np.array([float(b[k == i].min()) for i in bins]))
+
+
+def channel_slope(along, bed):
+    """The bed's fall per metre along the profile (Theil-Sen: the median of the
+    pairwise slopes). 0 with too few points."""
+    if along is None or len(along) < CHANNEL_MIN_BINS:
+        return 0.0
+    i, j = np.triu_indices(len(along), 1)
+    d = along[j] - along[i]
+    ok = d > 0
+    if not ok.any():
+        return 0.0
+    return float(np.median((bed[j] - bed[i])[ok] / d[ok]))
+
+
+def channel_bed(grid, line, end, half, reach=CHANNEL_REACH_M, near=CHANNEL_NEAR_M,
+                pct=CHANNEL_BED_PCT):
+    """The channel bed just beyond one end of a culvert line, from the strip of
+    thalweg_profile. None without ground there.
+
+    The channel's slope is fitted over the whole reach (channel_slope), each thalweg
+    point is carried back to the end along it, and the bed is the `pct` percentile
+    of those values over the first `near` m (a low percentile, not the minimum, so
+    one pit does not decide it)."""
+    try:
+        prof = thalweg_profile(grid, line, end, half, reach)
+        if prof is None:
+            return None
+        along, bed = prof
+        slope = channel_slope(along, bed)
+        at_end = bed - slope * along
+        sel = along <= max(float(near), 1.0)
+        if not sel.any():
+            sel = np.ones_like(along, dtype=bool)
+        return float(np.percentile(at_end[sel], pct))
+    except Exception:
+        return None
+
+
+def end_bed(disc, channel):
+    """The LiDAR bed at one end: the channel beyond the end when it reads at least
+    CHANNEL_MIN_DROP_M below the disc at the end, else the disc."""
+    if disc is None:
+        return channel
+    if channel is None or disc - channel < CHANNEL_MIN_DROP_M:
+        return disc
+    return channel
+
+
 def reconcile_inverts(structures, read_dem, tol_m, cell):
     """3.5: inventory inlet / outlet elevations (NDDOT pipes, a user's layer) against the LiDAR.
 

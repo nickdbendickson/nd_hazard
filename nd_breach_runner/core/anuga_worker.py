@@ -172,6 +172,77 @@ def main(job_path, out_path):
     arrival_depth = s("arrival_depth")
     vmin_depth = s("velocity_min_depth")
 
+    def outflow_only_momentum(xm, ym, nx, ny):
+        """Mirror the normal momentum where it points inward (would add water)."""
+        xm, ym = np.asarray(xm, float), np.asarray(ym, float)
+        nx, ny = np.asarray(nx, float), np.asarray(ny, float)
+        n = np.hypot(nx, ny)
+        n = np.where(n > 0, n, 1.0)
+        nx, ny = nx / n, ny / n
+        inward = xm * nx + ym * ny < 0
+        if inward.any():
+            # reflect the normal component
+            proj = xm * nx + ym * ny
+            xm = np.where(inward, xm - 2 * proj * nx, xm)
+            ym = np.where(inward, ym - 2 * proj * ny, ym)
+        return xm, ym
+
+    def apply_outflow_boundary(domain, ids, vol_ids, edge_ids, centroid=False):
+        """Apply outflow-only to a batch of edges. Returns the count of inward edges."""
+        if ids is None or len(ids) == 0:
+            return 0
+        if centroid:
+            q = np.array([domain.get_conserved_quantities(v) for v in vol_ids], float)
+        else:
+            q = np.array([domain.get_conserved_quantities(v, edge=e)
+                          for v, e in zip(vol_ids, edge_ids)], float)
+        n = np.array([domain.normals[v, 2 * e:2 * e + 2]
+                      for v, e in zip(vol_ids, edge_ids)], float)
+        xm, ym = outflow_only_momentum(q[:, 1], q[:, 2], n[:, 0], n[:, 1])
+        inward = 0
+        for i, (v, e) in enumerate(zip(vol_ids, edge_ids)):
+            if abs(xm[i] - q[i, 1]) > 1e-12 or abs(ym[i] - q[i, 2]) > 1e-12:
+                inward += 1
+            domain.set_conserved_quantities(v, [q[i, 0], xm[i], ym[i]], edge=e)
+        return inward
+
+    class Outflow_boundary(anuga.Boundary):
+        """Transmissive for water leaving, a wall for water that would enter."""
+
+        def __init__(self, domain=None):
+            anuga.Boundary.__init__(self)
+            if domain is None:
+                raise Exception("Domain must be specified for the outflow boundary")
+            self.domain = domain
+            self.inward_edges = 0
+
+        def __repr__(self):
+            return "Outflow_boundary"
+
+        def evaluate(self, vol_id, edge_id):
+            d = self.domain
+            if d.centroid_transmissive_bc:
+                qv = np.array(d.get_conserved_quantities(vol_id), float)
+            else:
+                qv = np.array(d.get_conserved_quantities(vol_id, edge=edge_id), float)
+            n = d.normals[vol_id, 2 * edge_id:2 * edge_id + 2]
+            xm, ym = outflow_only_momentum([qv[1]], [qv[2]], [n[0]], [n[1]])
+            qv[1], qv[2] = xm[0], ym[0]
+            return qv
+
+        def evaluate_segment(self, domain, segment_edges):
+            if segment_edges is None or domain is None:
+                return
+            ids = np.asarray(segment_edges)
+            if ids.size == 0:
+                return
+            self.inward_edges = apply_outflow_boundary(
+                domain, ids, domain.boundary_cells[ids], domain.boundary_edges[ids],
+                centroid=bool(domain.centroid_transmissive_bc))
+
+    Outflow_boundary.__module__ = __name__
+    Outflow_boundary.__qualname__ = "Outflow_boundary"
+
     class Envelope(anuga.Operator):
         """Updates the maxima every time step, not just at yield steps."""
 
