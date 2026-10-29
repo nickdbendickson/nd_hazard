@@ -206,11 +206,17 @@ def main(job_path, out_path):
             domain.set_conserved_quantities(v, [q[i, 0], xm[i], ym[i]], edge=e)
         return inward
 
-    class Outflow_boundary(anuga.Boundary):
+    try:
+        from anuga.abstract_2d_finite_volumes.generic_boundary_conditions import Boundary as _Boundary
+    except ImportError:
+        _Boundary = object
+
+    class Outflow_boundary(_Boundary):
         """Transmissive for water leaving, a wall for water that would enter."""
 
         def __init__(self, domain=None):
-            anuga.Boundary.__init__(self)
+            if _Boundary is not object:
+                _Boundary.__init__(self)
             if domain is None:
                 raise Exception("Domain must be specified for the outflow boundary")
             self.domain = domain
