@@ -1,16 +1,8 @@
 """QGIS dock that reads a finished dam folder. It does not run the model.
 
-Not wired into initGui. To show it, in the Runner plugin.py initGui::
-
-    from qgis.PyQt.QtCore import Qt
-    from .results_dock import ResultsDock
-    self.results_dock = ResultsDock(self.iface)
-    self.iface.addDockWidget(Qt.RightDockWidgetArea, self.results_dock)
-
-And in unload::
-
-    self.iface.removeDockWidget(self.results_dock)
-    self.results_dock.deleteLater()
+Opened from the plugin menu, "Breach results". plugin.py creates the
+dock on the first click and removes it in unload. It is not shown at
+startup, and initProcessing does not create it.
 
 Works in DamSafety_Runner and nd_breach_runner. The dock looks for
 ``_breach_model/run_report.json``, ``receptors_flooded.csv`` and
