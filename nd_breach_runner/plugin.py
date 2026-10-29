@@ -50,7 +50,6 @@ class NDBreachRunnerPlugin:
         self.home_dialog = None
         self.data_action = None           # 3.9.0: Suite data and servers
         self.results_dock = None
-        self.results_action = None
         self._suite_data_dialog = None
 
     def initProcessing(self):
@@ -77,11 +76,6 @@ class NDBreachRunnerPlugin:
         self.iface.addPluginToMenu(MENU, self.action)
         self.actions.append(self.action)
         self.home_action = QAction("Dam suite home...", self.iface.mainWindow())
-        self.results_action = QAction("Breach results...", self.iface.mainWindow())
-        self.results_action.setObjectName("NDBreachResultsAction")
-        self.results_action.triggered.connect(self.show_results_dock)
-        self.iface.addPluginToMenu(MENU, self.results_action)
-        self.actions.append(self.results_action)
         self.home_action.setObjectName("NDBreachRunnerHomeAction")
         self.home_action.triggered.connect(self.run_home)
         self.iface.addPluginToMenu(MENU, self.home_action)
@@ -192,15 +186,18 @@ class NDBreachRunnerPlugin:
             pass
 
 
-    def show_results_dock(self, *args):
-        """Breach results panel. Reads a finished dam folder; does not run the model."""
+    def show_results_dock(self, folder=None, *args):
+        """Breach results panel for a finished dam folder. Does not run the model."""
         from qgis.PyQt.QtCore import Qt
         from .results_dock import ResultsDock
         if self.results_dock is None:
             self.results_dock = ResultsDock(self.iface)
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.results_dock)
+        if folder:
+            self.results_dock.set_folder(folder)
         self.results_dock.show()
         self.results_dock.raise_()
+
 
     def run_settings(self, *args):
         """Open the window on its Settings tab (the suite settings grid)."""
@@ -313,6 +310,7 @@ class NDBreachRunnerPlugin:
             # imported here so a problem in the window cannot stop the plugin from loading
             from .dialog import NDBreachRunnerDialog
             self.dialog = NDBreachRunnerDialog(parent=self.iface.mainWindow(), iface=self.iface)
+            self.dialog.open_results = self.show_results_dock
         self.dialog.show()
         self.dialog.raise_()
         self.dialog.activateWindow()
@@ -362,12 +360,6 @@ class NDBreachRunnerPlugin:
             except (RuntimeError, TypeError, AttributeError):
                 pass
             self.action = None
-        if self.results_action is not None:
-            try:
-                self.results_action.triggered.disconnect(self.show_results_dock)
-            except (RuntimeError, TypeError, AttributeError):
-                pass
-            self.results_action = None
         if self._dialog_alive():
             try:
                 self.dialog.close()

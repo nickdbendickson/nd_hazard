@@ -641,6 +641,10 @@ class NDBreachRunnerDialog(QDialog):
             self.suggest_btn.clicked.connect(lambda _c=False: self._open_suggested())
             self.folder_btn = QPushButton("Open the dam folder")
             self.folder_btn.clicked.connect(lambda _c=False: self._open_dam_folder())
+            self.results_btn = QPushButton("Breach results")
+            self.results_btn.setToolTip("The breach-results dock for this dam folder. "
+                                        "Reads the run already written. Does not run the model.")
+            self.results_btn.clicked.connect(lambda _c=False: self._open_results_dock())
             self.add_btn = QPushButton("Add the dam's results to the project")
             self.add_btn.setToolTip("The final, baseline and incremental rasters and the flood polygons of "
                                     "the dam folder, with the suite's styles (styles/*.qml), in a layer group "
@@ -648,6 +652,7 @@ class NDBreachRunnerDialog(QDialog):
             self.add_btn.clicked.connect(lambda _c=False: self._add_results())
             row.addWidget(self.suggest_btn)
             row.addWidget(self.folder_btn)
+            row.addWidget(self.results_btn)
             row.addWidget(self.add_btn)
             row.addStretch(1)
             lay.addLayout(row)
@@ -1125,6 +1130,7 @@ class NDBreachRunnerDialog(QDialog):
         self._suggested = tool
         self.suggest_btn.setEnabled(bool(tool))
         self.folder_btn.setEnabled(have)
+        self.results_btn.setEnabled(have)
         self.add_btn.setEnabled(have and bool(pl.result_files(folder)))
         # 3.9.0: an empty DEM choice is the dam folder's DEM (never replaces a choice)
         dem, from_folder = pl.dem_for(s, folder if have else "")
@@ -1343,6 +1349,15 @@ class NDBreachRunnerDialog(QDialog):
                 self._log("!!! {}: {}".format(path, e))
         self._log("Added {} result layer(s) of {} to the project".format(added, folder))
         return added
+
+
+    def _open_results_dock(self):
+        """The panel next to the map. Not a second plugin menu entry."""
+        opener = getattr(self, "open_results", None)
+        if opener is None:
+            QMessageBox.information(self, TITLE, "The breach-results dock is not available.")
+            return
+        opener(self.folder())
 
     def _open_dam_folder(self):
         folder = self.folder()
