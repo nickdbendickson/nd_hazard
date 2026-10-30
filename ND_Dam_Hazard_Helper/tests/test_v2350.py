@@ -19,7 +19,8 @@ from ND_Dam_Hazard_Helper.tests.registry import test  # noqa: E402
 
 HOUSE = "House on foundation"
 H2801 = (4010, 3.10, 0.11)     # DWR-2801 review house: 3.10 ft at 0.11 ft/s
-H4031 = (16775, 2.11, 6.95)    # DWR-4031 review house: 2.11 ft at 6.95 ft/s
+H4031 = (9953, 2.111, 6.95)    # DWR-4031 review house: 2.111 ft at 6.95 ft/s - Struct_ID 9953 in
+                               # the 30 m toe run (was "16775"; IDs differ by footprint set, 16775 is dry there)
 
 
 def _mods():
