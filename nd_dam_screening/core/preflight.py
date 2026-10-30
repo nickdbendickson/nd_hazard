@@ -169,6 +169,16 @@ def _writable(folder):
         return False, str(e)
 
 
+def only_ids_count(S):
+    """How many dams settings['only_ids'] names (comma separated, as tool
+    1's ONLY_IDS reads them; 0 = no filter)."""
+    raw = S.get("only_ids") if isinstance(S, dict) else None
+    if isinstance(raw, (list, tuple)):
+        raw = ",".join(str(x) for x in raw)
+    ids = {x.strip().upper() for x in str(raw or "").split(",") if x.strip()}
+    return len(ids)
+
+
 def _slot(S, work, slot):
     try:
         return wf.slot_source(slot, work, S) or ""
@@ -225,6 +235,10 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
             if need_dams is None:
                 info = env.layer_info(_slot(S, work, "dwr")) if "1" in steps else None
                 need_dams = info["count"] if info else None
+                only = only_ids_count(S)
+                if only and "1" in steps:
+                    # 0.32.5: a one-dam (only_ids / DAM_ID) run needs room for those dams, not the layer
+                    need_dams = min(only, need_dams) if need_dams else only
             need_gb = (need_dams or 0) * PER_DAM_MB / 1024.0
             detail = "{:.1f} GB free".format(free / GB)
             if need_dams:
