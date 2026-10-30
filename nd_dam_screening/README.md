@@ -706,10 +706,11 @@ converts the screening's metres and m/s to feet and ft/s.
   reaches (5.3 cascading: the dam gets at least their existing class - `haz_existing`, or DWR
   `hazard_cla`; an unknown class is taken as Medium and listed as a data gap).
 - Habitable structures: potentially lethal on the charts -> High; inundated at any depth ->
-  at least Medium (economic loss). The charts' judgment zone is borderline and takes the
-  higher class (5.3), as does a point within the digitizing tolerance of a higher zone or
-  beyond the chart axes, and a structure whose velocity is unknown (no-data velocity; listed
-  as a data gap). `hz_border = yes` when every governing finding is borderline or rests on an
+  at least Medium (economic loss). A habitable structure in the charts' judgment zone is
+  Medium by rule (Nick, 10/30/2026: not potentially lethal; the old setting that made it High
+  under 5.3 is `classify_nd(judgment_zone_high=True)`). A point within the digitizing
+  tolerance of a higher zone or beyond the chart axes takes the higher class (5.3), as does a structure whose
+  velocity is unknown (no-data velocity; listed as a data gap). `hz_border = yes` when every governing finding is borderline or rests on an
   assumption.
 - Habitable means: a tool-0 `habitable` yes/no field wins; otherwise every structure is
   habitable unless one of its occupancy texts (OCC, PRIM) names an uninhabited building from

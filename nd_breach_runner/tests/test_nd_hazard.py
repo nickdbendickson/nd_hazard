@@ -52,13 +52,23 @@ def nd_hazard_structures_follow_5_2_1_1_and_5_3():
     c = nh.classify([S("a", 1.0, 1.0)], charts=cs)
     assert c.hazard_class == nh.MEDIUM and c.governing[0].section == "5.2.2"
     assert any("Engineer" in n for n in c.notes)
+    # 1.1.1 (Nick): a habitable structure in the judgment zone is MEDIUM by rule
     c = nh.classify([S("a", 1.0, 1.0), S("b", 4.0, 1.0)], charts=cs)
+    assert c.hazard_class == nh.MEDIUM and not c.borderline_raised
+    assert c.counts["judgment_zone"] == 1 and c.counts["habitable_lethal"] == 0
+    jf = [f for f in c.findings if f.zone == nh.ZONE_JUDGMENT][0]
+    assert jf.level == nh.MEDIUM and "MEDIUM by rule" in jf.reason and "5.3" not in jf.section
+    # the old option: the judgment zone counts as potentially lethal (HIGH, 5.3)
+    old = nh.Settings(judgment_zone_high=True)
+    c = nh.classify([S("a", 1.0, 1.0), S("b", 4.0, 1.0)], settings=old, charts=cs)
     assert c.hazard_class == nh.HIGH and c.borderline_raised           # judgment zone only
     assert c.counts["judgment_zone"] == 1 and "5.3" in c.governing[0].section
     c = nh.classify([S("b", 8.0, 1.0)], charts=cs)
     assert c.hazard_class == nh.HIGH and not c.borderline_raised
     # a mobile home uses its own chart: 1.5 ft at 1 ft/s is judgment there, low for a house
-    assert nh.classify([S("m", 1.5, 1.0, mobile=True)], charts=cs).hazard_class == nh.HIGH
+    assert nh.classify([S("m", 1.5, 1.0, mobile=True)], charts=cs).hazard_class == nh.MEDIUM
+    assert nh.classify([S("m", 1.5, 1.0, mobile=True)], settings=old,
+                       charts=cs).hazard_class == nh.HIGH
     assert nh.classify([S("h", 1.5, 1.0)], charts=cs).hazard_class == nh.MEDIUM
     # uninhabited building, and dry structures
     c = nh.classify([S("barn", 5.0, 3.0, habitable=False), S("dry", 0.05, 0.0)], charts=cs)

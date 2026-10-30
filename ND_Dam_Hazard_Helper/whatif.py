@@ -9,7 +9,7 @@ High only through two railroad stretches at 15 trains/day, the depth margins wer
 point and the train count was everything - so the list has to carry road and railroad
 stretches next to the structures, each with its own kind of change.
 
-    rows = candidates(structs, roads, rails, nd, judgment_as_probable=True, one_d=False)
+    rows = candidates(structs, roads, rails, nd, judgment_as_probable=False, one_d=False)
     for r in rows[:5]: print(r["label"], r["change"], "->", r["to_class"])
 
 One row per item: what it is, where it stands now, the smallest change that would flip it, and
@@ -250,7 +250,7 @@ def _rail_rows(rails):
     return out
 
 
-def candidates(structs=(), roads=(), rails=(), nd=None, judgment_as_probable=True, one_d=False,
+def candidates(structs=(), roads=(), rails=(), nd=None, judgment_as_probable=False, one_d=False,
                limit=MAX_ROWS, include_lowering=True):
     """The items nearest a class boundary, closest first: raising rows before lowering rows.
     `limit` is the number of RAISING rows kept (the lowering rows get the same allowance), as

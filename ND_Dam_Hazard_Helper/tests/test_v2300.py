@@ -171,7 +171,7 @@ def the_five_items_nearest_a_boundary_say_what_would_flip_each_one():
          "road_class": "Local/County", "length_ft": 90.0, "geom": None}],
         rails=[{"id": 3, "railroad": "BNSF", "subdivision": "KO", "trains": 8.0,
                 "passenger": False, "nd_class": "Medium", "geom": None}],
-        nd=_absaraka_nd())
+        nd=_absaraka_nd(), judgment_as_probable=True)    # 2.35.0: the old option
     up = [r for r in rows if r["direction"] == WI.UP]
     down = [r for r in rows if r["direction"] == WI.DOWN]
     assert up and down
@@ -190,6 +190,14 @@ def the_five_items_nearest_a_boundary_say_what_would_flip_each_one():
     # the judgment zone counts as probable loss of life, so leaving HIGH means getting below
     # the JUDGMENT boundary (margin_judg), not just out of the high-danger zone
     assert "depth -3.00 ft" in carry["change"] and carry["to_class"] == "Medium"
+    # 2.35.0 default (Nick): a judgment-zone house is MEDIUM by rule, so the boundary that
+    # flips a house is the ACER HIGH-danger line (margin_high) both ways
+    d_rows = [r for r in WI.candidates(_structs(), nd=_absaraka_nd()) if r["kind"] == "structure"]
+    d_up = [r for r in d_rows if r["direction"] == WI.UP]
+    d_down = [r for r in d_rows if r["direction"] == WI.DOWN]
+    assert "1234 Main St" in d_up[0]["label"] and "depth +2.40 ft" in d_up[0]["change"]
+    assert "high-danger boundary" in d_up[0]["change"] and d_up[0]["to_class"] == "High"
+    assert "depth -1.20 ft" in d_down[0]["change"] and d_down[0]["to_class"] == "Medium"
     table = WI.table_rows(rows)
     assert table[0][4] == "would raise the class"
     assert any(row[4] == "would lower the class" for row in table)

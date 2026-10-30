@@ -348,8 +348,14 @@ class ClassifyAlgorithm(_Base):
                                         defaultValue=True))
         P(QgsProcessingParameterBoolean("ONE_D", "1D model (depth > 2 ft rule)",
                                         defaultValue=False))
-        P(QgsProcessingParameterBoolean("JUDGMENT", "Judgment zone counts as probable loss "
-                                        "of life", defaultValue=True))
+        # 2.35.0 (Nick, 10/30/2026): JUDGMENT is TM 11 only (judgment-zone persons in lives
+        # in jeopardy). ND puts judgment-zone houses at MEDIUM by rule; ND_JUDGMENT_HIGH is
+        # the old option (probable loss of life, HIGH), off by default.
+        P(QgsProcessingParameterBoolean("JUDGMENT", "TM 11: judgment-zone persons count in "
+                                        "lives in jeopardy", defaultValue=True))
+        P(QgsProcessingParameterBoolean("ND_JUDGMENT_HIGH", "ND old option: judgment-zone "
+                                        "houses count as probable loss of life (HIGH) - off: "
+                                        "MEDIUM by rule", defaultValue=False))
         P(QgsProcessingParameterBoolean("DOWNLOAD_NSI", "Download NSI", defaultValue=True))
         P(QgsProcessingParameterBoolean("DOWNLOAD_ADDRESS", "Download ND GIS Hub address "
                                         "points (if none loaded)", defaultValue=True))
@@ -471,6 +477,8 @@ class ClassifyAlgorithm(_Base):
             keep_dry=self.parameterAsBool(parameters, "KEEP_DRY", context),
             one_d=self.parameterAsBool(parameters, "ONE_D", context),
             judgment_as_probable=self.parameterAsBool(parameters, "JUDGMENT", context),
+            nd_judgment_as_probable=self.parameterAsBool(parameters, "ND_JUDGMENT_HIGH",
+                                                         context),
             download_nsi=self.parameterAsBool(parameters, "DOWNLOAD_NSI", context),
             download_address=self.parameterAsBool(parameters, "DOWNLOAD_ADDRESS", context),
             download_usa_structures=self.parameterAsBool(parameters, "DOWNLOAD_USA", context),

@@ -422,7 +422,7 @@ def _classify(structs, roads, rails, opts):
                      one_d=opts["one_d"], roads_evaluated=opts["roads_evaluated"],
                      rail_evaluated=opts["rail_evaluated"],
                      structs_evaluated=opts.get("structs_evaluated", True))
-    tm = classify_tm11(s_view, r_view, judgment_as_probable=opts["judgment"])
+    tm = classify_tm11(s_view, r_view, judgment_as_probable=opts.get("tm11_judgment", True))
     extra_criteria(nd, s_view, opts["res"] if opts["res"] is not None else {},
                    opts["cfg"] or {})
     return nd, tm
@@ -527,8 +527,10 @@ def run(structs, roads=None, rails=None, *, factors=DEFAULT_FACTORS, split=False
     one_d_o = bool(_opt(cfg, "one_d", False) if one_d is None else one_d)
     opts = {
         "one_d": one_d_o,
-        "judgment": bool(_opt(cfg, "judgment_as_probable", True)
+        # 2.35.0: "judgment" is the ND option (MEDIUM by rule unless on); TM 11 keeps its own
+        "judgment": bool(_opt(cfg, "nd_judgment_as_probable", False)
                          if judgment_as_probable is None else judgment_as_probable),
+        "tm11_judgment": bool(_opt(cfg, "judgment_as_probable", True)),
         "near_ft": float(_opt(cfg, "near_ft", DEFAULT_NEAR_THRESHOLD_FT)
                          if near_ft is None else near_ft),
         "borderline_higher": bool(_opt(cfg, "borderline_higher", False)

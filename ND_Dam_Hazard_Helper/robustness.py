@@ -6,7 +6,7 @@ Only the structure criteria depend on flood depth in a way that can be
 stated as a margin:
   * 2D model: a habitable structure makes the dam HIGH when it reaches the
     ACER high-danger boundary, or the judgment boundary when judgment-zone
-    structures are counted as probable loss of life (the ND default);
+    structures are counted as probable loss of life (old option; ND default since 2.35.0 is MEDIUM by rule);
   * 1D model: when its depth exceeds 2 ft.
 The margins are the depth still missing to reach that boundary (or the
 depth by which it is exceeded), per structure, from max depth with max
@@ -57,7 +57,7 @@ def _label(rec):
                                      " - {}".format(what[:40]) if what and not addr else "")
 
 
-def analyse(structs, nd, judgment_as_probable=True, one_d=False, roads=None, rails=None):
+def analyse(structs, nd, judgment_as_probable=False, one_d=False, roads=None, rails=None):
     """{"lines": [...], "up": {...} or None, "down": {...} or None,
     "geoms": [QgsGeometry of the controlling structures]}.
 

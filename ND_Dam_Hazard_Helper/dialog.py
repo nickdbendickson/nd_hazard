@@ -1109,7 +1109,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         "dv_edit",
         "extent_spin", "keep_dry_check",
         "nsi_download_check", "addr_download_check", "usa_download_check", "model_combo",
-        "judgment_check", "near_spin", "borderline_check", "ppd_spin", "min_area_spin",
+        "judgment_check", "nd_judgment_check", "near_spin", "borderline_check", "ppd_spin", "min_area_spin",
         "occ_spin", "speed_spin", "lol_check", "warn_spin", "understanding_combo",
         "severity_combo", "population_combo", "access_check", "access_spin",
         "access_medium_check", "report_check", "pages_spin", "road_combo", "aadt_combo",

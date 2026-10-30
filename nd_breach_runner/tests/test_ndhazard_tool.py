@@ -265,8 +265,11 @@ def ndhazard_tool_chart_method_end_to_end():
         assert js["settings"]["lethality"] == nh.LETHALITY_CHARTS
         # structures
         a = _find(js, "structure", "A")
-        assert a["level"] == "High" and a["zone"] == nh.ZONE_JUDGMENT and a["borderline"]
-        assert "5.3" in a["section"] and (a["x"], a["y"]) == (5.0, 75.0)
+        # judgment zone: MEDIUM by rule (Nick 10/30/2026), not 5.3 borderline HIGH
+        assert a["level"] == "Medium" and a["zone"] == nh.ZONE_JUDGMENT and not a["borderline"]
+        assert "5.3" not in a["section"] and "MEDIUM by rule" in a["reason"]
+        assert (a["x"], a["y"]) == (5.0, 75.0)
+        assert js["settings"]["judgment_zone_high"] is False
         b = _find(js, "structure", "B")
         assert b["level"] == "Medium" and b["zone"] == nh.ZONE_LOW
         assert _find(js, "structure", "barn")["level"] == "Low"             # 'Shed'
@@ -297,7 +300,7 @@ def ndhazard_tool_chart_method_end_to_end():
         assert any("County 5" in g and "AADT" in g for g in js["data_gaps"])
         assert any("railroad" in g for g in js["data_gaps"]) is False       # all counted
         gov = {(f["kind"], f["id"]) for f in js["governing"]}
-        assert ("structure", "A") in gov and ("road", "Hwy 1") in gov
+        assert ("structure", "A") not in gov and ("road", "Hwy 1") in gov   # A is Medium by rule
         assert not js["borderline_raised"]                    # Hwy 1 etc. are not borderline
         # CSV and GeoJSON
         rows = list(csv.DictReader(open(res["CSV"], newline="")))
@@ -360,13 +363,20 @@ def ndhazard_tool_polygon_footprints_usa_structures():
         assert js["fields"]["structures"] == {"S_ID": "BUILD_ID", "S_HABITABLE": "",
                                               "S_OCC": "OCC_CLS", "S_MOBILE": "PRIM_OCC"}
         # P: deepest cell 2 ft; at that cell's 0.5 ft/s it is low danger (Medium), with the
-        # footprint's maximum velocity (9 ft/s) it is in the judgment zone -> High
+        # footprint's maximum velocity (9 ft/s) it is in the judgment zone -> Medium by rule
         p = _find(js, "structure", "P")
-        assert p["level"] == "High" and p["zone"] == nh.ZONE_JUDGMENT
+        assert p["level"] == "Medium" and p["zone"] == nh.ZONE_JUDGMENT
         assert p["depth_ft"] == 2.0 and p["vel_fts"] == 9.0 and (p["x"], p["y"]) == (15.0, 65.0)
         # Q is a mobile home: 1.5 ft at 1 ft/s is judgment on the mobile chart
         q = _find(js, "structure", "Q")
-        assert q["level"] == "High" and "Fig. 5.2" in q["section"] and "mobile" in q["reason"]
+        assert q["level"] == "Medium" and "Fig. 5.2" in q["section"] and "mobile" in q["reason"]
+        # the old option: the judgment zone counts as potentially lethal -> High
+        res, ctx, fb = _run(an, fq, {"DAM_FOLDER": h.folder, "STRUCTURES": src,
+                                     "CHART_FILE": cf, "JUDGMENT_HIGH": True})
+        js = json.load(open(res["JSON"]))
+        assert js["settings"]["judgment_zone_high"] is True
+        assert _find(js, "structure", "P")["level"] == "High"
+        assert _find(js, "structure", "Q")["level"] == "High"
         gj = json.load(open(res["GEOJSON"]))
         gp = next(f for f in gj["features"] if f["properties"]["id"] == "P")
         assert gp["properties"]["vel_at_max_depth_fts"] == 0.5
