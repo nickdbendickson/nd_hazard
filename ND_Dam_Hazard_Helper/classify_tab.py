@@ -85,9 +85,16 @@ class ClassificationTabMixin(object):
         lay.addWidget(self.advanced_check)
         crit = QGroupBox("1. Criteria (advanced - ND defaults)")
         cform = QFormLayout()
+        # 2.35.0 (Nick, 10/30/2026): an ACER judgment-zone house makes the dam MEDIUM by
+        # rule. The old setting stays as an option, off by default; the TM 11 tick keeps its
+        # meaning for lives in jeopardy only.
+        self.nd_judgment_check = QCheckBox(
+            "ND: count ACER judgment-zone houses as probable loss of life (HIGH) - old "
+            "option; off = MEDIUM by rule")
+        self.nd_judgment_check.setChecked(False)
+        cform.addRow("", self.nd_judgment_check)
         self.judgment_check = QCheckBox(
-            "Count ACER judgment-zone structures as probable loss of life "
-            "(conservative, ND 5.3(f))")
+            "TM 11: count ACER judgment-zone persons in lives in jeopardy")
         self.judgment_check.setChecked(True)
         cform.addRow("", self.judgment_check)
         self.near_spin = QDoubleSpinBox()
@@ -996,6 +1003,7 @@ class ClassificationTabMixin(object):
             extra_outline_layer=extra,
             one_d=self.model_combo.currentData() == "1d",
             judgment_as_probable=self.judgment_check.isChecked(),
+            nd_judgment_as_probable=self.nd_judgment_check.isChecked(),
             persons_per_dwelling=int(self.ppd_spin.value()),
             min_area_ft2=float(self.min_area_spin.value()),
             occupancy=float(self.occ_spin.value()), speed_mph=float(self.speed_spin.value()),

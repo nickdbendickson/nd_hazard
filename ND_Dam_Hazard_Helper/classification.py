@@ -41,11 +41,19 @@ def _drop_low_reason(nd):
     nd["reasons"] = [r for r in nd["reasons"] if not r.startswith("LOW -")]
 
 
-def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
+JUDGMENT_RULE_PREFIX = "MEDIUM - "     # 2.35.0: judgment-zone rule reason starts so
+
+
+def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
                 roads_evaluated=True, rail_evaluated=True, structs_evaluated=True):
     """Returns dict(cls, reasons[], judgment[], counts{}). v2.19.0: `structs_evaluated` False
     (no structure layer was given or downloaded) shows the structure rows as "not evaluated"
-    instead of "not met" and marks the class incomplete."""
+    instead of "not met" and marks the class incomplete.
+
+    2.35.0 (Nick, 10/30/2026): a habitable structure in the ACER judgment zone makes the dam
+    MEDIUM by rule - not probable loss of life, not a provisional High. `judgment_as_probable`
+    True is the old conservative option (judgment zone counted as probable loss of life,
+    HIGH); it is kept as a non-default option."""
     cls = ND_LOW
     reasons, judgment = [], []
     hab = [s for s in structs if s["habitable"] == "Yes" and not s.get("dwelling_extra")]
@@ -71,8 +79,12 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
             reasons.append("HIGH - " + msg + "; counted as probable loss of life "
                            "(conservative, borderline rule 5.3(f))")
         else:
-            judgment.append(msg + " - would make the dam HIGH if loss of life is judged "
-                            "probable")
+            # 2.35.0: the ND judgment-zone rule - MEDIUM, automatically
+            cls = _raise(cls, ND_MEDIUM)
+            reasons.append(JUDGMENT_RULE_PREFIX + "{} habitable structure(s) in the ACER "
+                           "judgment zone - classed MEDIUM by rule (judgment-zone houses "
+                           "are Medium, not probable loss of life) [5.2.1.1]".format(
+                               len(judg)))
     for r in roads:
         if r["nd_class"] == ND_HIGH:
             cls = ND_HIGH
@@ -173,7 +185,7 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
          "n/a (1D model)" if one_d else "{} ({} persons)".format(len(judg), persons(judg)),
          "?" if not se else
          "not met" if not judg else (ND_HIGH + " (judgment counted)" if judgment_as_probable
-                                     else "Judgment")),
+                                     else ND_MEDIUM + " (by rule)")),
         ("5.2.1.2", "Overtopped roads - Interstate or AADT > 2,000",
          "{} stretch(es)".format(len(road_high)) if roads_evaluated else "not evaluated",
          met(road_high, ND_HIGH) if roads_evaluated else "?"),
@@ -210,7 +222,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                 "roads_high": len(road_high), "roads_medium": len(road_med),
                 "rail": len(rails), "rail_high": len(rail_high),
                 "unverified": len(unverified), "persons_probable": persons(probable),
-                "persons_judgment": persons(judg)}}
+                "persons_judgment": persons(judg)},
+            # 2.35.0: which judgment-zone rule classified this ("medium" = ND rule)
+            "judgment_rule": "probable" if judgment_as_probable else "medium"}
 
 
 def tm11_rows(tm11):
@@ -462,7 +476,9 @@ def extra_criteria(nd, structs, res, cfg, total=False):
     # A High that exists only because judgment-zone dwellings clear the ACER
     # line by less than a foot is inside lidar and cell-size error.
     counts = nd.get("counts") or {}
+    # 2.35.0: only when the old option counted them (by rule they are MEDIUM, never High)
     judgment_only = (nd["cls"] == ND_HIGH and counts.get("habitable_judgment")
+                     and nd.get("judgment_rule", "probable") == "probable"
                      and not counts.get("habitable_probable")
                      and not counts.get("roads_high") and not counts.get("rail_high"))
     if judgment_only:

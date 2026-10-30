@@ -26,9 +26,13 @@ What the policy says and how it is applied here (section numbers are the policy'
   more trains a day or an active passenger line -> HIGH.
 * 5.2.2 Lifeline facilities (public utilities, emergency response) whose effectiveness or
   access the breach reduces -> at least MEDIUM.
-* 5.3 Borderline -> the higher class. Applied to the charts: the JUDGMENT ZONE is borderline,
-  so it counts as potentially lethal (HIGH); a point within the digitizing tolerance of a
-  higher zone takes that zone; a point beyond the chart's axes takes the high danger zone.
+* JUDGMENT ZONE (module 1.1.1, Nick 10/30/2026: "any house in the judgement zone should be
+  automatically labeled as medium hazard"): a habitable structure in the charts' judgment
+  zone is MEDIUM by rule - not potentially lethal, not probable loss of life. The old reading
+  (the judgment zone is borderline, 5.3, so it counts as potentially lethal, HIGH) is kept as
+  the option Settings.judgment_zone_high, off by default.
+* 5.3 Borderline -> the higher class: a point within the digitizing tolerance of a higher zone
+  takes that zone; a point beyond the chart's axes takes the high danger zone.
   Missing data (AADT, trains a day) is listed as a data gap, with the assumption used.
 * 5.3 Cascading: at least as high as a downstream dam whose failure this dam could cause.
 * 5.3 No allowance for evacuation or emergency action (none is made anywhere here).
@@ -52,7 +56,7 @@ import re
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
-MODULE_VERSION = "1.1.0"
+MODULE_VERSION = "1.1.1"
 POLICY = "North Dakota Dam Safety Standards Policy REG_05.2026, Sections 5.2 and 5.3"
 CHART_REFERENCE = ("Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard "
                    "Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. 5.1), "
@@ -333,6 +337,9 @@ class Settings:
     rule_depth_ft: float = 2.0       # 1D rule
     unknown_aadt: str = MEDIUM       # class used for an overtopped road with no AADT
     unknown_trains: str = MEDIUM     # class used for a railroad with no train count
+    # 1.1.1 (Nick): a habitable structure in the ACER judgment zone is MEDIUM by rule. True is
+    # the old option: the judgment zone counts as potentially lethal (HIGH, 5.3 borderline).
+    judgment_zone_high: bool = False
 
     def validate(self):
         if self.lethality not in LETHALITY_METHODS:
@@ -657,9 +664,15 @@ def structure_finding(s, st, charts=None):
         return Finding(HIGH, "5.2.1.1 " + fig, reason="{} in the high danger zone ({}){}".format(
             what, pt, "; " + note if note else ""), zone=zone, borderline=bool(note), **kw)
     if zone == ZONE_JUDGMENT:
-        return Finding(HIGH, "5.2.1.1 " + fig + ", 5.3", reason="{} in the judgment zone ({}): "
-                       "borderline, the higher class applies{}".format(
-                           what, pt, "; " + note if note else ""), zone=zone, borderline=True,
+        if st.judgment_zone_high:            # the old option
+            return Finding(HIGH, "5.2.1.1 " + fig + ", 5.3", reason="{} in the judgment zone "
+                           "({}): borderline, the higher class applies (judgment zone counted "
+                           "as potentially lethal - option){}".format(
+                               what, pt, "; " + note if note else ""), zone=zone,
+                           borderline=True, **kw)
+        return Finding(MEDIUM, "5.2.1.1 " + fig, reason="{} in the judgment zone ({}): classed "
+                       "MEDIUM by rule (judgment-zone houses are Medium, not probable loss of "
+                       "life){}".format(what, pt, "; " + note if note else ""), zone=zone,
                        **kw)
     return Finding(MEDIUM, "5.2.2", reason="{} inundated, low danger zone ({}): economic loss"
                    .format(what, pt), zone=zone, **kw)

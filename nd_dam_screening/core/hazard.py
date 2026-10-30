@@ -367,8 +367,12 @@ def _comparison_finding(s, criterion, rule_depth_m, curve, wet_ft):
 
 def classify_nd(structures=(), roads=(), railroads=(), method=nh.LETHALITY_CHARTS,
                 wet_m=DEFAULT_WET_M, rule_depth_ft=2.0, unknown_aadt=nh.MEDIUM, charts=None,
-                curve=None, lifelines=(), downstream_dams=(), unknown_trains=nh.MEDIUM):
+                curve=None, lifelines=(), downstream_dams=(), unknown_trains=nh.MEDIUM,
+                judgment_zone_high=False):
     """Classify one dam through nd_hazard.classify.
+
+    judgment_zone_high: the old option - a habitable structure in the ACER judgment zone counts
+    as potentially lethal (HIGH). Off (default, Nick 10/30/2026): MEDIUM by rule.
 
     structures: dicts {id, depth_m, vel_ms (None = unknown), dv_m2s, mobile, habitable, x, y};
     roads: dicts {id, depth_m, aadt, road_class, name, sole_access, x, y}; railroads: dicts
@@ -383,7 +387,8 @@ def classify_nd(structures=(), roads=(), railroads=(), method=nh.LETHALITY_CHART
     wet_ft = m_to_ft(wet_m)
     st = nh.Settings(lethality=method if method in nh.LETHALITY_METHODS else nh.LETHALITY_1D,
                      wet_ft=wet_ft, rule_depth_ft=float(rule_depth_ft),
-                     unknown_aadt=unknown_aadt, unknown_trains=unknown_trains).validate()
+                     unknown_aadt=unknown_aadt, unknown_trains=unknown_trains,
+                     judgment_zone_high=bool(judgment_zone_high)).validate()
     if method == nh.LETHALITY_CHARTS and (charts is None or not charts.ready):
         raise nh.ChartsNotDigitized(charts_not_digitized_message(charts))
     rd = [nd_road(r["id"], r["depth_m"], r.get("aadt"), r.get("road_class", ""), r.get("x"),

@@ -4,8 +4,9 @@
 Vacant parcels (no habitable or unverified structure on them) up to a size
 limit that lie in the ACER danger zone that would make the dam HIGH if a
 house were built there: the high-danger zone, or the judgment zone when
-judgment-zone structures are counted as probable loss of life (depth > 2 ft
-for a 1D model). Each parcel is evaluated like a building outline (cell by
+judgment-zone structures are counted as probable loss of life - the old
+option; since 2.35.0 a judgment-zone house is ND MEDIUM by rule, so by default
+only the high-danger zone is listed (depth > 2 ft for a 1D model). Each parcel is evaluated like a building outline (cell by
 cell over the parcel and its 5-ft edge ring) with the house-on-foundation
 curve. The list is a judgment aid - zoning, platting and access decide
 whether development is imminent; it never changes the class.
@@ -42,7 +43,7 @@ def _field(names_low, wanted, contains=False):
 
 
 def screen(parcel_layer, structs, samplers, analysis_crs, transform_ctx, clip=None, lat=None,
-           max_acres=5.0, judgment_as_probable=True, one_d=False, progress_cb=None):
+           max_acres=5.0, judgment_as_probable=False, one_d=False, progress_cb=None):
     """(layer or None, summary dict). `samplers`: the governing scenario's
     open samplers (as for evaluate_structures)."""
     from .structures import (
@@ -149,7 +150,7 @@ def screen(parcel_layer, structs, samplers, analysis_crs, transform_ctx, clip=No
                          NULL if c.get("max_vel") is None else round(c["max_vel"], 2),
                          NULL if z is None else int(z), ZONE_LABELS.get(z, "") or NULL,
                          "probable loss of life (dam HIGH)" if c.get("outcome") ==
-                         OUT_PROBABLE else "judgment zone (HIGH when counted)"])
+                         OUT_PROBABLE else "judgment zone (HIGH under the old option; MEDIUM by rule)"])
         feats.append(f)
     add_features_batched(lyr.dataProvider(), feats, 5000)
     lyr.updateExtents()

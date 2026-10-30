@@ -33,7 +33,7 @@ if os.path.exists(os.path.join(runner_core, "nd_hazard.py")):
     print("OK (copies identical to", runner_core + ")")
 else:
     print("SKIP copy check: no runner at", runner_core)
-assert hz.nh is nh and nh.MODULE_VERSION == "1.1.0"
+assert hz.nh is nh and nh.MODULE_VERSION == "1.1.1"
 
 
 # ---- invented TEST charts (not the ACER TM 11 figures)
@@ -108,12 +108,16 @@ S = lambda i, d_ft, v_fts, mobile=False, hab=True: {
 c = hz.classify_nd([S("low", 1.0, 1.0)], charts=CS)
 assert c.hazard_class == "Medium" and c.governing[0].section == "5.2.2" and not c.borderline_raised
 c = hz.classify_nd([S("low", 1.0, 1.0), S("judg", 4.0, 1.0)], charts=CS)
-assert c.hazard_class == "High" and c.borderline_raised                     # 5.3: judgment -> High
+assert c.hazard_class == "Medium" and not c.borderline_raised               # judgment -> Medium by rule
+assert c.counts["judgment_zone"] == 1 and c.counts["habitable_lethal"] == 0
+assert any(f.zone == nh.ZONE_JUDGMENT and "MEDIUM by rule" in f.reason for f in c.governing)
+c = hz.classify_nd([S("low", 1.0, 1.0), S("judg", 4.0, 1.0)], charts=CS, judgment_zone_high=True)
+assert c.hazard_class == "High" and c.borderline_raised                     # old option: 5.3 -> High
 assert c.governing[0].zone == nh.ZONE_JUDGMENT and c.counts["judgment_zone"] == 1
 c = hz.classify_nd([S("high", 8.0, 1.0), S("judg", 4.0, 1.0)], charts=CS)
 assert c.hazard_class == "High" and not c.borderline_raised
 c = hz.classify_nd([S("mh", 1.5, 1.0, mobile=True)], charts=CS)             # mobile chart: judgment
-assert c.hazard_class == "High" and "Fig. 5.2" in c.governing[0].section
+assert c.hazard_class == "Medium" and "Fig. 5.2" in c.governing[0].section
 c = hz.classify_nd([S("nv", 0.5, None)], charts=CS)                         # unknown velocity
 assert c.hazard_class == "High" and c.borderline_raised and "no velocity" in c.data_gaps[0]
 c = hz.classify_nd([S("barn", 5.0, 5.0, hab=False)], charts=CS)            # uninhabited -> Low
@@ -242,14 +246,14 @@ assert d1["hz_class"] == "High" and d1["hz_border"] == "no"        # a High down
 assert d1["hz_criterion"] == nh.LETHALITY_CHARTS and d1["hz_basis"] == hz.METHOD_LABELS[nh.LETHALITY_CHARTS]
 assert d1["hz_chart"] == "digitized " + CS.sha256[:12]
 assert "AADT not given; classified Medium by assumption" in d1["hz_gaps"]      # NaN AADT: not Low
-assert d1["n_bldg_wet"] == 2 and d1["n_bldg_lethal"] == 1 and d1["n_road_wet"] == 1
+assert d1["n_bldg_wet"] == 2 and d1["n_bldg_lethal"] == 0 and d1["n_road_wet"] == 1   # judgment: Medium
 assert "5.3 cascading" in d1["hz_reason"] and "DWR-7" in d1["hz_reason"]
 assert d1["hz_vs_existing"] == "higher than existing"
 assert rows["DWR-9"]["hz_class"] == "Low" and rows["DWR-9"]["hz_conf"] == "triage"
 assert rows["DWR-7"]["hz_class"] == "NoData"
 lev = sorted((f["kind"], f["lethal"], f["level"]) for f in imp)
 assert lev == [("dam", "n/a", "High"), ("lifeline", "n/a", "Medium"), ("road", "n/a", "Medium"),
-               ("structure", "YES (judgment zone, 5.3)", "High"), ("structure", "no", "Medium"),
+               ("structure", "no", "Medium"), ("structure", "no (judgment zone, MEDIUM by rule)", "Medium"),
                ("uninhabited building", "n/a", "Low")], lev
 # without the other dam's class the downstream dam is Medium + a data gap; lifeline raises to Medium
 sim2 = make_layer(SIMF, [(pt(0, 0), {"dam_id": "DWR-1", "sim_status": "ok", "depth_tif": dtif, "vel_tif": vtif}),
