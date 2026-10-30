@@ -121,10 +121,17 @@ class RunChain(QgsProcessingAlgorithm):
         hard = self.parameterAsBool(params, "FAIL_ON_ERROR", context)
         log_path = self.parameterAsFileOutput(params, "LOG", context) or ""
         lines = []
+        live = self._live = self._open_log(log_path)
 
         def log(m):
             lines.append(str(m))
             feedback.pushInfo(str(m))
+            if live[0] is not None:          # 0.33.1: line by line, so a killed run leaves its log
+                try:
+                    live[0].write(str(m) + "\n")
+                    live[0].flush()
+                except (OSError, ValueError):
+                    live[0] = None
 
         if dam_id:
             log("DAM_ID filter: {}".format(dam_id))
@@ -209,7 +216,25 @@ class RunChain(QgsProcessingAlgorithm):
         return self._finish(lines, log_path, ok=chain.ok, ran=chain.ran, result=chain.result,
                             hard=hard)
 
+    @staticmethod
+    def _open_log(log_path):
+        """[open file or None]: the chain log written as the run goes (_finish rewrites it whole)."""
+        if not log_path or log_path.upper() == "TEMPORARY_OUTPUT":
+            return [None]
+        try:
+            os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+            return [open(log_path, "w", encoding="utf-8")]
+        except OSError:
+            return [None]
+
     def _finish(self, lines, log_path, ok, ran, result, hard=False):
+        live = getattr(self, "_live", None)
+        if live and live[0] is not None:
+            try:
+                live[0].close()
+            except OSError:
+                pass
+            live[0] = None
         if log_path and log_path.upper() != "TEMPORARY_OUTPUT":
             try:
                 with open(log_path, "w", encoding="utf-8") as fh:
