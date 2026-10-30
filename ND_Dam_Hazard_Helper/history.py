@@ -23,7 +23,8 @@ CHANGES_FILE = "Changes_Since_Last_Run.csv"
 SNAPSHOT_VERSION = 1
 MATCH_FT = 30.0
 DEPTH_CHANGE_FT = 0.5
-SETTING_KEYS = ("one_d", "judgment_as_probable", "persons_per_dwelling",
+SETTING_KEYS = ("one_d", "judgment_as_probable", "nd_judgment_as_probable",
+                "persons_per_dwelling",
                 "min_area_ft2", "near_ft", "borderline_higher", "incremental_ft",
                 "extent_buffer_ft", "access", "lifeline_as_medium", "access_as_medium")
 CHANGE_FIELDS = ["Change", "Item", "Before", "Now", "X", "Y"]

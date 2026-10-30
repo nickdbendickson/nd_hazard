@@ -1019,9 +1019,10 @@ does (the same module, byte for byte, as the ND dam screening plugin):
   habitable (5.3). A velocity that is missing at a structure is counted potentially lethal and
   listed as a data gap. Potentially lethal
   -> High: with a 2D model by the ACER TM 11 depth-velocity charts (ND Fig. 5.1 houses, Fig. 5.2
-  mobile homes), with a 1D model when deeper than 2 ft. The chart's **judgment zone is
-  borderline and takes the higher class (5.3)**, as does a point within the digitizing
-  tolerance of a higher zone or beyond the chart's axes. Inundated at any depth -> at least
+  mobile homes), with a 1D model when deeper than 2 ft. A habitable structure in the chart's
+  **judgment zone is Medium by rule** (Nick, 10/30/2026; the advanced option JUDGMENT_HIGH keeps
+  the old rule, judgment zone -> High under 5.3). A point within the digitizing tolerance of a
+  higher zone or beyond the chart's axes takes the higher class (5.3). Inundated at any depth -> at least
   Medium (economic loss, 5.2.2; the policy leaves low vs medium to the Engineer, the tool says
   Medium and notes it). Uninhabited buildings only -> Low.
 - **Roads** (5.2.1.2), overtopped at any depth: AADT > 2,000 or interstate -> High, 500-2,000 ->

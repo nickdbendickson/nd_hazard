@@ -37,7 +37,7 @@ from .linear import analyze_roads, analyze_rail, FeatureIndex
 from .classification import classify_nd, classify_tm11, extra_criteria
 from .extent import make_extent_clip, distance_xy_in_crs
 
-# ndhazard:<name> of every Processing algorithm the provider registers (2.34.6)
+# ndhazard:<name> of every Processing algorithm the provider registers (2.35.1)
 _EXPECTED_ALGORITHMS = (
     "acerzones", "batch", "buildpack", "chartsignoff", "classify", "creepwatch", "damsinseries",
     "dsswise", "ensemble", "fillform", "getdamdata", "hecrasplan", "markreviewed", "modelgate",
@@ -212,7 +212,7 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
         prov = Provider()
         prov.refreshAlgorithms()
         # acerzones, classify, batch, dsswise and (v2.5) hecrasplan ... (2.17.0: getdamdata).
-        # 2.34.6: checked by name, not a bare count (the count went stale at 21 when the
+        # 2.35.1: checked by name, not a bare count (the count went stale at 21 when the
         # suite-chain algorithms brought it to 25 - full test 2026-10-30)
         names = sorted(a.name() for a in prov.algorithms())
         missing = sorted(set(_EXPECTED_ALGORITHMS) - set(names))
@@ -340,7 +340,7 @@ def _classification_checks(rep, rasters, utm, ctx):
         # audit H1 (c1c9e5f, tests/test_lone_address_h1.py): an ND 911 address point with
         # no building (no outline within the address snap distance, no NSI point) stays
         # habitable by the ND site address rule - conservative - with a review note. The
-        # v2.20.1 "unverified" expectation here predated H1 (2.34.6).
+        # v2.20.1 "unverified" expectation here predated H1 (2.35.1).
         rep.check("ND address point with no building (Place_Type PARKING) habitable by the "
                   "site address rule (noted for review)",
                   zones["P"]["habitable"] == "Yes" and bool(zones["P"].get("site_note")),

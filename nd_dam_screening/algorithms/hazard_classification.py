@@ -61,8 +61,9 @@ class HazardClassification(QgsProcessingAlgorithm):
                 "(economic loss); AADT 500-2,000 or sole access to an occupied location; any other "
                 "railroad; a lifeline facility inundated; a Medium (or unclassified) dam reached. "
                 "LOW: only uninhabited buildings, private or AADT < 500 roads, or nothing of these is "
-                "reached. Borderline results take the higher class (5.3): the charts' judgment zone "
-                "and an unknown velocity count as potentially lethal (hz_border = yes when every "
+                "reached. A habitable structure in the charts' judgment zone is MEDIUM by rule (not "
+                "potentially lethal). Borderline results take the higher class (5.3): an unknown "
+                "velocity counts as potentially lethal (hz_border = yes when every "
                 "governing finding is borderline or rests on an assumption).\n"
                 "TWO LOADING CASES (0.28.0): when tool 7 ran both (SCEN_BOTH), the scen2_ rasters are "
                 "classified too and the WORSE class governs - a hazard class follows the incremental "
@@ -602,9 +603,11 @@ class HazardClassification(QgsProcessingAlgorithm):
                         continue
                     lethal = "n/a"
                     if fnd.kind == "structure" and w[2] != "uninhabited building":
-                        lethal = ("YES (judgment zone, 5.3)" if fnd.zone == nh.ZONE_JUDGMENT else
+                        lethal = ("YES (judgment zone, 5.3; old option)" if fnd.zone == nh.ZONE_JUDGMENT else
                                   "YES (borderline, 5.3)" if fnd.borderline else "YES") \
-                            if fnd.level == nh.HIGH else "no"
+                            if fnd.level == nh.HIGH else \
+                            ("no (judgment zone, MEDIUM by rule)" if fnd.zone == nh.ZONE_JUDGMENT
+                             else "no")
                     hrs = ar.sample(arr[0], arr[1], w[0][0], w[0][1]) if arr else None
                     if hrs is not None:
                         warn_hours.append(hrs)

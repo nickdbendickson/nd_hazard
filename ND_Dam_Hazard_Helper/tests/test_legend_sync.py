@@ -1,4 +1,4 @@
-"""2.34.6 (full test 2026-10-30): the report and map book legends keep their own layer list on
+"""2.35.1 (full test 2026-10-30): the report and map book legends keep their own layer list on
 QGIS 4. report.py / mapbook.py called QgsLayoutItemLegend.setAutoUpdateModel(False), which
 QGIS 4 deprecates (setSyncMode); compat.legend_manual uses setSyncMode(Manual) where it exists
 and setAutoUpdateModel(False) on QGIS 3. Runs tests/realqt_legend_sync.py (real QGIS,

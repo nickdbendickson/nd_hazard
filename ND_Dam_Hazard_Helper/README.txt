@@ -1021,10 +1021,13 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
 ND CRITERIA APPLIED (REG_05.2026, effective 04/01/2026, Section 5.2)
 - HIGH: any habitable structure in the high danger zone of Figs 5.1/5.2
   (houses / mobile homes, Reclamation 1988), or deeper than 2 ft for a 1D
-  model; judgment-zone structures when the conservative option is on
-  (5.3(f)); Interstates or roads with AADT > 2,000 overtopped at any depth;
+  model; judgment-zone structures only under the old option "ND: count
+  judgment-zone houses as probable loss of life (High)" (off by default;
+  2.35.0); Interstates or roads with AADT > 2,000 overtopped at any depth;
   passenger rail or freight lines with >= 10 trains/day.
-- MEDIUM: habitable structures inundated to any degree; US/State highways
+- MEDIUM: any habitable structure in the ACER judgment zone, by rule
+  (Nick, 10/30/2026: not probable loss of life, no provisional HIGH);
+  habitable structures inundated to any degree; US/State highways
   or roads with AADT 500-2,000; any railroad; lifeline facilities.
 - LOW: otherwise (private roads, AADT < 500, uninhabited buildings).
 - Always reviewed by the engineer: judgment-zone structures, sole-access

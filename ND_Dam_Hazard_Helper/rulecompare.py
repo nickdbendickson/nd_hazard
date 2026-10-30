@@ -379,7 +379,7 @@ def _nd_level(rec, judge):
         return "High", "probable loss of life"
     if out == _OUT_JUDGMENT:
         return ("High", "judgment zone counted as probable loss of life") if judge else \
-            ("Medium", "judgment zone - engineering judgment (not counted as probable)")
+            ("Medium", "judgment zone - MEDIUM by rule (not probable loss of life)")
     return "Medium", "inundated: economic loss"
 
 
@@ -851,7 +851,8 @@ def compare_result(res, scenario=None, method=METHOD_CURVES, chart_file=None, nh
         recs.append(r)
     run = res.get("run")
     cfg = getattr(run, "cfg", None) or {}
-    judge = cfg.get("judgment_as_probable", True) if judgment_as_probable is None \
+    # 2.35.0: the ND class's own judgment-zone option (MEDIUM by rule unless it is on)
+    judge = cfg.get("nd_judgment_as_probable", False) if judgment_as_probable is None \
         else bool(judgment_as_probable)
     if out_folder is None and write:
         base = getattr(run, "out", None) or cfg.get("output_folder")
@@ -971,7 +972,8 @@ def compare_folder(out_folder, depth_path=None, vel_path=None, method=METHOD_CUR
     if not depth_path:
         raise ValueError("no depth raster given and none named in QA/Run_Settings.json")
     settings = rs.get("settings") or {}
-    judge = settings.get("judgment_as_probable", True) if judgment_as_probable is None \
+    # 2.35.0: the ND class's own judgment-zone option (MEDIUM by rule unless it is on)
+    judge = settings.get("nd_judgment_as_probable", False) if judgment_as_probable is None \
         else bool(judgment_as_probable)
     recs, crs = read_structures_layer(sfile)
     out = run_compare(recs, depth_path, vel_path, nd_class=_nd_class_from_summary(out_folder),

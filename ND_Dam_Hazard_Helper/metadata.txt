@@ -5,11 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.34.6
+version=2.35.1
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
-    2.34.6 (2026-10-30; full test fixes: self-test expectations, legend on QGIS 4)
+    2.35.1 (2026-10-30; full test fixes: self-test expectations, legend on QGIS 4)
       * Self-test (Plugins > ND Dam Hazard > Self-test) failed 4 checks on QGIS 3.34 and
         4.2 though the code was right: it expected 24 algorithms (there are 25; it now
         names the missing / unexpected ones), the old PARKING and lone 911 point answers
@@ -18,6 +18,7 @@ changelog=
       * Report and map book legends: QgsLayoutItemLegend.setAutoUpdateModel(False) is
         deprecated in QGIS 4; compat.legend_manual uses setSyncMode(Manual) there and
         setAutoUpdateModel(False) on QGIS 3. The legend keeps its own layer list as before.
+    2.35.0 (2026-10-30; MOVES RESULTS (lower class, by rule). Nick: a habitable structure in the ACER judgment zone is ND MEDIUM by rule - reason 'classed MEDIUM by rule (judgment-zone houses are Medium, not probable loss of life) [5.2.1.1]', criteria row 'Medium (by rule)'; not probable loss of life, no provisional HIGH. High-danger-zone houses are still HIGH. The old setting is kept as an option, off by default (Nick decided): nd_judgment_as_probable / Processing ND_JUDGMENT_HIGH / Classify check box. The existing JUDGMENT setting now applies to ACER TM 11 lives in jeopardy only (default on), so TM 11 is unchanged)
     2.34.5 (2026-10-25; reproduce / data folder: every file of every role, or a warning)
       * Reproduce: a role recorded as one file (roads, rail, NSI, USA Structures, ...) was
         skipped without a word, and a role with several files (AADT: HPMS + county roads;

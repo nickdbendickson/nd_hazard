@@ -237,7 +237,7 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                 need_dams = info["count"] if info else None
                 only = only_ids_count(S)
                 if only and "1" in steps:
-                    # 0.32.5: a one-dam (only_ids / DAM_ID) run needs room for those dams, not the layer
+                    # 0.33.1: a one-dam (only_ids / DAM_ID) run needs room for those dams, not the layer
                     need_dams = min(only, need_dams) if need_dams else only
             need_gb = (need_dams or 0) * PER_DAM_MB / 1024.0
             detail = "{:.1f} GB free".format(free / GB)

@@ -1,4 +1,4 @@
-"""0.32.5: the one-dam (Crest ND00199) chain findings of 2026-10-30, as in DamSafety Screening 0.17.59.
+"""0.33.1: the one-dam (Crest ND00199) chain findings of 2026-10-30, as in DamSafety Screening 0.18.1.
 
 (b) the preflight disk estimate counts only the only_ids dams, not the whole DWR layer;
 (c) tool 15 writes its chain log line by line, so a killed run leaves one.

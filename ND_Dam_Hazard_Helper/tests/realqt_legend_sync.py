@@ -1,4 +1,4 @@
-"""2.34.6: compat.legend_manual on a real QGIS (3.x: setAutoUpdateModel(False); 4.x:
+"""2.35.1: compat.legend_manual on a real QGIS (3.x: setAutoUpdateModel(False); 4.x:
 setSyncMode(Manual), no DeprecationWarning). Run by tests/test_legend_sync.py in its own
 process, or directly:
 

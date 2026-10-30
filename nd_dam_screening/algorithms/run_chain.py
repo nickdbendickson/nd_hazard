@@ -126,7 +126,7 @@ class RunChain(QgsProcessingAlgorithm):
         def log(m):
             lines.append(str(m))
             feedback.pushInfo(str(m))
-            if live[0] is not None:          # 0.32.5: line by line, so a killed run leaves its log
+            if live[0] is not None:          # 0.33.1: line by line, so a killed run leaves its log
                 try:
                     live[0].write(str(m) + "\n")
                     live[0].flush()
