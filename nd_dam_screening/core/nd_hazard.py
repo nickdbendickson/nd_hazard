@@ -482,9 +482,10 @@ def _inside_mask(xs, ys, ring):
 
 def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0):
     """A structure polygon (exterior ring [(x, y), ...]): (depth at the deepest cell whose
-    centre is inside, the maximum velocity over the wet cells inside, how). A footprint with
-    no cell centre inside uses the cell under its centroid. Depth units follow the arrays;
-    `to_ft` converts them to ft for the wet test."""
+    centre is inside, the velocity at that same cell, how). Depth and velocity are one
+    cell, the same rule as the Hazard Helper. A footprint with no cell centre inside uses
+    the cell under its centroid. Depth units follow the arrays; `to_ft` converts them to
+    ft for the wet test."""
     import numpy as np
     ring = [p for p in (ring or ()) if math.isfinite(p[0]) and math.isfinite(p[1])]
     if not ring:                         # 3.4.1 / 0.11.1: empty or all-NaN ring: no sample
@@ -506,12 +507,9 @@ def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0):
             k = int(np.argmax(d))
             dmax = float(d[k]) if np.isfinite(d[k]) else None
             vmax = None
-            if vel is not None:
+            if vel is not None and dmax is not None:
                 v = np.asarray(vel[r0:r1 + 1, c0:c1 + 1], float)[m]
-                wet = np.isfinite(d) & (d * to_ft >= wet_ft) & np.isfinite(v)
-                if wet.any():
-                    vmax = float(v[wet].max())
-                elif dmax is not None and np.isfinite(v[k]):
+                if np.isfinite(v[k]):
                     vmax = float(v[k])
             return dmax, vmax, "deepest of {} cells inside".format(int(m.sum()))
     cx, cy = sum(xs_) / len(xs_), sum(ys_) / len(ys_)

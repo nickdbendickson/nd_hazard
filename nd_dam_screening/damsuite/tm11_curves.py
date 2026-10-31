@@ -16,9 +16,9 @@ Columns crossing the zone labels were left out of that comparison.
 
 The suite's rule (used by all three plugins):
   * between the tabulated velocities the boundary is a straight line (linear interpolation);
-  * a velocity above the figure's range (25 / 16 ft/s) is read at the range's last value, a
-    negative velocity at 0 (ND Dam Hazard; ND Dam Breach Runner / Screening's nd_hazard.py
-    instead count any point beyond the chart's axes as high danger);
+  * a point beyond the chart's axes (velocity above 25 / 16 ft/s, or depth above 10 / 3 ft)
+    takes the high danger zone, the same rule as ND Dam Breach Runner / Screening's
+    nd_hazard.py; a negative velocity is read at 0;
   * a depth ON a boundary takes the HIGHER zone (d >= curve), because ND 5.3 gives a borderline
     case the higher class. The uploaded classify() puts a point on the line in the LOWER zone
     (d <= curve); the two differ only for a depth exactly on a line.
@@ -132,9 +132,17 @@ def thresholds(kind, velocity_fts):
 
 
 def zone(kind, depth_ft, velocity_fts):
-    """"low", "judgment" or "high" - a depth on a boundary takes the higher zone (ND 5.3)."""
-    lo, hi = thresholds(kind, velocity_fts)
+    """"low", "judgment" or "high" - a depth on a boundary takes the higher zone (ND 5.3).
+
+    A point beyond the chart's axes takes the high zone: the figure does not say a
+    faster or deeper flood is safer. A negative velocity is read at 0."""
+    k = kind_of(kind)
+    vmax, dmax = AXES[k]
+    v = float(velocity_fts)
     d = float(depth_ft)
+    if v > vmax or d > dmax:
+        return HIGH
+    lo, hi = thresholds(kind, max(0.0, v))
     if d >= hi:
         return HIGH
     if d >= lo and d > 0:

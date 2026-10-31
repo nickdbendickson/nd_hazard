@@ -186,6 +186,31 @@ BUILTIN = [
        "https://mapservice.dwr.nd.gov/swcwms", confidence="inferred",
        source="https://www.swc.nd.gov/info_edu/map_data_resources/mapservices.html",
        notes="layer names: use Test / Browse layers"),
+    _s("dwr_dam_lines_shapefile", "dwr_dam_lines", "ND DWR dam lines (shapefile download)",
+       "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="Damsline layer (index 253). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=253, format=shapefile, extent=full. ~9,976 polylines. "
+             "Attributes: feature_id, low_head_d, structure_, status."),
+    _s("dwr_dams_shapefile", "dwr_dams", "ND DWR dams (shapefile download)",
+       "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="Dams layer (index 254). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=254, format=shapefile, extent=full."),
+    _s("dwr_dugouts_shapefile", "dwr_dugouts", "ND DWR dugouts (shapefile download)",
+       "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="Dugouts layer (index 277). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=277, format=shapefile, extent=full."),
+    _s("dwr_dugout_polygons_shapefile", "dwr_dugout_polygons",
+       "ND DWR dugout polygons (shapefile download)", "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="DugoutsPoly layer (index 276). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=276, format=shapefile, extent=full."),
     # --- hydrography (1.19.0: the USGS 3D Hydrography Program is the default; NHD stays listed)
     _s("usgs_3dhp_flowline", "flowlines", "USGS 3DHP flowlines", "arcgis_feature",
        _TNM + "rest/services/3DHP_all/MapServer/50",
@@ -541,7 +566,13 @@ def list_layers(service, text):
 
 
 def urllib_get(url, timeout=60):
-    """http_get without QGIS's network client (QGIS's proxy setting still applies, 1.16.2)."""
+    """http_get without QGIS's network client (QGIS's proxy setting still applies, 1.16.2).
+
+    Only http and https. A file: URL or anything else is refused."""
+    parts = urllib.parse.urlparse(url or "")
+    if parts.scheme not in ("http", "https"):
+        raise ServiceError("refusing {}: only http and https are fetched".format(
+            parts.scheme or "a URL with no scheme"))
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with netproxy.urlopen(req, timeout=timeout) as r:
         return r.read()

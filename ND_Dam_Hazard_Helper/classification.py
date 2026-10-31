@@ -32,7 +32,9 @@ from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, TYPE_MOBILE
 
 
 def _raise(level, new):
-    return new if ND_RANK[new] > ND_RANK[level] else level
+    # "Not classified" is not in ND_RANK. An unknown class ranks below Low
+    # so a later criterion can still raise it, instead of a KeyError.
+    return new if ND_RANK.get(new, -1) > ND_RANK.get(level, -1) else level
 
 
 def _drop_low_reason(nd):
@@ -54,6 +56,21 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
     MEDIUM by rule - not probable loss of life, not a provisional High. `judgment_as_probable`
     True is the old conservative option (judgment zone counted as probable loss of life,
     HIGH); it is kept as a non-default option."""
+    # An empty inventory is not a Low dam. Low is only after structures,
+    # roads and rail were actually tested.
+    if not structs and not roads and not rails:
+        return {"cls": "Not classified",
+                "reasons": ["NOT CLASSIFIED - no structure, road or rail inventory was loaded. "
+                            "Low is used only after those layers are tested."],
+                "judgment": ["Load the suite folder or a structure layer and run again."],
+                "criteria": [], "struct_items": 0,
+                "incomplete": [n for n, ok in (("structures", structs_evaluated),
+                                               ("roads", roads_evaluated),
+                                               ("railroads", rail_evaluated)) if not ok],
+                "counts": {"habitable_probable": 0, "habitable_judgment": 0,
+                           "habitable_inundated": 0, "lifeline": 0, "roads_high": 0,
+                           "roads_medium": 0, "rail": 0, "rail_high": 0,
+                           "unverified": 0, "persons_probable": 0, "persons_judgment": 0}}
     cls = ND_LOW
     reasons, judgment = [], []
     hab = [s for s in structs if s["habitable"] == "Yes" and not s.get("dwelling_extra")]

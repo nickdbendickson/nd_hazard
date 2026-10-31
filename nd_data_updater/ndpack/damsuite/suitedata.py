@@ -27,6 +27,13 @@ the pack is not read, the data sets come from the servers. A format-2 pack also 
 files, the HIFLD layers and the land-cover raster, so nothing else has to be dropped into dwr/,
 hifld/ or nlcd/ (those folders still work when the pack lacks a layer).
 
+damsuite 1.18.3: a format-1 pack (nd_offline_pack.sqlite, or the folder holding it) answers the
+same lookups (pack_file, pack_entries, dwr_layers, hifld_layers, nlcd_raster): a data set the
+plugins open as a QGIS layer is written once to a GeoPackage in a cache outside the pack
+(pack_cache_root(); the pack itself is never written), and its rasters (the land cover) are the
+files its manifest.json lists under "rasters", next to the .sqlite. A zipped format-1 pack is not
+read here (unpack it: ND Dam Hazard does on first use).
+
 Nothing here downloads; `status()` only looks at the files. Pure Python standard library (QGIS's
 QgsSettings is used when it can be imported).
 """
@@ -56,7 +63,12 @@ PACK_FILES = {"dwr_dams": "DWR_dams", "dwr_dam_lines": "DWR_dam_lines",
 TERRAIN, NLCD, DEM, DWR, HIFLD = "terrain", "nlcd", "dem", "dwr", "hifld"
 SUBFOLDERS = (TERRAIN, NLCD, DEM, DWR, HIFLD)
 MANIFEST = "manifest.json"
-RASTER_EXT = (".tif", ".tiff", ".vrt", ".img")
+# damsuite 1.18.3: ".gpkg" too - the pack's land cover is a GeoPackage raster
+# (landcover/NLCD_2021_landcover.gpkg), and a copy of it in nlcd/ is found like a .tif
+RASTER_EXT = (".tif", ".tiff", ".vrt", ".img", ".gpkg")
+# 1.17.4: tile caches inside dem/ that are not "your own DEM": Screening's native 3DEP 1 m lidar
+# tiles (dem/lidar_1m/, hundreds of 10 km tiles) would otherwise be taken by local_dem().
+TILE_CACHES = ("lidar_1m",)
 VECTOR_EXT = (".gpkg", ".shp", ".geojson", ".json", ".kml", ".kmz", ".zip", ".gdb", ".csv")
 STALE_DAYS = 365          # a pack data set older than this is offered for refresh
 
@@ -253,22 +265,181 @@ def _gpkg_manifest(pack):
     return m
 
 
+
+def _safe_rel(file):
+    """A manifest file entry that stays inside the pack folder, or "".
+
+    Same rule as offline_pack._v1_rasters: no absolute path, no drive letter,
+    no ".." and no empty segment. A tampered pack must not point at another file."""
+    f = str(file or "").replace('\\', "/")
+    parts = f.split("/")
+    if not f or f.startswith("/") or ":" in f or ".." in parts or "" in parts:
+        return ""
+    return f
+
+
 def pack_file(name, pack=None, kind="datasets"):
     """1.10.0: the file of data set (kind "datasets") or raster (kind "rasters") `name` in a
-    format-2 pack (the active pack by default), or "" (no such layer, Download mode, a
-    format-1 pack)."""
+    format-2 pack (the active pack by default), or "" (no such layer, Download mode).
+    damsuite 1.18.3: a format-1 pack too - a data set is its GeoPackage in the cache
+    (_v1_layer), a raster the file its manifest lists next to the .sqlite."""
     pack = active_pack() if pack is None else pack
     e = (_gpkg_manifest(pack).get(kind) or {}).get(name) or {}
-    if not e.get("file"):
+    rel = _safe_rel(e.get("file"))
+    if rel:
+        p = os.path.join(pack, *rel.split("/"))
+        return p if os.path.isfile(p) else ""
+    if e.get("file"):
         return ""
-    p = os.path.join(pack, *e["file"].split("/"))
-    return p if os.path.isfile(p) else ""
+    db = _v1_db(pack)
+    if not db:
+        return ""
+    e = (_v1_manifest(db).get(kind) or {}).get(name) or {}
+    if kind == "rasters":
+        rel = _safe_rel(e.get("file"))
+        p = os.path.join(os.path.dirname(db), *rel.split("/")) if rel else ""
+        return p if p and os.path.isfile(p) else ""
+    return _v1_layer(db, name) if e else ""
 
 
 def pack_entries(pack=None, kind="datasets"):
-    """{name: manifest entry} of a format-2 pack's data sets / rasters ({} otherwise)."""
+    """{name: manifest entry} of a pack's data sets / rasters ({} otherwise). damsuite 1.18.3:
+    a format-1 pack's usable data sets too (group as a format-2 pack would file them)."""
     pack = active_pack() if pack is None else pack
-    return dict(_gpkg_manifest(pack).get(kind) or {})
+    m = _gpkg_manifest(pack)
+    if not m:
+        db = _v1_db(pack)
+        m = _v1_manifest(db) if db else {}
+    return dict(m.get(kind) or {})
+
+
+# ----------------------------------------------- damsuite 1.18.3: format-1 pack --
+ENV_PACK_CACHE = "NDSUITE_PACK_CACHE"
+_V1_MANIFESTS = {}
+
+
+def _v1_db(pack):
+    """The nd_offline_pack.sqlite of a format-1 pack (the file, or a folder holding it), or ""
+    (no pack, a format-2 pack, a zip, not an offline pack)."""
+    if not pack:
+        return ""
+    try:
+        from . import offline_pack as OP
+    except Exception:                                            # noqa
+        return ""
+    p = str(pack)
+    db = os.path.join(p, OP.DB_NAME) if os.path.isdir(p) else p
+    if not db.lower().endswith(".sqlite") or not os.path.isfile(db):
+        return ""
+    try:
+        import pathlib
+        import sqlite3
+        con = sqlite3.connect(OP.sqlite_ro_uri(pathlib.Path(os.path.abspath(db))), uri=True)
+        try:
+            row = con.execute("SELECT value FROM meta WHERE key='format'").fetchone()
+        finally:
+            con.close()
+    except Exception:                                            # noqa
+        return ""
+    return db if row and row[0] == OP.PACK_FORMAT else ""
+
+
+def _v1_manifest(db):
+    """{"datasets": {name: entry}, "rasters": {name: entry}} of a format-1 pack (cached by the
+    file times): the usable data sets of its datasets table (count, geometry, status; category
+    and label from manifest.json beside it; group as gpkgpack files them), and the rasters
+    manifest.json lists whose file is next to the .sqlite."""
+    man_p = os.path.join(os.path.dirname(db), MANIFEST)
+    try:
+        stamp = (os.path.getmtime(db), os.path.getmtime(man_p) if os.path.isfile(man_p) else 0)
+    except OSError:
+        return {}
+    hit = _V1_MANIFESTS.get(db)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    out = {"datasets": {}, "rasters": {}}
+    try:
+        import pathlib
+        import sqlite3
+        from . import offline_pack as OP
+        from . import gpkgpack as GP
+        try:
+            with open(man_p, encoding="utf-8") as fh:
+                man = json.load(fh)
+            man = man if isinstance(man, dict) else {}
+        except (OSError, ValueError):
+            man = {}
+        listed = man.get("datasets") if isinstance(man.get("datasets"), dict) else {}
+        con = sqlite3.connect(OP.sqlite_ro_uri(pathlib.Path(os.path.abspath(db))), uri=True)
+        try:
+            rows = con.execute("SELECT name, count, status, geometry FROM datasets").fetchall()
+        finally:
+            con.close()
+        for name, count, status, geom in rows:
+            if status not in OP.USABLE_STATUS or not count:
+                continue
+            e = dict(listed.get(name) or {}) if isinstance(listed.get(name), dict) else {}
+            e.update({"count": int(count), "status": status, "geometry": geom or "",
+                      "group": GP.group_of(name)})
+            out["datasets"][name] = e
+        rasters = man.get("rasters") if isinstance(man.get("rasters"), dict) else {}
+        for name, e in rasters.items():
+            if isinstance(e, dict) and isinstance(e.get("file"), str) and e["file"] and \
+                    ".." not in e["file"].replace("\\", "/").split("/") and \
+                    not os.path.isabs(e["file"]):
+                out["rasters"][name] = dict(e)
+    except Exception:                                            # noqa
+        out = {"datasets": {}, "rasters": {}}
+    _V1_MANIFESTS[db] = (stamp, out)
+    return out
+
+
+def pack_cache_root():
+    """Where format-1 data sets are written as GeoPackages: NDSUITE_PACK_CACHE, else the user's
+    cache folder (%LOCALAPPDATA% on Windows, $XDG_CACHE_HOME or ~/.cache elsewhere) /ndsuite/
+    pack_v1. Never inside the pack."""
+    env = os.environ.get(ENV_PACK_CACHE, "").strip()
+    if env:
+        return os.path.abspath(os.path.expanduser(env))
+    base = os.environ.get("LOCALAPPDATA") if os.name == "nt" else \
+        os.environ.get("XDG_CACHE_HOME")
+    base = base or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "ndsuite", "pack_v1")
+
+
+def _v1_key(db):
+    import hashlib
+    st = os.stat(db)
+    raw = "{}|{}|{}".format(os.path.normcase(os.path.abspath(db)), st.st_size,
+                            int(getattr(st, "st_mtime_ns", st.st_mtime * 1e9)))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _v1_layer(db, name):
+    """The GeoPackage of format-1 data set `name` (layer `name`, EPSG:4326, as a format-2 pack
+    holds it): written once to pack_cache_root()/<pack key>/<group>/<name>.gpkg, again when
+    the .sqlite changes. "" when it cannot be written."""
+    try:
+        from . import gpkgpack as GP
+        folder = os.path.join(pack_cache_root(), _v1_key(db), GP.group_of(name))
+        path = os.path.join(folder, name + ".gpkg")
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+        os.makedirs(folder, exist_ok=True)
+        tmp = "{}.{}.part".format(path, os.getpid())
+        try:
+            GP.write_layer(tmp, name, GP._v1_features(db, name),
+                           description="{} (from the format-1 offline pack {})".format(name, db))
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        return path
+    except Exception:                                            # noqa
+        return ""
 
 
 def hifld_layers(folder=None):
@@ -358,6 +529,9 @@ def find_pack(folder=None):
                 return p
     except OSError:
         pass
+    # damsuite 1.18.3: the folder itself an unpacked format-1 pack (after the format-2 packs)
+    if os.path.isdir(folder) and _v1_db(folder):
+        return folder
     # any other *pack*.zip (a renamed pack)
     try:
         for n in sorted(os.listdir(folder)):
@@ -374,7 +548,7 @@ def _files(folder, exts, recurse=True):
         return out
     for root, dirs, files in os.walk(folder):
         dirs[:] = [d for d in dirs if not d.startswith((".", "_")) and not
-                   d.lower().endswith(".gdb")] if recurse else []
+                   d.lower().endswith(".gdb") and d.lower() not in TILE_CACHES] if recurse else []
         for d in list(os.listdir(root)):
             if d.lower().endswith(".gdb") and ".gdb" in exts and os.path.isdir(
                     os.path.join(root, d)):
@@ -396,19 +570,17 @@ def dropins(folder, name):
     return _files(sub(folder, name), VECTOR_EXT)
 
 
-def dwr_layers(folder=None):
+def dwr_layers(folder=None, pack=True):
     """{"dwr_dams", "dwr_dam_lines", "dwr_unknown", "dwr_dugouts", "dwr_dugout_polygons": path or ""}
     from the dwr/ drop-in folder: a file whose name has "line" in it is the dam lines; 1.7.0: names
     with "unknown" are DWR's unknown structures, "dugout" its dugouts ("poly" in the name: the
     dugout polygons); the first other file is the dams inventory. The unknown-structure and dugout
-    files are also looked for in dwr/_other/ (where the offline pack keeps them)."""
+    files are also looked for in dwr/_other/ (where the offline pack keeps them).
+    damsuite 1.17.7: the engineer's own dwr/ file first; the active format-2 pack's DWR layer
+    (PACK_FILES) only for what dwr/ lacks (pack=False: dwr/ only). Before, the pack won."""
     folder = data_folder() if folder is None else folder
     out = {"dwr_dams": "", "dwr_dam_lines": "", "dwr_unknown": "", "dwr_dugouts": "",
            "dwr_dugout_polygons": ""}
-    # 1.10.0: the active format-2 pack's DWR layers first; dwr/ for what the pack lacks
-    pack = active_pack(folder)
-    for key, name in PACK_FILES.items():
-        out[key] = pack_file(name, pack) if pack else ""
     d = sub(folder, DWR)
     files = dropins(folder, DWR) + (_files(os.path.join(d, "_other"), VECTOR_EXT) if d else [])
     for p in files:
@@ -425,6 +597,11 @@ def dwr_layers(folder=None):
         else:
             key = "dwr_dams"
         out[key] = out[key] or p
+    if pack and not all(out.values()):
+        pk = active_pack(folder)
+        for key, name in PACK_FILES.items():
+            if not out[key] and pk:
+                out[key] = pack_file(name, pk)
     return out
 
 
@@ -439,8 +616,8 @@ def local_dem(folder=None):
 
 
 def nlcd_raster(folder=None):
-    """The land-cover raster: 1.10.0 the active pack's (a raster whose name starts with NLCD),
-    else the first raster in nlcd/."""
+    """The land-cover raster: 1.10.0 the active pack's (a raster whose name starts with NLCD;
+    damsuite 1.18.3: a format-1 pack's too), else the first raster in nlcd/."""
     folder = data_folder() if folder is None else folder
     pack = active_pack(folder)
     for name in sorted(pack_entries(pack, "rasters")):
@@ -564,6 +741,11 @@ def status(folder=None, now=None):
     out["terrain_mb"] = round(_size(tdir) / 1e6, 1) if os.path.isdir(tdir) else 0.0
     out["nlcd"] = nlcd_raster(folder)
     out["dem"] = local_dem(folder)
+    dem_files = rasters(folder, DEM)
+    if not any(p.lower().endswith(".vrt") for p in dem_files) and len(dem_files) > 1:
+        out["problems"].append(
+            "dem/ has {} rasters and no .vrt mosaic, so none is used. Make one VRT, "
+            "or leave a single raster.".format(len(dem_files)))
     out["dwr"] = dwr_layers(folder)
     out["hifld"] = [p for p, _c in hifld_layers(folder)]
     return out

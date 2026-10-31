@@ -38,6 +38,82 @@ MODEL_FOLDER = "_breach_model"
 SCREENING_FOLDER = "_screening_model"
 STATUSES = ("MATCH", "DIFFERENT", "NOT IN MANIFEST", "MISSING")
 _cache = {}
+# Persistent copy of _cache for large files (>= PERSIST_MIN bytes), so a new process (each
+# qgis_process run, each chain step) does not hash the same multi-hundred-MB pack layers again.
+# Same key as _cache (absolute path, size, mtime in ns, full_limit): a changed file gets a new
+# key and is hashed again. DAMSUITE_DIGEST_CACHE overrides the file; set it empty to disable.
+PERSIST_MIN = 1 << 20
+_DISK_MAX = 20000
+_disk = None
+
+
+def _disk_path():
+    p = os.environ.get("DAMSUITE_DIGEST_CACHE")
+    if p is not None:
+        return p or None
+    return os.path.join(os.path.expanduser("~"), ".cache", "damsuite", "file_digests.json")
+
+
+def _disk_load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _disk_get(key):
+    global _disk
+    path = _disk_path()
+    if not path:
+        return None
+    if _disk is None:
+        _disk = _disk_load(path)
+    v = _disk.get(json.dumps(list(key)))
+    return dict(v) if isinstance(v, dict) and "sha256" in v else None
+
+
+_pending = {}
+_last_flush = [0.0]
+
+
+def _disk_flush():
+    """Write the pending digests (merged with what other processes wrote meanwhile)."""
+    global _disk
+    path = _disk_path()
+    if not path or not _pending:
+        return
+    try:
+        data = _disk_load(path)
+        data.update(_pending)
+        while len(data) > _DISK_MAX:
+            data.pop(next(iter(data)))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = "{}.{}.tmp".format(path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+        _disk = data
+        _pending.clear()
+    except OSError:                              # a cache only: never fails the caller
+        pass
+
+
+def _disk_put(key, out):
+    import time
+    if not _disk_path():
+        return
+    _pending[json.dumps(list(key))] = dict(out)
+    if _disk is not None:
+        _disk[json.dumps(list(key))] = dict(out)
+    if not _last_flush[0]:
+        import atexit
+        atexit.register(_disk_flush)
+    now = time.monotonic()
+    if now - _last_flush[0] > 5.0:              # at most one write every 5 s, and at exit
+        _last_flush[0] = now
+        _disk_flush()
 
 
 def sha256_file(path):
@@ -49,10 +125,11 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def file_digest(path, full_limit=FULL_HASH_LIMIT):
+def file_digest(path, full_limit=FULL_HASH_LIMIT, use_disk_cache=True):
     """{"sha256", "size", "mtime", "sampled"} of a file, or {"missing": True}.
 
-    Identical to the ND Dam Breach Runner's core/provenance.file_digest."""
+    use_disk_cache=False skips the persistent size+mtime digest file (fingerprint
+    content_digest needs a fresh hash when a raster is rewritten in place)."""
     try:
         st = os.stat(path)
     except OSError:
@@ -60,6 +137,11 @@ def file_digest(path, full_limit=FULL_HASH_LIMIT):
     key = (os.path.abspath(path), st.st_size, st.st_mtime_ns, full_limit)
     if key in _cache:
         return dict(_cache[key])
+    if use_disk_cache and st.st_size >= PERSIST_MIN:
+        hit = _disk_get(key)
+        if hit is not None:
+            _cache[key] = dict(hit)
+            return hit
     h = hashlib.sha256()
     sampled = st.st_size > full_limit
     try:
@@ -78,6 +160,8 @@ def file_digest(path, full_limit=FULL_HASH_LIMIT):
            "mtime": datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
            "sampled": sampled}
     _cache[key] = dict(out)
+    if use_disk_cache and st.st_size >= PERSIST_MIN:
+        _disk_put(key, out)
     return out
 
 
@@ -92,12 +176,12 @@ def digest_of(manifest):
 
 
 def find_runner_manifest(dam_folder):
-    """Newest run_manifest.json of a dam folder: <dam>/_breach_model/ (the Runner),
-    <dam>/_screening_model/ (Screening 0.11+), one folder level further down
-    (<dam>/<run>/_breach_model/), or the folder itself when it is the model folder. A manifest
-    file path is returned as given. None when there is none. The newest file wins, so a
-    Screening manifest written after a Runner run is the one found - the manifest's "tool" says
-    which tool wrote it."""
+    """run_manifest.json of a dam folder. A file path is returned as given.
+
+    A Runner manifest (<dam>/_breach_model/, or <dam>/<run>/_breach_model/) wins over a
+    Screening one: the chain checks the classification against the breach run, and a later
+    Screening manifest must not shadow it. With no Runner manifest, the newest file wins
+    (Screening's own, or the folder itself). None when there is none."""
     if not dam_folder:
         return None
     if os.path.isfile(dam_folder):
@@ -115,6 +199,9 @@ def find_runner_manifest(dam_folder):
             pass
     if not found:
         return None
+    breach = [p for _t, p in found if MODEL_FOLDER in p.replace("\\", "/").split("/")]
+    if breach:
+        return max((os.path.getmtime(p), p) for p in breach)[1]
     return max(found)[1]
 
 
@@ -250,8 +337,13 @@ def chain_summary(rows):
             r.get("role"), r.get("status"),
             " ('{}')".format(r["manifest_label"]) if r.get("manifest_label") else "",
             r.get("note", "")))
-    if counts["MATCH"] == len(rows):
+    sampled = any("sampled digest" in (r.get("note") or "") for r in rows)
+    if counts["MATCH"] == len(rows) and not sampled:
         lines.append("The classification used the rasters this run wrote.")
+    elif counts["MATCH"] == len(rows):
+        lines.append("Every raster matched, but at least one digest is sampled (start, middle "
+                     "and end of a file over 2 GB). A change in the unsampled middle would "
+                     "still match, so the chain is not a full proof.")
     else:
         lines.append("The chain is NOT complete: the classification did not (provably) use "
                      "only the rasters this run wrote.")

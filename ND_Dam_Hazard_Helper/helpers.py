@@ -1516,22 +1516,32 @@ def curve_pair(kind):
 
 def classify_values(d, v, low_curve, high_curve, v_max=None):
     """ACER-11 class for 1-D arrays of valid depth/velocity values.
-    Velocities above v_max (the figure's range) are evaluated at v_max."""
+
+    A velocity above v_max (the figure's range) is high danger: the chart does
+    not say a faster flood is safer. Within the range the boundary is the curve."""
     cls = np.full(np.shape(d), CLASS_LOW, dtype=np.int16)
+    vv = np.asarray(v, dtype=np.float64)
+    beyond = None
     if v_max is not None:
-        v = np.clip(np.asarray(v, dtype=np.float64), 0.0, v_max)
-    thr = evaluate_polynomial(low_curve, v)
+        beyond = vv > float(v_max)
+        vv = np.clip(vv, 0.0, float(v_max))
+    thr = evaluate_polynomial(low_curve, vv)
     # v2.11.0: a dry cell (depth 0) stays LOW where the low curve is at 0 ft
     # (houses at 19 ft/s and above in the REG_05.2026 table)
     cls[(d >= thr) & (d > 0)] = CLASS_JUDGMENT
-    thr = evaluate_polynomial(high_curve, v)
+    thr = evaluate_polynomial(high_curve, vv)
     cls[d >= thr] = CLASS_HIGH
+    if beyond is not None:
+        cls[beyond] = CLASS_HIGH
     return cls
 
 
 def classify_scalar(h, v, low_key, high_key):
     v_max = CURVE_V_MAX.get(low_key.split("_")[0])
-    v = float(v) if v_max is None else min(max(float(v), 0.0), v_max)
+    v = float(v)
+    if v_max is not None and v > v_max:
+        return CLASS_HIGH
+    v = max(v, 0.0)
     lo = evaluate_polynomial(HAZARD_COEFFICIENTS[low_key], np.array([v]))[0]
     hi = evaluate_polynomial(HAZARD_COEFFICIENTS[high_key], np.array([v]))[0]
     if h >= hi:

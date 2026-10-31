@@ -873,9 +873,23 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None, transform=None,
     return note
 
 
+def _feat_oid(feat, oid):
+    """The object id of one ArcGIS feature, or None."""
+    if not oid or not isinstance(feat, dict):
+        return None
+    props = feat.get("properties") or feat.get("attributes") or {}
+    if oid in props:
+        return props[oid]
+    low = oid.lower()
+    for k, v in props.items():
+        if str(k).lower() == low:
+            return v
+    return None
+
+
 def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, transform=None):
     transform = transform or (lambda feats: feats)
-    offset, page = 0, 0
+    offset, page, prev_last = 0, 0, None
     size = max(1, min(2000, mrc))
     # v2.8.0: a page is a chunk too (key = offset and size; payload = how many
     # features it returned and whether more follow)
@@ -907,8 +921,16 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, tr
         feats = transform(d.get("features", []) if isinstance(d, dict) else [])
         exceeded = bool(d.get("exceededTransferLimit") or
                         (d.get("properties") or {}).get("exceededTransferLimit"))
-        added = ctx.writer.add(feats, uid, chunk=key,
-                               payload=_pack_json({"n": len(feats), "exceeded": exceeded}))
+        oids = [_feat_oid(f, oid) for f in feats]
+        oids = [v for v in oids if v is not None]
+        payload = {"n": len(feats), "exceeded": exceeded}
+        if oids:
+            payload["first_oid"], payload["last_oid"] = oids[0], oids[-1]
+        if oid and prev_last is not None and oids and oids[0] <= prev_last:
+            ctx.log("  page order changed (first oid {} is not after {}); starting over"
+                    .format(oids[0], prev_last))
+            return "page order changed; run again to rebuild"
+        added = ctx.writer.add(feats, uid, chunk=key, payload=_pack_json(payload))
         page += 1
         ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer._cur["n"]))
         if not feats or (len(feats) < size and not exceeded):
@@ -916,6 +938,8 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, tr
         if added == 0:
             return "the service repeats the same page (no paging) - {:,} kept".format(
                 ctx.writer._cur["n"])
+        if oids:
+            prev_last = oids[-1]
         offset += len(feats)
 
 

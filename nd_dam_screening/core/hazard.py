@@ -261,7 +261,6 @@ class Grid:
                             "x": x, "y": y, "how": "point"}
             return best
         if kind == "polygon":
-            vmax, wet_any = None, False
             for ring in parts:
                 d, v, how = nh.sample_footprint(self.depth, self.vel, self.x0, self.y_top,
                                                 self.cell, ring, wet_ft, 1.0 / M_PER_FT)
@@ -269,19 +268,14 @@ class Grid:
                     continue
                 cx = sum(p[0] for p in ring) / len(ring)
                 cy = sum(p[1] for p in ring) / len(ring)
+                # depth x velocity at the same cell as the depth, not the footprint maximum
                 dv = None
                 if self.dv is not None:
-                    dv = nh.sample_footprint(self.dv, None, self.x0, self.y_top, self.cell,
-                                             ring)[0]
-                if d / M_PER_FT >= wet_ft:
-                    wet_any = True
-                    if v is not None:
-                        vmax = v if vmax is None else max(vmax, v)
+                    dv = nh.sample_footprint(self.depth, self.dv, self.x0, self.y_top,
+                                             self.cell, ring, wet_ft, 1.0 / M_PER_FT)[1]
                 if best is None or d > best["depth_m"]:
                     best = {"depth_m": d, "vel_ms": v, "dv_m2s": dv, "x": cx, "y": cy,
                             "how": "polygon: " + how}
-            if best is not None and wet_any:
-                best["vel_ms"] = vmax
             return best
         if kind == "line":
             for verts in parts:

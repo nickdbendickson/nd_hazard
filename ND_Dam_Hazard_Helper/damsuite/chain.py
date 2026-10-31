@@ -176,12 +176,12 @@ def digest_of(manifest):
 
 
 def find_runner_manifest(dam_folder):
-    """Newest run_manifest.json of a dam folder: <dam>/_breach_model/ (the Runner),
-    <dam>/_screening_model/ (Screening 0.11+), one folder level further down
-    (<dam>/<run>/_breach_model/), or the folder itself when it is the model folder. A manifest
-    file path is returned as given. None when there is none. The newest file wins, so a
-    Screening manifest written after a Runner run is the one found - the manifest's "tool" says
-    which tool wrote it."""
+    """run_manifest.json of a dam folder. A file path is returned as given.
+
+    A Runner manifest (<dam>/_breach_model/, or <dam>/<run>/_breach_model/) wins over a
+    Screening one: the chain checks the classification against the breach run, and a later
+    Screening manifest must not shadow it. With no Runner manifest, the newest file wins
+    (Screening's own, or the folder itself). None when there is none."""
     if not dam_folder:
         return None
     if os.path.isfile(dam_folder):
@@ -199,6 +199,9 @@ def find_runner_manifest(dam_folder):
             pass
     if not found:
         return None
+    breach = [p for _t, p in found if MODEL_FOLDER in p.replace("\\", "/").split("/")]
+    if breach:
+        return max((os.path.getmtime(p), p) for p in breach)[1]
     return max(found)[1]
 
 
@@ -334,8 +337,13 @@ def chain_summary(rows):
             r.get("role"), r.get("status"),
             " ('{}')".format(r["manifest_label"]) if r.get("manifest_label") else "",
             r.get("note", "")))
-    if counts["MATCH"] == len(rows):
+    sampled = any("sampled digest" in (r.get("note") or "") for r in rows)
+    if counts["MATCH"] == len(rows) and not sampled:
         lines.append("The classification used the rasters this run wrote.")
+    elif counts["MATCH"] == len(rows):
+        lines.append("Every raster matched, but at least one digest is sampled (start, middle "
+                     "and end of a file over 2 GB). A change in the unsampled middle would "
+                     "still match, so the chain is not a full proof.")
     else:
         lines.append("The chain is NOT complete: the classification did not (provably) use "
                      "only the rasters this run wrote.")

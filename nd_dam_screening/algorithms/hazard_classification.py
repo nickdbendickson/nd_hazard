@@ -210,7 +210,9 @@ class HazardClassification(QgsProcessingAlgorithm):
             inc, igt = cm.read_tif(itif)
             if inc.shape != d.shape or any(abs(a - b) > 1e-6 for a, b in zip(igt, gt)):
                 raise QgsProcessingException(f"{itif}: not on the grid of {dtif}")
-            d = np.where(d > gu.NODATA + 1, np.clip(inc, 0.0, None), d)
+            # a nodata incremental cell is not dry: keep the breach depth there
+            inc_ok = np.isfinite(inc) & (inc > gu.NODATA + 1)
+            d = np.where(inc_ok, np.clip(inc, 0.0, None), d)
         try:
             g = hz.Grid(d, v, gt, gu.NODATA, dv)
         except AssertionError as e:
