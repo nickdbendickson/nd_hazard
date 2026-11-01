@@ -200,6 +200,17 @@ FT_LIST = _FT["List"]
 FT_STRINGLIST = _FT["StringList"]
 
 
+def legend_manual(legend):
+    """Stop a layout legend following the project's layers, so its own layer list is kept:
+    setSyncMode(Qgis.LegendSyncMode.Manual) where QGIS has it (QGIS 4, where
+    setAutoUpdateModel is deprecated), setAutoUpdateModel(False) on QGIS 3 (2.35.1)."""
+    mode = _first(lambda: Qgis.LegendSyncMode.Manual, default=None)
+    if mode is not None and hasattr(legend, "setSyncMode"):
+        legend.setSyncMode(mode)
+    else:
+        legend.setAutoUpdateModel(False)
+
+
 def environment_summary():
     """One line for the log: QGIS / Qt / Python / GDAL / numpy versions."""
     import sys

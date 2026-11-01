@@ -37,6 +37,13 @@ from .linear import analyze_roads, analyze_rail, FeatureIndex
 from .classification import classify_nd, classify_tm11, extra_criteria
 from .extent import make_extent_clip, distance_xy_in_crs
 
+# ndhazard:<name> of every Processing algorithm the provider registers (2.35.1)
+_EXPECTED_ALGORITHMS = (
+    "acerzones", "batch", "buildpack", "chartsignoff", "classify", "creepwatch", "damsinseries",
+    "dsswise", "ensemble", "fillform", "getdamdata", "hecrasplan", "markreviewed", "modelgate",
+    "portfolio", "quickcreep", "reproduce", "reviewpackage", "reviewsummary", "rulecompare",
+    "runbreach", "runnerculverts", "screendam", "suitechain", "suiteexport")
+
 # Synthetic grid: NAD83 / UTM 14N (metres), 1 m cells, 120 x 90.
 # Columns 0-39 depth 1 ft, 40-79 depth 3 ft, 80-119 depth 7 ft.
 # Rows 0-9 are NoData. Velocity 6 ft/s on a coarser, shifted grid (forces
@@ -204,9 +211,14 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
         from .processing_provider import Provider
         prov = Provider()
         prov.refreshAlgorithms()
-        # acerzones, classify, batch, dsswise and (v2.5) hecrasplan ... (2.17.0: getdamdata)
-        rep.check("Processing provider loads 21 algorithms", len(prov.algorithms()) == 21,
-                  len(prov.algorithms()))
+        # acerzones, classify, batch, dsswise and (v2.5) hecrasplan ... (2.17.0: getdamdata).
+        # 2.35.1: checked by name, not a bare count (the count went stale at 21 when the
+        # suite-chain algorithms brought it to 25 - full test 2026-10-30)
+        names = sorted(a.name() for a in prov.algorithms())
+        missing = sorted(set(_EXPECTED_ALGORITHMS) - set(names))
+        extra = sorted(set(names) - set(_EXPECTED_ALGORITHMS))
+        rep.check("Processing provider loads its {} algorithms".format(len(_EXPECTED_ALGORITHMS)),
+                  not missing and not extra, {"missing": missing, "unexpected": extra})
     except Exception:
         rep.error("Processing provider", traceback.format_exc())
     try:
@@ -325,10 +337,13 @@ def _classification_checks(rep, rasters, utm, ctx):
                   (len(structs), sorted(zones)))
         rep.check("Address point at the driveway moved onto outline B",
                   "NDGISHUB" in zones["B"]["families"], sorted(zones["B"]["families"]))
-        # v2.20.1: an ND address point with no building (no outline within the
-        # address snap distance, no NSI point) is unverified, with a note
-        rep.check("ND address point with no building (Place_Type PARKING) unverified (noted)",
-                  zones["P"]["habitable"] == "Unverified" and bool(zones["P"].get("site_note")),
+        # audit H1 (c1c9e5f, tests/test_lone_address_h1.py): an ND 911 address point with
+        # no building (no outline within the address snap distance, no NSI point) stays
+        # habitable by the ND site address rule - conservative - with a review note. The
+        # v2.20.1 "unverified" expectation here predated H1 (2.35.1).
+        rep.check("ND address point with no building (Place_Type PARKING) habitable by the "
+                  "site address rule (noted for review)",
+                  zones["P"]["habitable"] == "Yes" and bool(zones["P"].get("site_note")),
                   (zones["P"]["habitable"], zones["P"].get("site_note")))
         rep.check("ND address structures typed 'Habitable' (house curve), NSI-only RES1 house "
                   "stays 'House on foundation'",
@@ -392,10 +407,10 @@ def _classification_checks(rep, rasters, utm, ctx):
         nd = classify_nd(structs, roads, rails)
         rep.check("ND classification = High", nd["cls"] == "High", nd["cls"])
         tm = classify_tm11(structs, roads)
-        # H (RES1) is in the 3-ft judgment band: 3 persons (v2.20.1: P, an ND
-        # address point with no building, is unverified and no longer counted)
-        rep.check("TM 11: structures 6 high + 3 judgment, motorists on CR 12 counted -> High",
-                  tm["lij_structures_high"] == 6 and tm["lij_structures_judgment"] == 3
+        # H (RES1) and P (an ND address point with no building, habitable by the site
+        # address rule since audit H1) are both in the 3-ft judgment band: 3 + 3 persons
+        rep.check("TM 11: structures 6 high + 6 judgment, motorists on CR 12 counted -> High",
+                  tm["lij_structures_high"] == 6 and tm["lij_structures_judgment"] == 6
                   and tm["lij_vehicles_high"] > 0 and tm["cls"] == "High",
                   (tm["lij_structures_high"], tm["lij_structures_judgment"],
                    round(tm["lij_vehicles_high"], 3), tm["cls"]))
@@ -476,8 +491,9 @@ def _v2201_checks(rep, utm, ctx):
     rep.check("v2.20.1 NSI point without outline next to the parcel joins it (unverified)",
               pt.get("habitable") == "Unverified" and bool(pt.get("site_note")),
               (pt.get("habitable"), pt.get("site_note")))
-    rep.check("v2.20.1 911 point with no building unverified",
-              lone.get("habitable") == "Unverified" and bool(lone.get("lone_address")),
+    rep.check("911 point with no building habitable by the site address rule (audit H1), "
+              "flagged lone_address",
+              lone.get("habitable") == "Yes" and bool(lone.get("lone_address")),
               (lone.get("habitable"), lone.get("lone_address")))
 
     class _NaNArea(object):
