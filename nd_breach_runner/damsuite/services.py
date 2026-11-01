@@ -76,6 +76,8 @@ ROLES = {
     "nid_dams": ("National Inventory of Dams", "vector", "all three"),
     "dwr_dams": ("ND DWR dams inventory", "vector", "Screening"),
     "dwr_dam_lines": ("ND DWR dam lines", "vector", "Screening"),
+    "dwr_dugouts": ("ND DWR dugouts", "vector", "Screening"),
+    "dwr_dugout_polygons": ("ND DWR dugout polygons", "vector", "Screening"),
     "flowlines": ("Flowlines (streams; 3DHP, was NHD)", "vector", "all three"),
     "waterbodies": ("Waterbodies (3DHP, was NHD)", "vector", "Screening, Breach Runner"),
     "barrier_dams": ("Aquatic barrier dams (SARP)", "vector", "offline pack"),

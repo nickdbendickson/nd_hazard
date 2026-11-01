@@ -778,7 +778,11 @@ def fetch_role(role, box, catalog=None, http_get=None, cancel=None):
     srole = SERVICE_ROLE.get(role, role)
     s = catalog.chosen(srole) if srole else None
     if s is not None and s.get("kind") == "file":
-        return read_vector_file(s["url"], box), "your file " + s["url"], s["url"]
+        url = s.get("url") or ""
+        if url.startswith("http://") or url.startswith("https://"):
+            s = None          # a download link, not a file on this computer
+        else:
+            return read_vector_file(url, box), "your file " + url, url
     if s is not None and SV.data_capable(s, srole):
         feats = SV.fetch_features(s, box, http_get=http_get, cancel=cancel)
         return feats, "{} ({})".format(s["name"], SV.layer_url(s)), s["name"]
