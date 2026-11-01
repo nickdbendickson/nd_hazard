@@ -79,7 +79,9 @@ PACK_SETS = {"structures": ("USA_Structures",), "structure_points": ("NSI_struct
              "nid_dams": ("NID_dams",), "flowlines": ("3DHP_flowlines", "NHD_flowlines"),
              "waterbodies": ("3DHP_waterbodies", "NHD_waterbodies"), "dwr_dams": ("DWR_dams",),
              "dwr_dam_lines": ("DWR_dam_lines",), "counties": ("ND_counties",),
-             "flood_zones": ("FEMA_flood_zones",), "lifelines": ()}
+             "flood_zones": (), "lifelines": ()}
+# damsuite 1.18.3: no pack holds the FEMA flood zones (build_nd_pack never had them; the Data pack
+# builder does not add them) - the role always comes from its service, so it claims no pack layer
 # role -> the suite service role (services.ROLES) used for a live download
 SERVICE_ROLE = {"structure_points": None, "lifelines": None}
 MI = 1609.344
@@ -292,8 +294,11 @@ def dam_values(props):
     out = {"name": g("name", "dam_name", "damname"),
            "nid_id": g("nidid", "nid_id"),
            "county": g("county", "countyname", "county_name"),
-           "height_ft": _num(g("nid_height", "dam_height", "height_ft", "height",
-                               "structural_height")),
+           # the largest height the record gives: the conservative side for a breach
+           "height_ft": max([v for v in (_num(props.get(k)) for k in
+                                         ("nid_height", "dam_height", "height_ft", "height",
+                                          "structural_height")) if v] or [None],
+                            key=lambda v: v or 0),
            # the largest storage the record gives: the conservative side for a breach
            "storage_acft": max([v for v in (_num(g("nid_storage")), _num(g("max_storage")),
                                             _num(g("storage_acft")), _num(g("storage")),
@@ -536,6 +541,13 @@ def get_data_for_dam(folder, data_folder=None, catalog=None, http_get=None, make
     say = lambda m: (out["lines"].append(m), log(m))             # noqa
     say("Dam {} at {:.5f}, {:.5f} ({})".format(rec.get("dam_id") or os.path.basename(folder),
                                               lon, lat, how))
+    if reader is not None:                                       # 1.17.5: pack vs its manifest
+        try:
+            from . import packcheck as PC
+            for line in PC.check_pack(pack).lines(notes=False):
+                say(line)
+        except Exception as e:                                   # noqa
+            log("offline pack check not run: {}".format(e))
     ddir = os.path.join(folder, DATA_DIR)
     os.makedirs(ddir, exist_ok=True)
     vbox = _lonlat_box(lon, lat, vector_half_mi)
@@ -708,6 +720,14 @@ def _hydro():
 def _get_vector(rec, role, ddir, box, reader, data_folder, catalog, http_get, cancel, say):
     """One vector role from the pack, a drop-in file or a live service; None when no source."""
     path = os.path.join(ddir, "{}.gpkg".format(role))
+    # 0. damsuite 1.17.7: the engineer's own DWR export in dwr/ wins over the pack's copy
+    if role in ("dwr_dams", "dwr_dam_lines") and data_folder:
+        f = SD.dwr_layers(data_folder, pack=False).get(role)
+        if f:
+            feats = read_vector_file(f, box)
+            cnt = write_features(path, role, feats, f)
+            say("{}: {} from {}".format(LABELS.get(role, role), cnt, f))
+            return set_entry(rec, role, "{}|layername={}".format(path, role), "your file " + f, cnt)
     # 1. the offline pack
     if reader is not None:
         names = list(PACK_SETS.get(role, ()))
@@ -758,7 +778,11 @@ def fetch_role(role, box, catalog=None, http_get=None, cancel=None):
     srole = SERVICE_ROLE.get(role, role)
     s = catalog.chosen(srole) if srole else None
     if s is not None and s.get("kind") == "file":
-        return read_vector_file(s["url"], box), "your file " + s["url"], s["url"]
+        url = s.get("url") or ""
+        if url.startswith("http://") or url.startswith("https://"):
+            s = None          # a download link, not a file on this computer
+        else:
+            return read_vector_file(url, box), "your file " + url, url
     if s is not None and SV.data_capable(s, srole):
         feats = SV.fetch_features(s, box, http_get=http_get, cancel=cancel)
         return feats, "{} ({})".format(s["name"], SV.layer_url(s)), s["name"]

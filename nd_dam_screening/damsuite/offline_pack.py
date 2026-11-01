@@ -974,6 +974,32 @@ def _unzip_folder(zip_path, manifest, log):
     raise PackError("no writable folder to unpack {} into".format(zip_path))
 
 
+def _v1_rasters(manifest):
+    """damsuite 1.18.3: the format-1 pack's raster files (manifest "rasters", e.g. the NLCD
+    land cover GeoPackage), as safe paths relative to the sqlite's folder."""
+    out = []
+    for e in ((manifest or {}).get("rasters") or {}).values():
+        f = str((e or {}).get("file") or "").replace("\\", "/") if isinstance(e, dict) else ""
+        parts = f.split("/")
+        if f and not f.startswith("/") and ":" not in f and ".." not in parts and "" not in parts:
+            out.append(f)
+    return out
+
+
+def _unzip_v1_rasters(z, names, src, rasters, target):
+    """damsuite 1.18.3: unpack the listed rasters beside the sqlite (members under the
+    sqlite's folder in the zip)."""
+    prefix = src[:-len(DB_NAME)]
+    for f in rasters:
+        if prefix + f not in names:
+            continue
+        dst = os.path.join(target, *f.split("/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with z.open(prefix + f) as fin, open(dst + ".part", "wb") as fout:
+            shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
+        os.replace(dst + ".part", dst)
+
+
 def _unzip(zip_path, log):
     manifest = read_manifest(zip_path)
     if manifest is None or manifest.get("format") != PACK_FORMAT:
@@ -984,7 +1010,9 @@ def _unzip(zip_path, log):
     for target in _extract_target(zip_path, manifest):
         db = os.path.join(target, DB_NAME)
         have = read_manifest(target)
-        if os.path.isfile(db) and have and have.get("created") == manifest.get("created"):
+        rasters = _v1_rasters(manifest)
+        if os.path.isfile(db) and have and have.get("created") == manifest.get("created") \
+                and all(os.path.isfile(os.path.join(target, *f.split("/"))) for f in rasters):
             return db
         try:
             os.makedirs(target, exist_ok=True)
@@ -1006,6 +1034,7 @@ def _unzip(zip_path, log):
             with z.open(src) as fin, open(tmp, "wb") as fout:
                 shutil.copyfileobj(fin, fout, 4 * 1024 * 1024)
             os.replace(tmp, db)
+            _unzip_v1_rasters(z, names, src, rasters, target)
             mf = next(n for n in names if n.rsplit("/", 1)[-1] == MANIFEST_NAME)
             with open(os.path.join(target, MANIFEST_NAME), "wb") as fh:
                 fh.write(z.read(mf))

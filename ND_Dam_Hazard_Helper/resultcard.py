@@ -146,7 +146,7 @@ def criteria_met(nd, roads=(), rails=(), access=None):
 
 def governing(met, cls):
     """(the criteria that carry `cls`, the class it would be without them)."""
-    rank = ND_RANKS.get(str(cls or "").title(), 0)
+    rank = ND_RANKS.get(str(cls or "").title(), -1)
     carry = [m for m in met if ND_RANKS.get(m[0], 0) >= rank]
     rest = [m for m in met if ND_RANKS.get(m[0], 0) < rank]
     without = "Low"
@@ -159,7 +159,7 @@ def governing(met, cls):
 def reason_text(nd, met, carry):
     """The ONE reason sentence ("High: 2 BNSF railroad stretches, 15 trains/day; nothing else
     makes it High")."""
-    cls = str((nd or {}).get("cls") or "").title() or "Low"
+    cls = str((nd or {}).get("cls") or "").title() or "Not classified"
     if not met:
         return "{}: no habitable structure, road (AADT 500 or more / highway) or railroad is " \
                "affected.".format(cls)

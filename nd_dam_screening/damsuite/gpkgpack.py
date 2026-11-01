@@ -48,9 +48,10 @@ GROUPS = (
     ("railroads", ("NARN_rail_lines", "FRA_grade_crossings")),
     ("lifelines", ("lifeline_", "OSM_lifelines")),
     ("hydro", ("3DHP_", "NHD_", "NID_dams")),
-    ("barriers", ("SARP_",)),
+    ("barriers", ("SARP_", "ABI_")),
     ("dwr", ("DWR_",)),
     ("hifld", ("HIFLD_",)),
+    ("nddeq", ("NDDEQ_",)),
     ("boundaries", ("ND_counties", "FEMA_flood_zones")),
 )
 RASTER_GROUP = "landcover"
@@ -222,11 +223,13 @@ def write_layer(path, name, features, description="", fields=None, geometry=None
         lw = w.layer(name, geometry, [(c, _COLTYPE[k]) for c, _n, k in fields], G.EPSG_4326,
                      description=description, spatial_index=True, raw=True)
         names = [(c, n, k) for c, n, k in fields]
+        dropped = 0
         for f in features():
             props = (f or {}).get("properties") or {}
             g = (f or {}).get("geometry")
-            if g is not None and not _has_points(g):
-                g = None
+            if g is None or not _has_points(g):
+                dropped += 1
+                continue
             lw.add(g, {c: _store(props.get(n), k) for c, n, k in names})
         count, box = lw.count, lw.box
         w.close()
@@ -235,7 +238,7 @@ def write_layer(path, name, features, description="", fields=None, geometry=None
         raise
     return {"count": count, "fields": fields, "geometry": geometry,
             "bbox": [round(v, 7) for v in box] if box else None,
-            "file_size": os.path.getsize(path)}
+            "file_size": os.path.getsize(path), "dropped_no_geom": dropped}
 
 
 def _v1_features(db, name):
@@ -305,6 +308,9 @@ def add_dataset(folder, manifest, name, features, info, log=None):
     e.update({"file": rel, "layer": name, "count": res["count"], "geometry": res["geometry"],
               "fields": res["fields"], "bbox": res["bbox"], "file_size": res["file_size"],
               "group": group_of(name)})
+    if res.get("dropped_no_geom"):
+        extra = "{} feature(s) had no geometry and were left out".format(res["dropped_no_geom"])
+        e["note"] = (e.get("note") + "; " if e.get("note") else "") + extra
     e.setdefault("status", "complete")
     manifest["datasets"][name] = e
     manifest.get("left_out", {}).pop(name, None)
@@ -528,8 +534,9 @@ def remove_dataset(folder, manifest, name, reason=""):
     """Take a data set out of the pack (file deleted; listed under left_out with the reason)."""
     e = manifest.get("datasets", {}).pop(name, None) or manifest.get("rasters", {}).pop(name, None)
     if e and e.get("file"):
-        p = os.path.join(folder, *e["file"].split("/"))
-        if os.path.isfile(p):
+        rel = _safe_rel(e.get("file"))
+        p = os.path.join(folder, *rel.split("/")) if rel else ""
+        if p and os.path.isfile(p):
             os.remove(p)
     if reason:
         manifest.setdefault("left_out", {})[name] = reason
@@ -610,6 +617,19 @@ def write_layers_txt(folder, manifest):
 
 
 # ---------------------------------------------------------------- reading --
+
+def _safe_rel(file):
+    """A manifest file entry that stays inside the pack folder, or "".
+
+    Same rule as offline_pack._v1_rasters: no absolute path, no drive letter,
+    no ".." and no empty segment. A tampered pack must not point at another file."""
+    f = str(file or "").replace('\\', "/")
+    parts = f.split("/")
+    if not f or f.startswith("/") or ":" in f or ".." in parts or "" in parts:
+        return ""
+    return f
+
+
 class GpkgPackReader(object):
     """Read access to a format-2 pack folder, with the methods of offline_pack.PackReader
     (has, info, covers, query, created, datasets, bbox, meta). Thread-safe: one read-only
@@ -634,7 +654,10 @@ class GpkgPackReader(object):
         for name, e in (m.get("datasets") or {}).items():
             if e.get("status") not in OP.USABLE_STATUS or not e.get("file"):
                 continue
-            p = os.path.join(self.folder, *e["file"].split("/"))
+            rel = _safe_rel(e.get("file"))
+            if not rel:
+                continue
+            p = os.path.join(self.folder, *rel.split("/"))
             if not os.path.isfile(p):
                 continue
             d = dict(e)
@@ -643,8 +666,11 @@ class GpkgPackReader(object):
             self.datasets[name] = d
         self.rasters = {}
         for name, e in (m.get("rasters") or {}).items():
-            p = os.path.join(self.folder, *(e.get("file") or "").split("/"))
-            if e.get("file") and os.path.isfile(p):
+            rel = _safe_rel(e.get("file"))
+            if not rel:
+                continue
+            p = os.path.join(self.folder, *rel.split("/"))
+            if os.path.isfile(p):
                 d = dict(e)
                 d["path"] = p
                 self.rasters[name] = d

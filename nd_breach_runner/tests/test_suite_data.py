@@ -249,6 +249,8 @@ def hazard_gets_only_the_addresses_the_user_changed():
 @check
 def qgis_sources_for_each_kind():
     for s in SV.BUILTIN:
+        if s["kind"] == "file":
+            continue                                         # a file or a download link, not a service
         if s["kind"] in ("wms", "wcs") and not s["layer"]:
             continue                                         # layer picked with Browse layers
         prov, uri, name = SV.qgis_layer_source(s)

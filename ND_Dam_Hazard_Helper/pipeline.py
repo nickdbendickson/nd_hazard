@@ -1540,7 +1540,7 @@ def _classify_and_write(run, cfg, state):
             extra_criteria(nd_t, structs, res, cfg, total=True)
             res["nd_total"] = nd_t
             res["tm11_total"] = classify_tm11(structs, res["roads"], judgment_as_probable=judge)
-    gov = max(breaches, key=lambda s: (ND_RANK[run.results[s.name]["nd"]["cls"]],
+    gov = max(breaches, key=lambda s: (ND_RANK.get(run.results[s.name]["nd"]["cls"], -1),
                                        run.results[s.name]["tm11"]["lij"]))
     governing = run.results[gov.name]
 

@@ -76,7 +76,7 @@ FIELDS = collections.OrderedDict([
     ("top_of_dam_ft", (float, "top of dam elevation, ft")),
     ("normal_pool_ft", (float, "normal pool elevation, ft")),
     ("dam_length_ft", (float, "dam crest length, ft")),
-    ("top_of_dam_datum", (str, "datum of top_of_dam_ft / normal_pool_ft: 'NAVD88 ft', 'DEM' "
+    ("top_of_dam_datum", (str, "datum of top_of_dam_ft / normal_pool_ft: 'NAVD88 ft', 'NGVD29 ft', 'DEM' "
                                "or 'local' (local datum values are not used as elevations)")),
     ("existing_hazard_class", (str, "High / Medium / Low / Significant ... as given")),
 ])

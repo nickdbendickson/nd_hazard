@@ -104,7 +104,8 @@ def downstream(dams, rings, source=None, source_id="", same_dam_mi=SAME_DAM_MI):
         if sid and did.lower() == sid:
             continue
         dist = miles(source, p) if source else None
-        if source and dist is not None and dist <= same_dam_mi:
+        # no id and this close: the source itself. A different id is another dam.
+        if source and dist is not None and dist <= same_dam_mi and not did:
             continue
         if not in_flood(p, rings):
             continue

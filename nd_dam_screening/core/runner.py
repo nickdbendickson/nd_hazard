@@ -341,7 +341,7 @@ def _simulate(case, load_dem, load_manning=None, opts=None, log=None, cancel=Non
             base = _baseline(dem_m, gt, cell, man, main, rset, case, sim_s, o, cancel, t_start, log)
             res.update({"base_run": True, "baseline_cfs": float(o["baseline_cfs"]),
                         "base_depth": base["depth"], "base_vel": base["vel"],
-                        "incr_depth": np.clip(out["depth"] - base["depth"], 0.0, None),
+                        "incr_depth": _incr(out["depth"], base["depth"]),
                         "base_sim_s": base["sim_s"]})
             notes.append(base["note"])
             if base.get("mass") and abs(base["mass"]["error_pct"]) > 0.5:
@@ -391,6 +391,17 @@ def _apply_buildings(dem_m, man, gt, valid, main, rset, o):
         info["note"] = (f"buildings: Manning n {nb:.3f} at {info['cells']} cells ({len(polys)} footprints "
                         f"near the dam; screening approximation)")
     return dem_m, man, info
+
+
+
+def _incr(depth, base_d):
+    """Breach minus baseline, nodata where either raster has no value.
+
+    Clipping a nodata cell to 0 made a cell the breach reached look dry."""
+    both = (depth > NODATA + 1) & (base_d > NODATA + 1)
+    incr = np.full(depth.shape, NODATA, dtype=depth.dtype)
+    incr[both] = np.clip(depth[both] - base_d[both], 0.0, None)
+    return incr
 
 
 def _baseline(dem_m, gt, cell, man, main, rset, case, sim_s, o, cancel, t_start, log):

@@ -74,8 +74,12 @@ FILE_ROLES = (
      "structures DWR has not classified yet (optional)",
      "ND DWR: export the unknown structures (file name contains \"unknown\")"),
     ("dwr_dugouts", SD.DWR, "DWR dugouts",
-     "dugouts, so they are not screened as dams (optional)",
-     "ND DWR: export the dugouts (file name contains \"dugout\")"),
+     "Screening tool 1 leaves a DWR dam that is a DWR dugout (inside a dugout polygon or within "
+     "100 ft of a dugout point) out of the dams screened and logs it; one DWR gives a real hazard "
+     "class or an NID id is kept with a warning. Tool 16 labels a found pond that is a DWR dugout "
+     "(dwr_dugout) and classes it a dugout: only the water above the natural ground is released "
+     "(optional; the points and the dugout polygons)",
+     "ND DWR: export the dugouts and the dugout polygons (file names contain \"dugout\")"),
 )
 
 

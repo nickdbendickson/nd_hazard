@@ -47,6 +47,7 @@ QGIS has it). No QGIS imports here.
 
 import datetime
 import json
+from pathlib import Path
 import os
 import time
 import urllib.parse
@@ -105,11 +106,34 @@ def get_json(url, timeout=60):
         raise core.NetworkError(f"{url}: {e}") from e
 
 
+def _part_meta(part):
+    """{"etag", "head"} stored beside a partial download, or {}."""
+    path = part + ".meta"
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_part_meta(part, meta):
+    Path(part + ".meta").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def _drop_part(part):
+    for p in (part, part + ".meta"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 def download_resumable(url, dest, feedback, chunk=1 << 20, retries=8, opener=None, pause=None):
     """Stream `url` to `dest` (a .part file next to it until complete), continuing a partial
-    file with an HTTP Range request after a stop. The file is the size the server announces or
-    the download fails (and can be run again to continue). `opener(url, headers)` replaces the
-    network (tests); `pause(seconds)` the wait between tries."""
+    file with an HTTP Range request after a stop.
+
+    A partial is only continued when it still belongs to the same remote file: the ETag
+    matches, or, with no ETag, the hash of the first 64 KB matches. A mismatch starts over.
+    `opener(url, headers)` replaces the network (tests); `pause(seconds)` the wait between tries."""
     opener = opener or (lambda u, h: _open(u, h, timeout=60))
     pause = pause or time.sleep
     part = dest + ".part"
@@ -118,11 +142,39 @@ def download_resumable(url, dest, feedback, chunk=1 << 20, retries=8, opener=Non
     for attempt in range(retries):
         have = os.path.getsize(part) if os.path.exists(part) else 0
         try:
+            if have:
+                meta = _part_meta(part)
+                probe = opener(url, {"Range": "bytes=0-65535"})
+                remote = (getattr(probe, "headers", {}) or {}).get("etag") or ""
+                remote = remote.strip()
+                stored = (meta.get("etag") or "").strip()
+                same = False
+                if stored and remote:
+                    same = stored == remote
+                elif meta.get("head"):
+                    import hashlib
+                    body = probe.read(65536)
+                    same = hashlib.sha256(body).hexdigest() == meta["head"]
+                try:
+                    probe.close()
+                except Exception:
+                    pass
+                if not same:
+                    feedback.log("the remote file changed since this partial was started; starting over")
+                    _drop_part(part)
+                    have = 0
             resp = opener(url, {"Range": f"bytes={have}-"} if have else {})
             status = getattr(resp, "status", 200)
             if status == 416:                      # the partial file is already everything
                 os.replace(part, dest)
+                try:
+                    os.remove(part + ".meta")
+                except OSError:
+                    pass
                 return dest
+            etag = (getattr(resp, "headers", {}) or {}).get("etag") or ""
+            if etag and not have:
+                _save_part_meta(part, {"etag": etag.strip()})
             length = int(resp.headers.get("Content-Length") or 0)
             if status == 206:
                 total, mode = have + length, "ab"
@@ -130,19 +182,29 @@ def download_resumable(url, dest, feedback, chunk=1 << 20, retries=8, opener=Non
                 total, mode, have = length, "wb", 0
             with open(part, mode) as out:
                 got = have
+                head = b""
                 while True:
                     feedback.check_cancelled()
                     block = resp.read(chunk)
                     if not block:
                         break
+                    if len(head) < 65536:
+                        head += block
                     out.write(block)
                     got += len(block)
                     if total:
                         feedback.fraction(got / total)
+                if not have and not etag and head:
+                    import hashlib
+                    _save_part_meta(part, {"head": hashlib.sha256(head[:65536]).hexdigest()})
             size = os.path.getsize(part)
             if total and size < total:
                 raise core.NetworkError(f"stopped at {size} of {total} bytes")
             os.replace(part, dest)
+            try:
+                os.remove(part + ".meta")
+            except OSError:
+                pass
             return dest
         except core.Cancelled:
             raise
