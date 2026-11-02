@@ -120,11 +120,15 @@ def load_curve(path):
 def structure_lethal(depth_m, vel_ms, curve=None, rule_depth_m=2 * FT, criterion=None,
                      dv_m2s=None, mobile=False):
     """Comparison criteria only: True if a structure sees lethal conditions.
-    criterion 'curve' / 'feinberg', or the plain depth rule (depth > rule_depth_m)."""
+    criterion 'curve' / 'feinberg', or the plain depth rule (depth > rule_depth_m).
+    Velocity unknown (vel_ms None, and dv_m2s None for 'feinberg'): True, taken as lethal,
+    the convention of _comparison_finding (High, borderline, a gap)."""
     if depth_m <= 0:
         return False
     if criterion is None:
         criterion = "curve" if curve is not None else "depth"
+    if vel_ms is None and (criterion == "curve" or (criterion == "feinberg" and dv_m2s is None)):
+        return True
     if criterion == "curve":
         if curve is None:
             raise ValueError("criterion 'curve' needs a curve file")

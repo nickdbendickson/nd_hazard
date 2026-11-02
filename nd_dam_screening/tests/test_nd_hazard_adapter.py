@@ -101,6 +101,11 @@ for hdv in (hd * hv, None):
     assert (s["depth_m"], s["vel_ms"], s["dv_m2s"]) == (2.0, 3.0, 6.0), (hdv is None, s)
     s = hg.sample("polygon", [hsq(0), hsq(10)])            # not the deepest part's dv (1.0)
     assert (s["depth_m"], s["vel_ms"], s["dv_m2s"]) == (2.0, 3.0, 6.0), (hdv is None, s)
+# velocity and dv both unknown: no TypeError, taken as lethal (the comparison convention)
+assert hz.structure_lethal(0.5, None, criterion=hz.COMPARISON_FEINBERG, dv_m2s=None, mobile=True)
+assert hz.structure_lethal(0.5, None, curve=([0.0, 5.0], [1.0, 0.1]), criterion=hz.COMPARISON_CURVE)
+assert not hz.structure_lethal(0.0, None, criterion=hz.COMPARISON_FEINBERG)
+assert hz.structure_lethal(0.5, None, criterion=hz.COMPARISON_FEINBERG, dv_m2s=3.0, mobile=True)
 # mobile home, Feinberg: 0.5 m @ 1 m/s and 0.2 m @ 6 m/s -> dv 3.0 m2/s, lethal either way
 md = np.array([[0.5, 0.2]]); mv = np.array([[1.0, 6.0]])
 for mdv in (md * mv, None):
