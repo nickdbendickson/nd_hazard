@@ -1,7 +1,7 @@
 {
  "files": {
   "__init__.py": "5bc368242aef8cc9cfea308ab4583873677213ac3fc5136520d79364922a9772",
-  "cascade.py": "017bab6c51426723c02e799664a19d738698b6b9edacda05921b6518328ca329",
+  "cascade.py": "c793fd0d12cb6e45e1cae588df34de9bb45616ee8b9ebecc50fa75e0b8aa1f69",
   "chain.py": "439b80486c0136beb77ab73b71bfcd1122e723186f25325780068ab36cddbe9b",
   "dam_record.py": "821782f88d46289c2626720da226149be2aff80783147270f50612a37d36fcba",
   "damdata.py": "ff1b5a2dedab603e4d544a5aa734b056a71f85f83927076c9a1c62af84bd8eaf",
@@ -36,7 +36,7 @@
   "transformguard.py": "33f4cdb38bd1bb3f678c266b5221b1cbf721c81a29d6e2e18866c49270829ff1",
   "units.py": "2cd0b0208220ee8ae470c7c10adc8968cfd2bda7c05b9a836ab05130afc501d1",
   "vdatum.py": "1d3f7ec9c943abe94e90e125e48324a1e019a547957530024723db640cb45e9e",
-  "versions.py": "6cd3c6abce6692a3f864cfa5206d69d377f7e80da79d26a60e0c464abadf6c29",
+  "versions.py": "389e1c646827063e7e5f8fe02d7035fcf78e960c69ff9adc58f15176b9a0db49",
   "vertcon_nd.py": "337cc8512d2ddc31e2edd6986b15f7535ebb53ca791b5e08faf15c716af2c3a8",
   "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
  },
@@ -46,6 +46,6 @@
   "versions.py"
  ],
  "pin": "damsuite-pin-v1",
- "pin_sha256": "1731ecac4a35599ef34a6f2211e432633f25a1b2c5b79e95f39cfecfe9a7de4d",
+ "pin_sha256": "334c4cddf981d815b8cbe720fc1053801cec9d69e6a1bfdedd8499f2110fe4b5",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }
