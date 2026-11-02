@@ -1042,7 +1042,9 @@ does (the same module, byte for byte, as the ND dam screening plugin):
 
 Sampling: a point takes its raster cell; a polygon the deepest cell whose centre is inside it
 (the centroid's cell for a footprint smaller than a cell), with the **maximum velocity over
-the footprint's wet cells** (conservative; the velocity at the deepest cell is in the GeoJSON);
+the footprint's wet cells**, even from another cell (TM 11 practice, Nick 2026-11-01: peak depth
+with peak velocity; the velocity at the deepest cell is in the GeoJSON for information); a
+multipoint takes its deepest point with the maximum velocity over its wet points;
 a line is sampled every half cell and takes its deepest sample. Depth and velocity maxima may
 not occur at the same time, so the chart point is an upper bound. Fields are matched by name
 when not chosen (NSI `OCCTYPE`, USA Structures `OCC_CLS` / `PRIM_OCC`, `AADT`, TIGER `RTTYP`,

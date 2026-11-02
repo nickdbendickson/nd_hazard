@@ -84,6 +84,14 @@ assert g.point(95, 95) == (None, 0.0)                      # no-data depth -> No
 assert g.point(55, 45) == (0.5, None)                      # NaN velocity -> None
 s = g.sample("point", [(55, 45), (15, 85)])
 assert s["depth_m"] == 2.0 and s["vel_ms"] == 0.5 and (s["x"], s["y"]) == (15, 85)
+# option C (Nick, 2026-11-01): a multipoint pairs its deepest point with the peak velocity
+# over its wet points, even from another point; a dry point's velocity does not count
+V[3, 3] = 9.0                                              # (35, 65): dry, fast
+g = hz.Grid(D, V, gt)
+s = g.sample("point", [(15, 85), (25, 85), (35, 65)])
+assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0 and (s["x"], s["y"]) == (15, 85), s
+V[3, 3] = 0.0
+g = hz.Grid(D, V, gt)
 ring = [(10, 90), (30, 90), (30, 80), (10, 80)]            # covers cells (1,1) and (1,2)
 s = g.sample("polygon", [ring])
 assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0          # max velocity over the wet cells

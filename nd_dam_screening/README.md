@@ -723,7 +723,9 @@ converts the screening's metres and m/s to feet and ft/s.
 - Sampling is nd_hazard's, as in the runner: points - the cell under the point; polygons - the
   deepest cell whose centre is inside each part's exterior ring (the centroid cell when none
   is), with the largest velocity over the wet cells; lines - every half cell, the deepest.
-  Multi-part features (MultiPoint, MultiLineString, MultiPolygon) use their deepest part.
+  Multi-part features (MultiPoint, MultiLineString, MultiPolygon) use their deepest part, with
+  the largest velocity over their wet points / parts (TM 11 practice, Nick 2026-11-01: peak
+  depth with peak velocity, even from different cells).
   Square north-up cells are required.
 - "Any depth" is 0.1 ft = 0.03048 m (MIND and RDEP defaults; at least 0.003 m), the runner's
   WET_FT default. Before v0.8 roads needed 0.15 m and structures 0.05 m.

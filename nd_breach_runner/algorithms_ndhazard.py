@@ -76,10 +76,12 @@ NID_CLASS = {"h": "High", "s": "Significant", "l": "Low", "m": "Medium"}
 _YES = {"y", "yes", "true", "t", "1", "x", "on"}
 _NO = {"n", "no", "false", "f", "0", "off"}
 
-SAMPLING = ("Points: the raster cell under the point. Polygons: the deepest cell whose centre "
+SAMPLING = ("Points: the raster cell under the point; a multipoint takes its deepest point with "
+            "the maximum velocity over its wet points. Polygons: the deepest cell whose centre "
             "falls inside the footprint (the cell under the centroid when none does), with the "
-            "maximum velocity over the footprint's wet cells, which is conservative (the "
-            "velocity at the deepest cell is kept as well). Lines: sampled every half cell, the "
+            "maximum velocity over the footprint's wet cells, even from another cell (TM 11 "
+            "practice: peak depth with peak velocity; the velocity at the deepest cell is kept "
+            "for information only). Lines: sampled every half cell, the "
             "deepest sample. Only features inside the rasters are read.")
 
 

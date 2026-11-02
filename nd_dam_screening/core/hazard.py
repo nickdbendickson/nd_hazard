@@ -248,17 +248,33 @@ class Grid:
 
     def sample(self, kind, parts, wet_ft=0.1):
         """{depth_m, vel_ms, dv_m2s, x, y, how} for a feature's parts, or None when it is off
-        the grid. kind: 'point' (parts = [(x, y)...]: the deepest point), 'polygon' (exterior
+        the grid. kind: 'point' (parts = [(x, y)...]: the deepest point, the largest velocity of
+        the wet points), 'polygon' (exterior
         rings: nd_hazard.sample_footprint per part; the deepest part, the largest velocity of
         the wet parts), 'line' (vertex lists: nd_hazard.sample_line_max per part, the deepest).
         Velocity None = unknown."""
         best = None
         if kind == "point":
+            # TM 11 practice (Nick, 2026-11-01, option C): a multipoint classifies on its
+            # deepest point with the peak velocity (and peak depth x velocity) over its wet
+            # points, even from different points
+            vmax, dvmax, wet_any = None, None, False
             for x, y in parts:
                 d, v = self.point(x, y)
-                if d is not None and (best is None or d > best["depth_m"]):
-                    best = {"depth_m": d, "vel_ms": v, "dv_m2s": self._dv_point(x, y),
-                            "x": x, "y": y, "how": "point"}
+                if d is None:
+                    continue
+                dv = self._dv_point(x, y)
+                if d / M_PER_FT >= wet_ft:
+                    wet_any = True
+                    if v is not None:
+                        vmax = v if vmax is None else max(vmax, v)
+                    if dv is not None:
+                        dvmax = dv if dvmax is None else max(dvmax, dv)
+                if best is None or d > best["depth_m"]:
+                    best = {"depth_m": d, "vel_ms": v, "dv_m2s": dv, "x": x, "y": y,
+                            "how": "point"}
+            if best is not None and wet_any:
+                best["vel_ms"], best["dv_m2s"] = vmax, dvmax
             return best
         if kind == "polygon":
             # TM 11 practice (Nick, 2026-11-01, option C): peak depth and peak velocity over
