@@ -294,6 +294,20 @@ def nd_hazard_sampling_matches_the_runner_tool():
         dd, vv, _how = nh.sample_footprint(d, v, 100.0, 700.0, 10.0, ring, 0.1)
         assert abs(a["depth_ft"] - dd) < 1e-9, (a, dd)
         assert (a["vel_fts"] is None and vv is None) or abs(a["vel_fts"] - vv) < 1e-9, (a, vv)
+    # TM 11 practice (Nick, 2026-11-01, option C): peak depth and peak velocity over the wet
+    # cells, even from different cells - every tool classifies on the pair
+    d2 = np.zeros((3, 3)); v2 = np.zeros((3, 3))
+    d2[1, 0], v2[1, 0] = 3.0, 1.0          # deepest cell, slow
+    d2[1, 2], v2[1, 2] = 0.5, 8.0          # shallower wet cell, fast
+    d2[0, 1], v2[0, 1] = 0.05, 12.0        # below the wet depth: not counted
+    g2 = Grid(np.zeros((3, 3)), 0.0, 30.0, 10.0)
+    ring2 = [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)]
+    s2 = an.Sampler(g2, d2, v2, wet_ft=0.1)
+    a2 = s2.polygon([np.array(ring2)], (15.0, 15.0))
+    assert (a2["depth_ft"], a2["vel_fts"], a2["vel_at_max_fts"]) == (3.0, 8.0, 1.0), a2
+    assert nh.sample_footprint(d2, v2, 0.0, 30.0, 10.0, ring2, 0.1)[:2] == (3.0, 8.0)
+    m2 = s2.points([(5.0, 15.0), (25.0, 15.0), (15.0, 25.0)])     # multipoint
+    assert (m2["depth_ft"], m2["vel_fts"], m2["vel_at_max_fts"]) == (3.0, 8.0, 1.0), m2
     line = [(105.0, 695.0), (390.0, 430.0), (480.0, 600.0)]
     a = s.lines([np.array(line)])
     assert abs(a["depth_ft"] - nh.sample_line_max(d, 100.0, 700.0, 10.0, line)) < 1e-9

@@ -5,10 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.35.1
+version=2.35.2
 icon=icon.svg
 author=N.D. Bendickson
-changelog=
+changelog=2.35.2 (2026-11-01; option C, Nick: a structure's zone is classified on its peak depth with the peak velocity over its wet cells (structures.peak_pair), not cell by cell; can only keep or raise the zone. Margins from the same pair. Test tests/test_peak_depth_peak_velocity.py.)
+    
     2.35.1 (2026-10-30; full test fixes: self-test expectations, legend on QGIS 4)
       * Self-test (Plugins > ND Dam Hazard > Self-test) failed 4 checks on QGIS 3.34 and
         4.2 though the code was right: it expected 24 algorithms (there are 25; it now
