@@ -2638,6 +2638,8 @@ def _result_items(run, gov, governing):
         "Overtopped roads - Interstate": [r["geom"] for r in r_view if r["nd_class"] == _H],
         "Overtopped roads - US": [r["geom"] for r in r_view if r["nd_class"] == _M],
         "Overtopped roads without AADT": [r["geom"] for r in r_view if r.get("nd_judgment")],
+        "US / State highways overtopped": [r["geom"] for r in r_view if r.get("road_class") in (
+            "US Highway", "State Highway")],
         "Railroad - passenger": [r["geom"] for r in l_view if r["nd_class"] == _H],
         "Railroad - other": [r["geom"] for r in l_view if r["nd_class"] != _H],
         "Habitable structures inundated": [s["geom"] for s in hab if s.get("outcome") in (

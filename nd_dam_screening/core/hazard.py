@@ -66,6 +66,11 @@ def is_interstate(*texts):
     return any(nh.interstate_from_text(t) for t in texts if t)
 
 
+def is_us_state(*texts):
+    """US / State highway (5.2.1.2(b): at least Medium) in any of the texts (nd_hazard 1.2.0)."""
+    return any(nh.us_state_highway_from_text(t) for t in texts if t)
+
+
 def rail_passenger(value, codes=PAX_CODES):
     return nh.passenger_from_value(value, tuple(codes))
 
@@ -74,7 +79,7 @@ def road_level(aadt=None, road_class="", unknown=nh.MEDIUM, sole_access=False):
     """ND 5.2.1.2 class of an overtopped road (nd_hazard.road_class). A missing, NaN or
     non-positive AADT is unknown: `unknown` is assumed (a data gap in tool 8)."""
     r = nh.Road("r", 1.0, aadt=nh.aadt_value(aadt), interstate=is_interstate(road_class),
-                sole_access=bool(sole_access))
+                us_state=is_us_state(road_class), sole_access=bool(sole_access))
     return nh.road_class(r, nh.Settings(unknown_aadt=unknown))[0]
 
 
@@ -342,10 +347,11 @@ def nd_structure(ident, depth_m, vel_ms, mobile=False, habitable=True, x=None, y
 def nd_road(ident, depth_m, aadt=None, road_class="", x=None, y=None, sole_access=False,
             name=""):
     """AADT via nd_hazard.aadt_value (missing, NaN, zero or negative = unknown -> data gap);
-    interstate from the class text or the name (nd_hazard.interstate_from_text)."""
+    interstate from the class text or the name (nd_hazard.interstate_from_text); a US / State
+    highway likewise (nd_hazard.us_state_highway_from_text, 5.2.1.2(b): at least Medium)."""
     return nh.Road(str(ident), m_to_ft(depth_m), aadt=nh.aadt_value(aadt),
                    interstate=is_interstate(road_class, name), sole_access=bool(sole_access),
-                   x=x, y=y)
+                   x=x, y=y, us_state=is_us_state(road_class, name))
 
 
 def nd_rail(ident, depth_m, trains_per_day=None, passenger=False, x=None, y=None):

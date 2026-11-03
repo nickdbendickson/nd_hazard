@@ -555,6 +555,10 @@ def compare_linear(nh, roads=(), rails=(), wet_ft=0.1):
         o = nh.Road(id=rid, max_depth_ft=depth if depth is not None else float("nan"),
                     aadt=r.get("aadt"), interstate=rc == "Interstate" or
                     nh.interstate_from_text(r.get("name") or ""), private=rc == "Private")
+        if hasattr(o, "us_state"):
+            # 2.18.48: nd_hazard 1.2.0 floors a US / State highway at Medium (5.2.1.2(b)), as
+            # this plugin does; an older nd_hazard has no such flag and keeps its own rule
+            o.us_state = rc in ("US Highway", "State Highway")
         wet = depth is not None and depth >= wet_ft
         lvl, why, _gap = nh.road_class(o, st) if wet else ("", "below {:g} ft".format(wet_ft), "")
         if wet:
