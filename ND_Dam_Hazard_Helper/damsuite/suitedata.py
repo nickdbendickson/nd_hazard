@@ -412,7 +412,7 @@ def _v1_key(db):
     st = os.stat(db)
     raw = "{}|{}|{}".format(os.path.normcase(os.path.abspath(db)), st.st_size,
                             int(getattr(st, "st_mtime_ns", st.st_mtime * 1e9)))
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def _v1_layer(db, name):

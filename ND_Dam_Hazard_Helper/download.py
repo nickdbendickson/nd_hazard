@@ -489,7 +489,7 @@ def download_folder(output_folder):
 
 def _cache_path(folder, name, extent):
     key = "{:.4f},{:.4f},{:.4f},{:.4f}".format(*extent)
-    digest = hashlib.sha1(key.encode("ascii")).hexdigest()[:8]
+    digest = hashlib.sha1(key.encode("ascii"), usedforsecurity=False).hexdigest()[:8]
     return os.path.join(folder, "{}_{}_{}.geojson".format(
         name, time.strftime("%Y%m%d"), digest))
 
@@ -912,7 +912,7 @@ class TileCache(object):
     # ---- names ------------------------------------------------------------
     @staticmethod
     def url_hash(url_key):
-        return hashlib.sha1(str(url_key).encode("utf-8")).hexdigest()[:8]
+        return hashlib.sha1(str(url_key).encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
 
     def path(self, source, url_key, bbox):
         return os.path.join(self.folder, "{}__{:.4f}_{:.4f}_{:.4f}_{:.4f}__{}{}".format(

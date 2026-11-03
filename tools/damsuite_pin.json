@@ -29,14 +29,14 @@
   "suite_fill.py": "bb0150b1f2d1c1b864966da7d209b6e2b01bb7f345c38bebc2afb96b02fa46a3",
   "suite_home.py": "73af43dd6d10379f0bde55550bb2dfc57e5023f98cfd2c4eacc2535f37456199",
   "suitecheck.py": "ef454a1a76fe940f08587053774b9eefd49eda836405a3470db14a21257d16e5",
-  "suitedata.py": "eb5ca00567b920319440627922c46cb61e70ffc359b49f8be7926de69428c21e",
+  "suitedata.py": "733c0c2ecb951667c9c0ac021687c2fe2a85387a4c3921773811c4d13e8f2f96",
   "suitegpkg.py": "c0a8bf9c2e2309c80a2a0b590b2f2d6ba308a3a1f0e2510920d64d95ca28b5f7",
   "terrain_cache.py": "b35c7e7d35683b8caed18840aeedd40759b0327a41ccb8aa62fca306eafaaf16",
   "tm11_curves.py": "a7cb30c83f4b8e46257c3537398e307132a308c932f28c086d11044a6fd95f98",
   "transformguard.py": "33f4cdb38bd1bb3f678c266b5221b1cbf721c81a29d6e2e18866c49270829ff1",
   "units.py": "2cd0b0208220ee8ae470c7c10adc8968cfd2bda7c05b9a836ab05130afc501d1",
   "vdatum.py": "1d3f7ec9c943abe94e90e125e48324a1e019a547957530024723db640cb45e9e",
-  "versions.py": "389e1c646827063e7e5f8fe02d7035fcf78e960c69ff9adc58f15176b9a0db49",
+  "versions.py": "69b68a7f1878d3acfd014ee2b3061a8621fec7b22de16bff2895a178908db415",
   "vertcon_nd.py": "337cc8512d2ddc31e2edd6986b15f7535ebb53ca791b5e08faf15c716af2c3a8",
   "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
  },
@@ -46,6 +46,6 @@
   "versions.py"
  ],
  "pin": "damsuite-pin-v1",
- "pin_sha256": "334c4cddf981d815b8cbe720fc1053801cec9d69e6a1bfdedd8499f2110fe4b5",
+ "pin_sha256": "d65e005f2a7d2eaa2977dc30be9ae262ec399bc36751a9f302d1f9f48ed3a4be",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }

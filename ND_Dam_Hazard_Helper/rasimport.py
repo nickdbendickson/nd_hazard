@@ -910,7 +910,7 @@ def plan_settings(settings=None):
 def _content_sig(path):
     """[size, mtime (ns), md5 of the first and last MB]."""
     st = os.stat(path)
-    h = hashlib.md5()
+    h = hashlib.md5(usedforsecurity=False)
     with open(path, "rb") as fh:
         h.update(fh.read(_HASH_BYTES))
         if st.st_size > 2 * _HASH_BYTES:

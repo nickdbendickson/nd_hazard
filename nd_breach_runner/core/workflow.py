@@ -437,7 +437,7 @@ def _direction_at(path, xy, span=200.0):
 
 
 def _hash(*parts):
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)
     for p in parts:
         h.update(json.dumps(p, sort_keys=True, default=str).encode())
     return h.hexdigest()[:16]

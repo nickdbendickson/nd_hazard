@@ -450,7 +450,7 @@ def _layer_sig(lyr):
         if src and os.path.isfile(src):
             return sig + _file_sig(src)
         import hashlib
-        h = hashlib.md5()
+        h = hashlib.md5(usedforsecurity=False)
         for f in lyr.getFeatures():
             h.update(repr(f.attributes()).encode("utf-8", "replace"))
             g = f.geometry()

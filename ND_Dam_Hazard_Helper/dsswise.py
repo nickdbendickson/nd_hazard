@@ -79,7 +79,7 @@ class Item(object):
 def _zip_key(path):
     """Short fingerprint of a zip (size, time, first MB): a revised package
     under the same name gets its own folder."""
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)
     try:
         st = os.stat(path)
         h.update("{}|{}".format(st.st_size, int(st.st_mtime)).encode("ascii"))
