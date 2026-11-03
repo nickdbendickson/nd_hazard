@@ -17,7 +17,7 @@ from .constants import CLASS_HIGH, CLASS_JUDGMENT, CLASS_LOW
 from .helpers import evaluate_polynomial, get_layer_path
 
 METHOD_MAXMAX = "maxmax"          # recorded in run snapshots / logs
-METHOD_LABEL = "max depth with max velocity (Dmax / Vmax, same cell)"
+METHOD_LABEL = "peak depth with peak velocity (Dmax / Vmax over the wet cells, TM 11 practice)"
 ZONE_FILES = {"found": "Hazard_Foundations.tif", "mobile": "Hazard_MobileHomes.tif",
               "vehicle": "Hazard_Vehicles.tif"}
 
