@@ -699,6 +699,27 @@ def _is_duplicate(sources, src, pt, dup_dist):
     return False
 
 
+def _distinct_unit(sources, src):
+    """True when a point whose family already has a point on an outline is still a SEPARATE
+    dwelling unit, not a phantom duplicate (review 2026-11-03, punch #28). A genuine two-unit
+    building (duplex, house + granny flat) can have both its NSI records geocoded just outside
+    the outline; the anti-double-count drop in the snapping loop must keep the second one the
+    way _is_duplicate already does - a different NSI structure (fd_id) or a different address is
+    a real unit. NENA points are handled separately (several may share one outline) and never
+    reach this test."""
+    fd = (src.get("nsi") or {}).get("fd_id")
+    ak = src.get("addr_key")
+    for s in sources:
+        if s.get("family") != src.get("family"):
+            continue
+        sfd = (s.get("nsi") or {}).get("fd_id")
+        if fd is not None and sfd is not None and fd != sfd:
+            return True             # two NSI structures (units) at one building
+        if ak and s.get("addr_key") and ak != s.get("addr_key"):
+            return True             # two distinct addresses at one building
+    return False
+
+
 def _snap_distance_ft(src, snap_ft):
     """How far a point outside every outline may be moved onto one (None:
     never). NENA address points not placed on the structure itself
@@ -995,8 +1016,11 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
             if _is_duplicate(host["sources"], src, pt, dup_dist):
                 placed.add(k)
                 continue
-            if family in host["families"] and not src.get("nena"):
-                # v2.3.1: prevent phantom duplicate structures (double LIJ counts)
+            if (family in host["families"] and not src.get("nena")
+                    and not _distinct_unit(host["sources"], src)):
+                # v2.3.1: prevent phantom duplicate structures (double LIJ counts).
+                # 2026-11-03 (punch #28): a different NSI structure (fd_id) or address at the
+                # same building is a real second unit and is kept, matching _is_duplicate.
                 placed.add(k)
                 same_family_dropped.append((host["id"], src))
                 continue                # one NSI / FEMA point per outline
@@ -1593,6 +1617,21 @@ def mark_mobile_parks(structs, parks, analysis_crs, transform_ctx, parks_crs=Non
     return len(marked)
 
 
+def _fill_missing_velocity(v):
+    """Replace NaN velocities (wet cells the velocity raster does not cover) with the peak
+    finite velocity in the same array, or 0 when none is finite (review 2026-11-03, punch #26).
+
+    Filling with 0 biased the classification OPTIMISTICALLY: on the ACER depth-velocity curves
+    a lower velocity is a less severe zone, so a structure whose deepest cells happened to lack
+    velocity was read on the safe-looking side of the truth. The structure's own peak finite
+    velocity keeps the fill bounded by real data and leans conservative; with no finite velocity
+    anywhere (the raster does not cover this structure at all) it falls back to 0 - depth only.
+    """
+    finite = v[np.isfinite(v)]
+    fill = float(finite.max()) if finite.size else 0.0
+    return np.where(np.isnan(v), fill, v)
+
+
 def peak_pair(d, v, vel_ok):
     """(peak depth, peak velocity over the wet cells) of one structure as 1-element arrays,
     the pair its zone is classified on (2.35.2, TM 11 practice: the two may come from
@@ -2180,7 +2219,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             a = a_all[a0:a1]
             if np.isnan(v).any() and vel_ok:
                 rec["vel_missing"] = True
-                v = np.where(np.isnan(v), 0.0, v)
+                v = _fill_missing_velocity(v)
             if keep_cells:
                 rec["cells_xy"] = (np.array(xs, dtype=np.float64), np.array(ys, dtype=np.float64))
             if keep_dv:
@@ -2269,71 +2308,22 @@ def normalize_street(text):
     return " ".join(_STREET_ABBREV.get(p, p) for p in raw.split())
 
 
-def _dwelling_rank(rec):
-    rank = {CLASS_HIGH: 3, CLASS_JUDGMENT: 2, CLASS_LOW: 1}.get(rec.get("zone"), 0)
-    return (rank, rec.get("max_depth") or 0.0, rec.get("persons") or 0,
-            rec.get("area_ft2") or 0.0)
-
-
-def _mark_dwelling_extra(rec, keep, why):
-    rec["dwelling_extra"] = True
-    rec["persons"] = 0
-    rec["persons_basis"] = "same dwelling as structure {} ({})".format(keep.get("id"), why)
-    rec.setdefault("notes", []).append("same dwelling as structure {}".format(keep.get("id")))
-
-
-def _footprints_overlap(a, b):
-    ga, gb = a.get("geom"), b.get("geom")
-    if ga is None or gb is None:
-        return False
-    try:
-        return bool(ga.intersects(gb) and not ga.touches(gb))
-    except Exception:
-        return False
-
-
 def collapse_dwellings(structs):
-    """One household per street address, and per overlapping unaddressed footprint.
+    """REMOVED 2.16.0 - do not reinstate (review 2026-11-03, punch #27).
 
-    A second polygon at the same address is still sampled. It does not add
-    another 3-person household or another judgment-zone structure. A unit
-    number stays in the address, so apartments are not merged.
+    This used to keep one household per street address (and per overlapping unaddressed
+    footprint), zeroing the persons of every other habitable building that shared the address.
+    It was taken out of evaluate_structures because it zeroed real second households at one
+    address - apartments, mobile-home parks, farmsteads - and was not kept per scenario (see
+    the note in evaluate_structures). The body is gone so the address-key merging can't be
+    reintroduced by accident; the consumers (classification.py, whatif, eap) read
+    rec.get("dwelling_extra") defensively, so nothing sets it and every habitable structure
+    counts. If a per-address collapse is ever wanted again, design it per scenario and keying
+    on the dwelling unit (unit number), not the street address.
     """
-    for rec in structs:
-        rec["dwelling_extra"] = False
-    groups = {}
-    for rec in structs:
-        if rec.get("habitable") != "Yes":
-            continue
-        key = normalize_street(address_of(rec)[0])
-        if key:
-            groups.setdefault(key, []).append(rec)
-    n_extra = 0
-    for key, group in groups.items():
-        if len(group) < 2:
-            continue
-        group.sort(key=_dwelling_rank, reverse=True)
-        keep = group[0]
-        for rec in group[1:]:
-            _mark_dwelling_extra(rec, keep, key)
-            n_extra += 1
-    kept = [r for r in structs if r.get("habitable") == "Yes" and not r.get("dwelling_extra")
-            and r.get("geom") is not None]
-    for rec in structs:
-        if rec.get("habitable") != "Yes" or rec.get("dwelling_extra"):
-            continue
-        if normalize_street(address_of(rec)[0]):
-            continue
-        for host in kept:
-            if host is rec or not _footprints_overlap(rec, host):
-                continue
-            _mark_dwelling_extra(rec, host, "overlapping footprint")
-            n_extra += 1
-            break
-    if n_extra:
-        log_message("Structure inventory: {} extra footprint(s) of the same dwelling "
-                    "are not a second household".format(n_extra))
-    return n_extra
+    raise NotImplementedError(
+        "collapse_dwellings was removed in 2.16.0 - it zeroed real second households at one "
+        "address; see the note in evaluate_structures. Do not reinstate address-key collapsing.")
 
 
 # v2.9: the address columns (Address / City / ZIP from address_of - the ND GIS
@@ -2448,7 +2438,8 @@ def structure_notes(rec):
         notes.append("mobile-home evidence on a building read as occupied non-residential "
                      "- verify")
     if rec.get("vel_missing"):
-        notes.append("velocity missing on some wet cells (used 0)")
+        notes.append("velocity missing on some wet cells (filled with the structure's peak "
+                     "velocity, else 0) - verify")
     if rec.get("site_note"):
         notes.append(rec["site_note"])
     elif rec["category"] == CAT_UNVERIFIED:
@@ -2523,7 +2514,7 @@ def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structu
             "Incremental": _yes_no(rec.get("incremental")),
             "Base_Depth_ft": _nz(rec.get("base_depth")), "Base_Zone": _nz(rec.get("base_zone")),
             "Reviewed": rec.get("reviewed") or NULL,
-            "Notes": "; ".join(structure_notes(rec)),
+            "Notes": join_capped(structure_notes(rec)),      # 2026-11-03 (#30): Shapefile-safe
         }
         vals.update(address_fields(rec))
         f = QgsFeature(out_fields)
