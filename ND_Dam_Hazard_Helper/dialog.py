@@ -106,8 +106,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         try:
             self.model_combo.currentIndexChanged.connect(self._update_button_states)
             self.model_combo.currentIndexChanged.connect(self.check_panel.clear)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message("Model choice not wired to the Run buttons: {}".format(e), MSG_WARNING)
         self._defaults = self._current_state()
         self._restore_settings()
         self._update_button_states()
@@ -115,12 +115,15 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         try:
             QgsProject.instance().readProject.connect(self._on_project_changed)
             QgsProject.instance().cleared.connect(self._on_project_changed)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message("Project open/close not followed - the window keeps the previous "
+                        "project's settings: {}".format(e), MSG_WARNING)
         try:
             QgsProject.instance().writeProject.connect(self._on_write_project)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message("Project > Save does not store the window's settings: {}".format(e),
+                        MSG_WARNING)
+        self._audit_widget_names()
 
     # ------------------------------------------------------------------ UI --
     def setup_ui(self):
@@ -880,8 +883,11 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._progress = self._make_progress(title, modal=False)
         try:                                     # the bar's Cancel stops the task
             self._progress.canceled.connect(self._cancel_task)
-        except Exception:
-            pass
+        except Exception as e:
+            # the bar is still polled (wasCanceled) at each progress step, so Cancel works,
+            # but only at the worker's next progress call - say so instead of degrading silently
+            log_message("Cancel button not wired to the background task (it is noticed at the "
+                        "next progress step instead): {}".format(e), MSG_WARNING)
 
         gen = self._project_gen
 
@@ -951,28 +957,34 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._progress = self._make_progress(title, modal=True)
         return finish_run(res, progress=self._progress_tick, log=self._log)
 
+    # the widgets a running task disables (a name with no widget is skipped - and reported
+    # once, at start-up, by _audit_widget_names)
+    _BUSY_WIDGETS = (
+        "check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
+        "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
+        "output_browse_btn", "selftest_btn", "refresh_layers_btn",
+        "dv_browse_btn", "review_zoom_btn",
+        "review_save_btn", "review_rerun_btn", "sources_btn",
+        "review_export_btn", "review_merge_btn", "series_btn",
+        "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
+        "data_download_btn", "data_sources_btn", "open_data_btn",
+        # v2.9
+        "datafolder_edit", "datafolder_browse_btn", "datafolder_search_btn",
+        "datafolder_hifld_btn", "datafolder_use_check",
+        *Extras290TabMixin.BUSY_WIDGETS_290,
+        *SuiteTabMixin.BUSY_WIDGETS_2100,
+        "facrev_kind_combo", "facrev_scenario_combo", "facrev_show_all_check",
+        "facrev_zoom_btn", "facrev_save_btn", "facrev_rerun_btn",
+        # v2.6.1: the pack must not change under a running task
+        "pack_path_edit", "pack_browse_btn", "pack_clear_btn",
+        "offline_only_check", "pack_build_btn",
+        # 2.24.0
+        "pack_zip_btn", "source_pack_radio", "source_download_radio",
+    )
+
     def _set_busy(self, busy):
         self._busy = busy
-        for name in ("check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
-                     "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
-                     "output_browse_btn", "selftest_btn", "refresh_layers_btn",
-                     "dv_browse_btn", "review_zoom_btn",
-                     "review_save_btn", "review_rerun_btn", "sources_btn",
-                     "review_export_btn", "review_merge_btn", "series_btn",
-                     "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
-                     "data_download_btn", "data_sources_btn", "open_data_btn",
-                     # v2.9
-                     "datafolder_edit", "datafolder_browse_btn", "datafolder_search_btn",
-                     "datafolder_hifld_btn", "datafolder_use_check",
-                     *Extras290TabMixin.BUSY_WIDGETS_290,
-                     *SuiteTabMixin.BUSY_WIDGETS_2100,
-                     "facrev_kind_combo", "facrev_scenario_combo", "facrev_show_all_check",
-                     "facrev_zoom_btn", "facrev_save_btn", "facrev_rerun_btn",
-                     # v2.6.1: the pack must not change under a running task
-                     "pack_path_edit", "pack_browse_btn", "pack_clear_btn",
-                     "offline_only_check", "pack_build_btn",
-                     # 2.24.0
-                     "pack_zip_btn", "source_pack_radio", "source_download_radio"):
+        for name in self._BUSY_WIDGETS:
             w = getattr(self, name, None)
             if w is not None:
                 w.setEnabled(not busy)
@@ -1143,6 +1155,18 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         # 2.30.0
         "handoff_auto_check",
     ) + Extras290TabMixin.SETTING_WIDGETS_290 + SuiteTabMixin.SETTING_WIDGETS_2100
+
+    def _audit_widget_names(self):
+        """Names in _BUSY_WIDGETS / _SETTING_WIDGETS that no widget answers to. Both lists
+        are read with getattr(self, name, None), so a typo or a renamed widget would silently
+        never be disabled during a run (or never saved with the project); this turns that
+        into one warning in the QGIS log when the window is built. Returns the names."""
+        missing = sorted({n for n in self._BUSY_WIDGETS + self._SETTING_WIDGETS
+                          if getattr(self, n, None) is None})
+        if missing:
+            log_message("{}: no widget named {} - not disabled during runs / not saved with "
+                        "the project".format(PLUGIN_NAME, ", ".join(missing)), MSG_WARNING)
+        return missing
 
     def _current_state(self):
         state = {}

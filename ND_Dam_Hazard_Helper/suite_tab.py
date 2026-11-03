@@ -12,7 +12,7 @@ model_gate / gate_stop_on_fail) and are saved with the project.
 
 Dialog contract (what the host dialog provides): _log(msg), config_dam_folder,
 config_output_folder. The lead adds _build_suite_group() to the tab, SETTING_WIDGETS_2100
-to _SETTING_WIDGETS, BUSY_WIDGETS_2100 to _set_busy and **self._suite_config() to the
+to _SETTING_WIDGETS, BUSY_WIDGETS_2100 to _BUSY_WIDGETS and **self._suite_config() to the
 classification cfg.
 """
 
