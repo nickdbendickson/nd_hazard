@@ -89,7 +89,7 @@ class NDDamScreeningPlugin:
             self.action.setObjectName("NDDamScreeningAction")
             self.action.triggered.connect(self.run_plugin)
             self.iface.addPluginToMenu(MENU_NAME, self.action)
-            self.home_action = QAction("Dam suite home...", self.iface.mainWindow())
+            self.home_action = QAction("Dam suite home…", self.iface.mainWindow())
             self.home_action.setObjectName("NDDamScreeningHomeAction")
             self.home_action.triggered.connect(self.run_home)
             self.iface.addPluginToMenu(MENU_NAME, self.home_action)
@@ -104,10 +104,10 @@ class NDDamScreeningPlugin:
         try:
             from . import suite_home
             for label, name, slot in (("ND Dam Breach Screening...", "NDSuiteScreeningWindow", self.run_plugin),
-                                      ("Dam suite home...", "NDSuiteHome", self.run_home),
-                                      ("Suite settings...", "NDSuiteSettings", self.run_settings),
+                                      ("Dam suite home…", "NDSuiteHome", self.run_home),
+                                      ("Suite settings…", "NDSuiteSettings", self.run_settings),
                                       # 0.16.0: the suite data folder, servers and "Get data for this dam"
-                                      ("Suite data and servers...", "NDSuiteData", self.run_suite_data)):
+                                      ("Suite data and servers…", "NDSuiteData", self.run_suite_data)):
                 a = suite_home.add_suite_action(self.iface, label, name, slot)
                 if a is not None:
                     self.suite_actions.append(a)

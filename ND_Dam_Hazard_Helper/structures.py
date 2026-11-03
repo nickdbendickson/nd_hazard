@@ -2190,7 +2190,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         except Exception as e:
             problems.log("structure {} evaluation area: {}".format(sid, e))
     # ---- 3. velocity, arrival, D x V for all wet cells at once ---------------
-    tick(55, "Reading velocity and arrival at {} structure(s)...".format(len(wet_ids)))
+    tick(55, "Reading velocity and arrival at {} structure(s)…".format(len(wet_ids)))
     if wet_ids:
         counts = [cells[s][2].size for s in wet_ids]
         offs = np.concatenate(([0], np.cumsum(counts)))

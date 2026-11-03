@@ -378,9 +378,9 @@ class Iface:
 iface = Iface()
 plug = pkg.classFactory(iface)
 plug.initGui()
-# 0.16.0: + "Suite data and servers..." in the suite menu (object name NDSuiteData, once for the three)
+# 0.16.0: + "Suite data and servers…" in the suite menu (object name NDSuiteData, once for the three)
 assert [m[0] for m in iface.menu] == ["ND Dam Breach Screening"] * 2 + ["ND Dam Suite"] * 4 and plug.action is iface.menu[0][1]
-assert plug.home_action is iface.menu[1][1]                            # 0.11: Dam suite home...
+assert plug.home_action is iface.menu[1][1]                            # 0.11: Dam suite home…
 assert len(plug.suite_actions) == 4                                     # 0.13: the shared suite menu
 assert plug.suite_actions[3].triggered._slots == [plug.run_suite_data]
 assert plug.action.triggered._slots == [plug.run_plugin]

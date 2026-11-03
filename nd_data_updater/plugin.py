@@ -152,20 +152,20 @@ class NdDataUpdaterPlugin:
     def initGui(self):  # noqa: N802 - QGIS API
         icon = QIcon(os.path.join(PLUGIN_DIR, "icon.svg"))
         win = self.iface.mainWindow()
-        self.action_check = QAction(icon, "Check for Data Updates Now", win)
+        self.action_check = QAction(icon, "Check for data updates now", win)
         self.action_check.setToolTip("ND Data Updater: check North Dakota datasets for updates")
         self.action_check.triggered.connect(lambda: self.start_update(force=False, quiet=False))
-        self.action_load = QAction("Add North Dakota Layers to Project", win)
+        self.action_load = QAction("Add North Dakota layers to the project", win)
         self.action_load.triggered.connect(self.load_layers)
-        self.action_folder = QAction("Open Data Folder", win)
+        self.action_folder = QAction("Open data folder", win)
         self.action_folder.triggered.connect(self.open_data_folder)
-        self.action_settings = QAction("Settings and Status…", win)
+        self.action_settings = QAction("Settings and status…", win)
         self.action_settings.triggered.connect(self.show_settings)
-        self.action_pack = QAction("Offline Pack and Data Folder…", win)
+        self.action_pack = QAction("Offline pack and data folder…", win)
         self.action_pack.setToolTip("The pack layer by layer, the data folder, carrying the pack "
                                     "on a USB stick, and a check of the services")
         self.action_pack.triggered.connect(self.show_pack)
-        self.action_cancel = QAction("Stop the Running Update", win)
+        self.action_cancel = QAction("Stop the running update", win)
         self.action_cancel.triggered.connect(self.cancel_update)
         self.action_cancel.setEnabled(False)
         self.actions = [self.action_check, self.action_load, self.action_folder,
@@ -323,7 +323,7 @@ class NdDataUpdaterPlugin:
         # 1.5.0: never start a quiet build before a data folder has been chosen (here or in the
         # suite home). On a fresh machine the start-up timer used to download gigabytes unasked
         # into the default folder and then switch the dam plugins onto it. The first build needs
-        # a deliberate click (Check for Data Updates Now, or the pack button in the Hazard home).
+        # a deliberate click (Check for data updates now, or the pack button in the Hazard home).
         if not self.settings.data_dir_is_set:
             return
         if time.time() - self.settings.last_auto_check < self.settings.check_hours * 3600:
@@ -342,12 +342,12 @@ class NdDataUpdaterPlugin:
             if not quiet:
                 bar.pushInfo(LOG_TAG, "An update check is already running (see the task bar "
                                       "at the bottom of the window). Use Plugins > ND Data "
-                                      "Updater > Stop the Running Update to stop it.")
+                                      "Updater > Stop the running update to stop it.")
             return
         if not self.enabled_sources():
             if not quiet:
                 bar.pushWarning(LOG_TAG, "No datasets are turned on. Choose some in "
-                                         "Plugins > ND Data Updater > Settings and Status.")
+                                         "Plugins > ND Data Updater > Settings and status.")
             return
         try:
             os.makedirs(self.settings.data_dir, exist_ok=True)
@@ -423,7 +423,7 @@ class NdDataUpdaterPlugin:
         if self.last_report.get("changes"):
             bar.pushInfo(LOG_TAG, "What changed in the pack: " + self.last_report["summary"]
                          + " " + self.last_report.get("stale_text", "")
-                         + " (Plugins > ND Data Updater > Offline Pack and Data Folder > "
+                         + " (Plugins > ND Data Updater > Offline pack and data folder > "
                            "Pack change report to read or save it.)")
         if by_status.get("cancelled"):
             bar.pushInfo(LOG_TAG, "Update check cancelled. Local data was not changed.")
@@ -524,7 +524,7 @@ class NdDataUpdaterPlugin:
                 os.path.isdir(os.path.join(self.settings.data_dir, s.folder))
                 for s in self.enabled_sources()):
             bar.pushWarning(LOG_TAG, "Nothing has been downloaded yet. Use "
-                                     "Check for Data Updates Now first.")
+                                     "Check for data updates now first.")
         else:
             bar.pushInfo(LOG_TAG, "All downloaded layers are already in the project.")
 

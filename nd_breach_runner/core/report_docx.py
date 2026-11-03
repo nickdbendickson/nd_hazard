@@ -3059,7 +3059,7 @@ class _Report(object):
         if self.opt.include_checklist:
             self.sub("Reviewer checklist")
             d.paragraph("Status is filled from what the dam folder contains: Yes (found or "
-                        "met), Check (present but needs the reviewer's judgement), No (not "
+                        "met), Check (present but needs the reviewer's judgment), No (not "
                         "found) or N/A. The last two columns are for the reviewer.",
                         size=9, color="595959")
             rows = [["#", "Item", "Status", "Evidence", "Reviewer OK / comment"]]

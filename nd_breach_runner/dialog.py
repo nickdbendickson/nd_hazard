@@ -747,7 +747,7 @@ class NDBreachRunnerDialog(QDialog):
         note = QLabel(
             "Population at risk, flood severity and warning time are always reported. Loss of "
             "life is estimated only from a rate table an engineer has entered and signed: a "
-            "fatality rate is engineering judgement, not a plugin's value. Fractions of the "
+            "fatality rate is engineering judgment, not a plugin's value. Fractions of the "
             "population at risk, 0 to 1, in every cell.")
         note.setWordWrap(True)
         lay.addWidget(note)

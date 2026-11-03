@@ -345,7 +345,7 @@ class PackSource(core.Source):
         self.report = {}                       # the last pack change report (runreport)
         self.summary = []                      # the last run's plain-words lines
         self.kept_replaced = []                # layers holding the user's own file, left alone
-        # pack layers added to the QGIS project by "Add North Dakota Layers to Project"
+        # pack layers added to the QGIS project by "Add North Dakota layers to the project"
         self.layer_globs = ("hydro/3DHP_*.gpkg", "barriers/SARP_*.gpkg")
         self.config_key = f"{self.refresh_days}d|{self.mode_3dhp}|{'full' if self.full else ''}"
 

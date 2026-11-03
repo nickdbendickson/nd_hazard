@@ -12,7 +12,7 @@ that belongs to the Runner:
     `write_rate_file` / `signoff_status` here follow its rules - one engineer is enough, a
     second checker is optional, and the file never says a check happened that nobody recorded);
   * the shipped file is deliberately EMPTY and unsigned: no rates, no signature. A plugin that
-    shipped numbers would be making the engineering judgement for the engineer, which is the
+    shipped numbers would be making the engineering judgment for the engineer, which is the
     whole reason loss.py refuses to do it;
   * the rows a consequences run already has, turned into the rows loss.py wants;
   * the report section, which says PAR and the two splits always, and says loss of life is not
