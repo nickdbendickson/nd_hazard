@@ -1,4 +1,4 @@
-"""v3.3.0: the popup window (Plugins > ND Dam Breach Runner > Open the Runner window...):
+"""v3.3.0: the popup window (Plugins > ND Dam Breach Runner > Open the Runner window…):
 popup_logic.py (folder status, suggestion, the parameters filled into every tool), the dialog
 driven through behaviour-recording Qt doubles (tests/qt_fakes), and the plugin's menu entry /
 single window / unload.

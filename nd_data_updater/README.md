@@ -13,22 +13,22 @@ also builds and keeps up to date the statewide **offline data pack** of the ND d
 
 ## Use
 
-- **Check for Data Updates Now** (toolbar button): checks every dataset that is
+- **Check for data updates now** (toolbar button): checks every dataset that is
   turned on. The first run downloads everything; later runs download only what
   changed. It runs in the background: the layer it is on is shown in the status bar
   ("layer 12 of 29: USACE National Structure Inventory") and in the plugin's windows, and it can
-  be stopped from the task bar, from either window, or from **Stop the Running Update**. Every
+  be stopped from the task bar, from either window, or from **Stop the running update**. Every
   run ends with a short block in plain words: how many layers were built, and what was not
   fetched with what that costs.
-- **Add North Dakota Layers to Project**: adds the downloaded layers (and the pack's 3DHP and SARP
+- **Add North Dakota layers to the project**: adds the downloaded layers (and the pack's 3DHP and SARP
   layers) to a "North Dakota data" group.
-- **Offline Pack and Data Folder…** (1.4.0): the pack layer by layer (vintage, feature count,
+- **Offline pack and data folder…** (1.4.0): the pack layer by layer (vintage, feature count,
   **Fetch again**, **Replace with my file…** - a layer holding your own file is left alone by
   every refresh until you press **Fetch again** on it), **Rebuild only missing layers**, **Copy pack to
   USB…** / **Import pack…**, the **Pack change report**, the **Data vintage** list, the suite
   readiness lights, one row per drop-in folder with what goes in it, and a **service check**.
-- **Open Data Folder**: opens the folder in Finder.
-- **Settings and Status…**: data folder, schedule, which datasets to keep, and
+- **Open data folder**: opens the folder in Finder.
+- **Settings and status…**: data folder, schedule, which datasets to keep, and
   when each was last updated and checked.
 
 Data is stored in `~/Documents/ND Structure Data` unless you choose another folder.
@@ -61,7 +61,7 @@ lists the counts and the tag rules.
 
 ### The offline pack (1.3.0)
 
-**Check for Data Updates Now** builds `<data folder>/ND_Dam_Suite_Pack/`: one GeoPackage per
+**Check for data updates now** builds `<data folder>/ND_Dam_Suite_Pack/`: one GeoPackage per
 layer, `manifest.json` and `LAYERS.txt` (what each layer is and where it came from). The first
 run takes an hour or more; a stopped run goes on where it stopped (finished layers are kept).
 Layers:

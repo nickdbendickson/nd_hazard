@@ -1,10 +1,10 @@
 """QGIS plugin entry: registers the Processing provider and adds a menu.
 
-v3.9.0: "Suite data and servers..." in the plugin's menu and in the shared Plugins > ND Dam
+v3.9.0: "Suite data and servers…" in the plugin's menu and in the shared Plugins > ND Dam
 Suite menu (object name NDSuiteData, so it is there once for the three plugins): the suite data
 folder, the servers and "Get data for this dam", on the Runner window's dam when one is chosen.
 
-v3.3.0: Plugins > ND Dam Breach Runner > "Open the Runner window..." opens a popup window
+v3.3.0: Plugins > ND Dam Breach Runner > "Open the Runner window…" opens a popup window
 (dialog.py): the Dams folder and dam, what is in the dam's folder, and every tool below on tabs.
 The menu entries stay.
 
@@ -70,24 +70,24 @@ class NDBreachRunnerPlugin:
             from qgis.PyQt.QtWidgets import QAction
         except ImportError:  # Qt6 moved QAction
             from qgis.PyQt.QtGui import QAction
-        self.action = QAction("Open the Runner window...", self.iface.mainWindow())
+        self.action = QAction("Open the Runner window…", self.iface.mainWindow())
         self.action.setObjectName("NDBreachRunnerAction")
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)
         self.actions.append(self.action)
-        self.home_action = QAction("Dam suite home...", self.iface.mainWindow())
+        self.home_action = QAction("Dam suite home…", self.iface.mainWindow())
         self.home_action.setObjectName("NDBreachRunnerHomeAction")
         self.home_action.triggered.connect(self.run_home)
         self.iface.addPluginToMenu(MENU, self.home_action)
         self.actions.append(self.home_action)
         # 3.9.0: the suite data folder, the servers and "Get data for this dam" (suite_data.py)
-        self.data_action = QAction("Suite data and servers...", self.iface.mainWindow())
+        self.data_action = QAction("Suite data and servers…", self.iface.mainWindow())
         self.data_action.setObjectName("NDBreachRunnerSuiteDataAction")
         self.data_action.triggered.connect(self.run_suite_data)
         self.iface.addPluginToMenu(MENU, self.data_action)
         self.actions.append(self.data_action)
         # 3.13.0: the dam folder's data layers (and the suite's DWR dams / dam lines) in the project
-        self.fill_action = QAction("Load the dam's data layers...", self.iface.mainWindow())
+        self.fill_action = QAction("Load the dam's data layers…", self.iface.mainWindow())
         self.fill_action.setObjectName("NDBreachRunnerLoadDamLayersAction")
         self.fill_action.triggered.connect(self.run_load_layers)
         self.iface.addPluginToMenu(MENU, self.fill_action)
@@ -105,7 +105,7 @@ class NDBreachRunnerPlugin:
             sep0.setSeparator(True)
             self.iface.addPluginToMenu(MENU, sep0)
             self.actions.append(sep0)
-        items = [("Guided setup for one dam (wizard)...", "wizard:"),
+        items = [("Guided setup for one dam (wizard)…", "wizard:"),
                  ("Run breach model for one dam...", "ndbreach:rundam"),
                  ("Run breach models for a layer of dams...", "ndbreach:batch"),
                  ("Nested fine grid near the dam...", "ndbreach:nested"),
@@ -162,7 +162,7 @@ class NDBreachRunnerPlugin:
         if self.tools_menu is not None:
             self.iface.addPluginToMenu(MENU, self.tools_menu.menuAction())
             self.actions.append(self.tools_menu.menuAction())
-        s = QAction("Model paths (Processing options)...", self.iface.mainWindow())
+        s = QAction("Model paths (Processing options)…", self.iface.mainWindow())
         s.triggered.connect(self._settings)
         self.iface.addPluginToMenu(MENU, s)
         self.actions.append(s)
@@ -175,9 +175,9 @@ class NDBreachRunnerPlugin:
         try:
             from . import suite_home
             for label, name, slot in (("ND Dam Breach Runner...", "NDSuiteRunnerWindow", self.run_plugin),
-                                      ("Dam suite home...", "NDSuiteHome", self.run_home),
-                                      ("Suite settings...", "NDSuiteSettings", self.run_settings),
-                                      ("Suite data and servers...", "NDSuiteData",
+                                      ("Dam suite home…", "NDSuiteHome", self.run_home),
+                                      ("Suite settings…", "NDSuiteSettings", self.run_settings),
+                                      ("Suite data and servers…", "NDSuiteData",
                                        self.run_suite_data)):
                 a = suite_home.add_suite_action(self.iface, label, name, slot)
                 if a is not None:

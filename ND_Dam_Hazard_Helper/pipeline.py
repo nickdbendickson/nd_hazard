@@ -1811,6 +1811,10 @@ def _classify_and_write(run, cfg, state):
                     run.sources.append(_PROPOSED)
         except Exception:
             pass
+        try:                                     # 2.35.6: the vertical-datum record (as DWR)
+            extra["datum"] = datum_lines(out, cfg.get("dam_folder") or "")
+        except Exception:
+            pass
         # the tables of the summary follow the classification: with a baseline
         # they only count what the breach causes (incremental view)
         lines = summary_lines(governing["nd"], governing["tm11"], s_view, r_view, l_view,
@@ -3275,6 +3279,37 @@ def _nid_lines(run, governing):
         line += " - DIFFERENT: NID {} corresponds to ND {}; review the classification and " \
             "update the inventory if this result is confirmed".format(hz, eq)
     return [line]
+
+
+def datum_lines(out, dam_folder=""):
+    """2.35.6 (ported from DWR Hazard 2.20.0 / 2.20.3, audit 2026-11-03 fix D): summary lines of the vertical datum the Runner recorded
+    (run_report.json "vertical_datum", else dam.json's). damsuite 1.18.2 lines cover a
+    NGVD29 -> NAVD88 shift, a 0-500 ft local datum tied to the DEM, REVIEW / UNCONVERTED
+    values, a band value replaced by a DEM elevation, and the mid-crest dam point
+    (also read from a sibling "dam_point" when the record does not carry one).
+    [] when neither file records a datum."""
+    from .damsuite import vdatum as VD
+    cands = [os.path.join(out, "run_report.json")]
+    if dam_folder:
+        cands += [os.path.join(dam_folder, "_breach_model", "run_report.json"),
+                  os.path.join(dam_folder, "run_report.json"), os.path.join(dam_folder, "dam.json")]
+    for path in cands:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        rec = data.get("vertical_datum")
+        if isinstance(rec, dict) and rec:
+            if not rec.get("dam_point") and isinstance(data.get("dam_point"), dict):
+                rec = dict(rec)
+                rec["dam_point"] = data["dam_point"]
+            return VD.summary_lines(rec) + ["(from {})".format(os.path.basename(path))]
+    return []
 
 
 def _compare_last_run(run, gov, governing, scenarios, dam_name, written, folder):

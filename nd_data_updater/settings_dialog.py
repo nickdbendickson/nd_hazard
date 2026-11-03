@@ -223,7 +223,7 @@ class SettingsDialog(QDialog):
         pack_window.setToolTip("The pack layer by layer, the drop-in folders, carrying the pack "
                                "on a USB stick, and a check of the services.")
         pack_window.clicked.connect(self._show_pack)
-        open_folder = QPushButton("Open Data Folder")
+        open_folder = QPushButton("Open data folder")
         open_folder.clicked.connect(self.plugin.open_data_folder)
         buttons_row.addWidget(self.check_now)
         buttons_row.addWidget(self.missing_now)

@@ -75,7 +75,7 @@ def _suite_reason(item):
     if what:
         label = "{} ({})".format(label, what)
     return (str(item.get("key") or "suite"), label,
-            fix or "open 'Dam suite home...' and finish the set-up step it names")
+            fix or "open 'Dam suite home…' and finish the set-up step it names")
 
 
 def reasons(have, blocking=(), limit=6):
