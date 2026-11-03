@@ -688,9 +688,12 @@ def finish_run(res, progress=None, log=None):
         run._log = log
     status = "FAILED"
     try:
-        for fn in list(run.post):
-            fn()
-        del run.post[:]                       # res["post"] is this list
+        # Pop each as it completes (review 2026-11-03, punch #24): if a post step raises, the
+        # ones already done are gone from run.post and the failed one stays at the front, so a
+        # retry of finish_run resumes from it instead of re-running the completed steps.
+        while run.post:                       # res["post"] is this list
+            run.post[0]()
+            run.post.pop(0)
         status = "ND {} / TM 11 {} (governing scenario {})".format(
             res["nd"]["cls"], res["tm11"]["cls"], res["governing"])
         return res
