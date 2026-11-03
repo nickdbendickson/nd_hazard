@@ -84,6 +84,35 @@ assert g.point(95, 95) == (None, 0.0)                      # no-data depth -> No
 assert g.point(55, 45) == (0.5, None)                      # NaN velocity -> None
 s = g.sample("point", [(55, 45), (15, 85)])
 assert s["depth_m"] == 2.0 and s["vel_ms"] == 0.5 and (s["x"], s["y"]) == (15, 85)
+# option C (Nick, 2026-11-01): a multipoint pairs its deepest point with the peak velocity
+# over its wet points, even from another point; a dry point's velocity does not count
+V[3, 3] = 9.0                                              # (35, 65): dry, fast
+g = hz.Grid(D, V, gt)
+s = g.sample("point", [(15, 85), (25, 85), (35, 65)])
+assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0 and (s["x"], s["y"]) == (15, 85), s
+V[3, 3] = 0.0
+g = hz.Grid(D, V, gt)
+# dv = peak depth x peak wet velocity (Nick, 2026-11-01), with or without a dv raster
+hd = np.array([[2.0, 0.5, 0.01]]); hv = np.array([[0.5, 3.0, 9.0]]); hgt = (0, 10, 0, 10, 0, -10)
+hsq = lambda x0: [(x0 + 1, 1), (x0 + 9, 1), (x0 + 9, 9), (x0 + 1, 9), (x0 + 1, 1)]
+for hdv in (hd * hv, None):
+    hg = hz.Grid(hd, hv, hgt, dv=hdv)
+    s = hg.sample("point", [(5, 5), (15, 5), (25, 5)])     # not the max per-point dv (1.5)
+    assert (s["depth_m"], s["vel_ms"], s["dv_m2s"]) == (2.0, 3.0, 6.0), (hdv is None, s)
+    s = hg.sample("polygon", [hsq(0), hsq(10)])            # not the deepest part's dv (1.0)
+    assert (s["depth_m"], s["vel_ms"], s["dv_m2s"]) == (2.0, 3.0, 6.0), (hdv is None, s)
+# velocity and dv both unknown: no TypeError, taken as lethal (the comparison convention)
+assert hz.structure_lethal(0.5, None, criterion=hz.COMPARISON_FEINBERG, dv_m2s=None, mobile=True)
+assert hz.structure_lethal(0.5, None, curve=([0.0, 5.0], [1.0, 0.1]), criterion=hz.COMPARISON_CURVE)
+assert not hz.structure_lethal(0.0, None, criterion=hz.COMPARISON_FEINBERG)
+assert hz.structure_lethal(0.5, None, criterion=hz.COMPARISON_FEINBERG, dv_m2s=3.0, mobile=True)
+# mobile home, Feinberg: 0.5 m @ 1 m/s and 0.2 m @ 6 m/s -> dv 3.0 m2/s, lethal either way
+md = np.array([[0.5, 0.2]]); mv = np.array([[1.0, 6.0]])
+for mdv in (md * mv, None):
+    s = hz.Grid(md, mv, hgt, dv=mdv).sample("point", [(5, 5), (15, 5)])
+    assert abs(s["dv_m2s"] - 3.0) < 1e-12, (mdv is None, s)
+    assert hz.structure_lethal(s["depth_m"], s["vel_ms"], criterion=hz.COMPARISON_FEINBERG,
+                               dv_m2s=s["dv_m2s"], mobile=True), (mdv is None, s)
 ring = [(10, 90), (30, 90), (30, 80), (10, 80)]            # covers cells (1,1) and (1,2)
 s = g.sample("polygon", [ring])
 assert s["depth_m"] == 2.0 and s["vel_ms"] == 3.0          # max velocity over the wet cells

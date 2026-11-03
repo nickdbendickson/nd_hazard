@@ -120,11 +120,15 @@ def load_curve(path):
 def structure_lethal(depth_m, vel_ms, curve=None, rule_depth_m=2 * FT, criterion=None,
                      dv_m2s=None, mobile=False):
     """Comparison criteria only: True if a structure sees lethal conditions.
-    criterion 'curve' / 'feinberg', or the plain depth rule (depth > rule_depth_m)."""
+    criterion 'curve' / 'feinberg', or the plain depth rule (depth > rule_depth_m).
+    Velocity unknown (vel_ms None, and dv_m2s None for 'feinberg'): True, taken as lethal,
+    the convention of _comparison_finding (High, borderline, a gap)."""
     if depth_m <= 0:
         return False
     if criterion is None:
         criterion = "curve" if curve is not None else "depth"
+    if vel_ms is None and (criterion == "curve" or (criterion == "feinberg" and dv_m2s is None)):
+        return True
     if criterion == "curve":
         if curve is None:
             raise ValueError("criterion 'curve' needs a curve file")
@@ -221,6 +225,20 @@ def governing_summary(c, limit=FIELD_MAX):
 
 
 # ------------------------------------------------------------------ sampling (nd_hazard's)
+def _peak_dv(best, vmax, wet_any):
+    """Finish a point / polygon sample: velocity = the peak over the wet points / cells, and
+    dv = peak depth x peak wet velocity (Nick, 2026-11-01), whether or not a dv raster was
+    given, so the Feinberg DV test sees the same pair as the TM 11 charts. Unknown
+    velocity -> dv None."""
+    if best is None:
+        return None
+    if wet_any:
+        best["vel_ms"] = vmax
+    v = best["vel_ms"]
+    best["dv_m2s"] = None if v is None else best["depth_m"] * v
+    return best
+
+
 class Grid:
     """Depth (m) and velocity (m/s) arrays of one flood on a north-up, square-cell grid.
     No-data and non-finite values become NaN: dry depth, unknown velocity (None downstream)."""
@@ -248,19 +266,34 @@ class Grid:
 
     def sample(self, kind, parts, wet_ft=0.1):
         """{depth_m, vel_ms, dv_m2s, x, y, how} for a feature's parts, or None when it is off
-        the grid. kind: 'point' (parts = [(x, y)...]: the deepest point), 'polygon' (exterior
+        the grid. kind: 'point' (parts = [(x, y)...]: the deepest point, the largest velocity of
+        the wet points), 'polygon' (exterior
         rings: nd_hazard.sample_footprint per part; the deepest part, the largest velocity of
         the wet parts), 'line' (vertex lists: nd_hazard.sample_line_max per part, the deepest).
+        dv_m2s = depth_m x vel_ms (peak depth x peak wet velocity), never the dv raster.
         Velocity None = unknown."""
         best = None
         if kind == "point":
+            # TM 11 practice (Nick, 2026-11-01, option C): a multipoint classifies on its
+            # deepest point with the peak velocity over its wet points, even from different
+            # points; dv is that peak depth x peak velocity (_peak_dv)
+            vmax, wet_any = None, False
             for x, y in parts:
                 d, v = self.point(x, y)
-                if d is not None and (best is None or d > best["depth_m"]):
-                    best = {"depth_m": d, "vel_ms": v, "dv_m2s": self._dv_point(x, y),
-                            "x": x, "y": y, "how": "point"}
-            return best
+                if d is None:
+                    continue
+                if d / M_PER_FT >= wet_ft:
+                    wet_any = True
+                    if v is not None:
+                        vmax = v if vmax is None else max(vmax, v)
+                if best is None or d > best["depth_m"]:
+                    best = {"depth_m": d, "vel_ms": v, "x": x, "y": y, "how": "point"}
+            return _peak_dv(best, vmax, wet_any)
         if kind == "polygon":
+            # TM 11 practice (Nick, 2026-11-01, option C): peak depth and peak velocity over
+            # the wet cells of all parts, even from different cells (reverts db9c665); dv is
+            # that peak depth x peak velocity (_peak_dv)
+            vmax, wet_any = None, False
             for ring in parts:
                 d, v, how = nh.sample_footprint(self.depth, self.vel, self.x0, self.y_top,
                                                 self.cell, ring, wet_ft, 1.0 / M_PER_FT)
@@ -268,15 +301,14 @@ class Grid:
                     continue
                 cx = sum(p[0] for p in ring) / len(ring)
                 cy = sum(p[1] for p in ring) / len(ring)
-                # depth x velocity at the same cell as the depth, not the footprint maximum
-                dv = None
-                if self.dv is not None:
-                    dv = nh.sample_footprint(self.depth, self.dv, self.x0, self.y_top,
-                                             self.cell, ring, wet_ft, 1.0 / M_PER_FT)[1]
+                if d / M_PER_FT >= wet_ft:
+                    wet_any = True
+                    if v is not None:
+                        vmax = v if vmax is None else max(vmax, v)
                 if best is None or d > best["depth_m"]:
-                    best = {"depth_m": d, "vel_ms": v, "dv_m2s": dv, "x": cx, "y": cy,
+                    best = {"depth_m": d, "vel_ms": v, "x": cx, "y": cy,
                             "how": "polygon: " + how}
-            return best
+            return _peak_dv(best, vmax, wet_any)
         if kind == "line":
             for verts in parts:
                 d = nh.sample_line_max(self.depth, self.x0, self.y_top, self.cell, verts)

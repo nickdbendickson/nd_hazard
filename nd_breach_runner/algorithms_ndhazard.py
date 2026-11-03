@@ -76,10 +76,12 @@ NID_CLASS = {"h": "High", "s": "Significant", "l": "Low", "m": "Medium"}
 _YES = {"y", "yes", "true", "t", "1", "x", "on"}
 _NO = {"n", "no", "false", "f", "0", "off"}
 
-SAMPLING = ("Points: the raster cell under the point. Polygons: the deepest cell whose centre "
+SAMPLING = ("Points: the raster cell under the point; a multipoint takes its deepest point with "
+            "the maximum velocity over its wet points. Polygons: the deepest cell whose centre "
             "falls inside the footprint (the cell under the centroid when none does), with the "
-            "maximum velocity over the footprint's wet cells, which is conservative (the "
-            "velocity at the deepest cell is kept as well). Lines: sampled every half cell, the "
+            "maximum velocity over the footprint's wet cells, even from another cell (TM 11 "
+            "practice: peak depth with peak velocity; the velocity at the deepest cell is kept "
+            "for information only). Lines: sampled every half cell, the "
             "deepest sample. Only features inside the rasters are read.")
 
 
@@ -194,14 +196,19 @@ class Sampler:
         r, c, pts = r[ok], c[ok], pts[ok]
         d = self.d[r, c]
         k = int(np.argmax(d))
-        v = float(self.v[r[k], c[k]])
-        v = v if math.isfinite(v) else None
-        return {"depth_ft": float(d[k]), "vel_fts": v, "vel_at_max_fts": v,
+        vv = self.v[r, c]
+        vk = float(vv[k]) if math.isfinite(vv[k]) else None
+        # TM 11 practice (option C, 2026-11-01): a multipoint classifies on the peak velocity
+        # over its wet points; vel_at_max_fts (the deepest point's) is information only
+        wet = (d >= self.wet) & np.isfinite(vv)
+        v = float(vv[wet].max()) if wet.any() else vk
+        return {"depth_ft": float(d[k]), "vel_fts": v, "vel_at_max_fts": vk,
                 "x": float(pts[k, 0]), "y": float(pts[k, 1]), "cells": 1, "how": "point"}
 
     def polygon(self, rings, centroid):
         """Deepest cell whose centre is inside any of the outer rings; velocity is the
-        maximum over the footprint's wet cells (conservative)."""
+        maximum over the footprint's wet cells, even from another cell (TM 11 practice,
+        Nick 2026-11-01). vel_at_max_fts, the deepest cell's velocity, is information only."""
         g = self.g
         rr, cc = [], []
         for ring in rings:

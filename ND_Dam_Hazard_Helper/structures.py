@@ -1593,6 +1593,20 @@ def mark_mobile_parks(structs, parks, analysis_crs, transform_ctx, parks_crs=Non
     return len(marked)
 
 
+def peak_pair(d, v, vel_ok):
+    """(peak depth, peak velocity over the wet cells) of one structure as 1-element arrays,
+    the pair its zone is classified on (2.35.2, TM 11 practice: the two may come from
+    different cells). Without a velocity raster the velocity is 0 (depth alone)."""
+    d = np.asarray(d, dtype=np.float64)
+    dpk = np.array([float(d.max())])
+    if not vel_ok or not np.size(v):
+        return dpk, np.zeros(1)
+    v = np.asarray(v, dtype=np.float64)
+    wet = (d > 0) & np.isfinite(v)
+    pick = v[wet] if wet.any() else v[np.isfinite(v)]
+    return dpk, np.array([float(pick.max()) if pick.size else 0.0])
+
+
 def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
     """Where the governing values of a structure were read (analysis CRS):
     {"depth": (x, y, value), "vel", "arr", "dv", "zone": (x, y, zone)}."""
@@ -2182,17 +2196,22 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             elif vel_ok and (not rec["vel_missing"] or v.any()):
                 dvv = d * v
                 rec["dv_max"] = float(dvv.max())
+            # 2.35.2 (Nick, 2026-11-01, option C - TM 11 practice): the structure is
+            # classified on its peak depth AND the peak velocity over its wet cells, even when
+            # they come from different cells; the per-cell zones only say where it is worst.
+            dpk, vpk = peak_pair(d, v, vel_ok)
             types = {}
             for typ in (TYPE_HOUSE, TYPE_MOBILE):
                 zcls = classify_values(d, v, *curves[typ])
-                t = {"zone": int(zcls.min()), "has_vel": vel_ok, "margin_high": None,
+                zpk = int(classify_values(dpk, vpk, *curves[typ])[0])
+                t = {"zone": min(zpk, int(zcls.min())), "has_vel": vel_ok, "margin_high": None,
                      "margin_judg": None, "loc": None}
                 try:
                     t["loc"] = _locations(xs, ys, d, v, a, dvv, vel_ok, zcls)
                 except Exception as e:                       # never fails the structure
                     problems.log("structure {} sample locations: {}".format(rec["id"], e))
                 if vel_ok:
-                    mh, mj = zone_margins(d, v, *curves[typ])
+                    mh, mj = zone_margins(dpk, vpk, *curves[typ])
                     t["margin_high"], t["margin_judg"] = float(mh.min()), float(mj.min())
                 types[typ] = t
             rec["zone_found"], rec["zone_mobile"] = types[TYPE_HOUSE]["zone"], \
