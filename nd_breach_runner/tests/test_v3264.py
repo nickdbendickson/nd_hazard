@@ -35,6 +35,19 @@ def _model():
     return d, r
 
 
+
+def _nn_spacing(sub, pts, rows=100):
+    """Distance from each of `sub` to its nearest other point of `pts` (zero distances, the
+    point itself, ignored). Rows in chunks: the same values as the full len(sub) x len(pts)
+    matrix (3000 x 87k, about 6 GB with temporaries) without building it."""
+    nn = np.empty(len(sub))
+    for a in range(0, len(sub), rows):
+        s = sub[a:a + rows]
+        dd = np.hypot(s[:, None, 0] - pts[None, :, 0], s[:, None, 1] - pts[None, :, 1])
+        dd[dd == 0] = np.inf
+        nn[a:a + rows] = dd.min(axis=1)
+    return nn
+
 @test
 def v3264_bc_line_is_outside_the_2d_perimeter():
     if not _has_gdal():
@@ -80,9 +93,7 @@ def v3264_finer_cells_below_the_breach_and_adaptive_step():
         c = np.asarray(m.breach_xy, float) if getattr(m, "breach_xy", None) is not None else None
         # nearest-neighbour spacing: the finest points are a refined cell apart
         sub = pts[np.linspace(0, len(pts) - 1, min(len(pts), 3000)).astype(int)]
-        dd = np.hypot(sub[:, None, 0] - pts[None, :, 0], sub[:, None, 1] - pts[None, :, 1])
-        dd[dd == 0] = np.inf
-        nn = dd.min(axis=1)
+        nn = _nn_spacing(sub, pts)
         assert nn.min() <= ref[0]["cell"] * 1.01 and np.median(nn) >= 0.99 * info["cell"], (
             nn.min(), np.median(nn), c)
         p01 = open(r["paths"]["p01"], encoding="utf-8").read()
