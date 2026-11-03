@@ -18,7 +18,7 @@ _SETTING_WIDGETS. The lead adds to the dialog:
   * _build_extras290_group() into the Hazard Classification tab;
   * **self._extras290_config() into the classification cfg, and
     self._extras290_problems() into the input validation;
-  * SETTING_WIDGETS_290 to _SETTING_WIDGETS, BUSY_WIDGETS_290 to _set_busy;
+  * SETTING_WIDGETS_290 to _SETTING_WIDGETS, BUSY_WIDGETS_290 to _BUSY_WIDGETS;
   * _refresh_parcel_fields290() from _refresh_layer_combos and when parcel_combo
     changes; cfg["settings_profile"] = self._settings_profile_for_cfg().
 """
@@ -125,7 +125,7 @@ class Extras290TabMixin(object):
     """Methods for the 'Version 2.9 options' group of the Hazard Classification
     tab and its tool buttons."""
 
-    # every button (the lead adds these to _set_busy)
+    # every button (the lead adds these to _BUSY_WIDGETS)
     BUSY_WIDGETS_290 = (
         "estimate_btn", "profile_save_btn", "profile_load_btn", "profile_compare_btn",
         "reproduce_btn", "portfolio_btn", "formfill_btn", "formfill_keys_btn",
