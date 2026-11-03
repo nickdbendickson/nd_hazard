@@ -9,6 +9,7 @@ version=2.35.5
 icon=icon.svg
 author=N.D. Bendickson
 changelog=2.35.5 (2026-11-03; audit fix C: a structure's DV (DV_Max_ft2s, Graham severity) is its peak depth x the peak velocity over its wet cells, never a DV raster's value; velocity unknown at every wet cell: DV None (depth-only severity, 'velocity unknown - no DV') and a Notes line 'velocity unknown at every wet cell - depth only, no DV - verify'. Missing-velocity Notes now say 'filled with the structure's peak velocity, else 0) - verify'. Test tests/test_dv_peak_pair.py.)
+    2.35.4 (2026-11-03; REG_05.2026 5.2.1.2(b), port of DWR_Plugins ad4f5d9: a US or State highway is at least Medium whatever its AADT; a bare 'Highway 23' / 'Hwy 2' and 'North Dakota Highway 200' read as State highways, not 'County Highway 12'; NG9-1-1 SHIELD USHY / STHY read; the criteria table has a 5.2.1.2(b) row and the results a 'US / State highways overtopped' line. Test tests/test_highway_floor_reg05.py.)
     
     2.35.3 (2026-11-03; port of DWR_Plugins #254: DSS-WISE / hand-export names with units after the quantity - Depth_ft, Velocity_ftps, Depth_m, Velocity_ft_per_s - are found in the dam folder (were skipped as time steps; autodetect._is_time_step) and their units read from the name (dsswise.detect_units); metric names in a dam folder get a WARNING note. Test test_dsswise_unit_names.py.)
     

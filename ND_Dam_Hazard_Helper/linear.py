@@ -42,6 +42,29 @@ ROAD_OTHER = "Local/County"
 _RE_INTERSTATE = re.compile(r"\b(?:i|ih|interstate)\s*-?\s*\d+", re.I)
 _RE_US = re.compile(r"\b(?:us|u\.\s?s\.?)\s*(?:hwy|highway|route|rte)?\s*-?\s*\d+", re.I)
 _RE_STATE = re.compile(r"\b(?:nd|state)\s*(?:hwy|highway|route|rte)?\s*-?\s*\d+", re.I)
+# 2.18.48: a bare 'Highway 23' / 'Hwy 2' (ND NG9-1-1 names) and 'North Dakota Highway 200' are
+# State highways too, 'County Highway 12' / 'Co Hwy 12' / 'Township Highway' are not - the same
+# texts as the Runner / Screening nd_hazard.us_state_highway_from_text (REG_05.2026 5.2.1.2(b);
+# parity test DamSafety_Runner/tests/test_highway_floor.py)
+_RE_US_STATE_ANY = re.compile(r"\b(?:u\.?\s?s\.?|nd|state|north\s+dakota)\s*(?:hwy|highway|route|"
+                              r"rte)?\s*-?\s*\d+|\b(?:hwy|highway)\s*-?\s*\d+", re.I)
+_RE_LOCAL_PREFIX = re.compile(r"\b(?:county|cnty|co|township|twp)\.?\s*(?:road|rd)?\s*$", re.I)
+# ND NG9-1-1 roads: SHIELD USHY (US highway) / STHY (State highway)
+_RE_SHIELD = re.compile(r"(?<![a-z0-9])(ushy|sthy)(?![a-z0-9])", re.I)
+
+
+def us_state_highway_text(text):
+    """The matched route text of a US / State highway ('Highway 23', 'USHY'), else ''."""
+    t = str(text or "")
+    m = _RE_SHIELD.search(t)
+    if m:
+        return m.group(1).upper()
+    for m in _RE_US_STATE_ANY.finditer(t):
+        if not _RE_LOCAL_PREFIX.search(t[:m.start()]):
+            return m.group(0)
+    return ""
+
+
 _RE_YEAR_COL = re.compile(r"^(?:aadt|adt|aadt_vn|cur_aadt)[_ ]?((?:19|20)\d{2})$"
                           r"|^((?:19|20)\d{2})[_ ]?(?:aadt|adt)$")
 _UNPAVED = re.compile(r"\b(?:unpaved|gravel|fine gravel|dirt|earth|ground|graded|scoria|"
@@ -150,6 +173,10 @@ class AttrReader(object):
             return ROAD_US, "route/name '{}'".format(_RE_US.search(text).group(0))
         if _RE_STATE.search(text):
             return ROAD_STATE, "route/name '{}'".format(_RE_STATE.search(text).group(0))
+        hwy = us_state_highway_text(text)
+        if hwy:
+            return (ROAD_US if hwy == "USHY" else ROAD_STATE), \
+                "route/name '{}' (US/State, 5.2.1.2(b))".format(hwy)
         hw = str(self.get(attrs, "highway") or "").lower()
         if hw in ("motorway", "motorway_link"):
             return ROAD_INTERSTATE, "OSM highway=motorway"
@@ -520,10 +547,14 @@ def nd_road_class(road_class, aadt):
         return ND_HIGH, "AADT {:,.0f} > {:,} - probable loss of life".format(
             aadt, ND_AADT_HIGH_ABOVE), False
     if road_class in (ROAD_US, ROAD_STATE):
+        # 2.18.48: the basis cites 5.2.1.2(b) - a US / State highway is at least Medium
+        # whatever its AADT (the AADT < 500 Low rule is for local, county and private roads)
         if aadt is None:
-            return ND_MEDIUM, "{} - transportation disruption; no AADT found - High if AADT " \
-                "> {:,} (verify)".format(road_class, ND_AADT_HIGH_ABOVE), True
-        return ND_MEDIUM, "{} - transportation disruption".format(road_class), False
+            return ND_MEDIUM, "{} - transportation disruption [5.2.1.2(b)]; no AADT found - High " \
+                "if AADT > {:,} (verify)".format(road_class, ND_AADT_HIGH_ABOVE), True
+        return ND_MEDIUM, "{} - transportation disruption [5.2.1.2(b), at least Medium{}]".format(
+            road_class, " although AADT {:,.0f} < {:,}".format(aadt, ND_AADT_LOW_BELOW)
+            if aadt < ND_AADT_LOW_BELOW else ""), False
     if aadt is not None and aadt >= ND_AADT_LOW_BELOW:
         return ND_MEDIUM, "AADT {:,.0f} (500-2,000) - transportation disruption".format(
             aadt), False
