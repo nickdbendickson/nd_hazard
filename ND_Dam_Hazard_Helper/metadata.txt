@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.35.3
+version=2.35.4
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.35.3 (2026-11-03; port of DWR_Plugins #254: DSS-WISE / hand-export names with units after the quantity - Depth_ft, Velocity_ftps, Depth_m, Velocity_ft_per_s - are found in the dam folder (were skipped as time steps; autodetect._is_time_step) and their units read from the name (dsswise.detect_units); metric names in a dam folder get a WARNING note. Test test_dsswise_unit_names.py.)
+changelog=2.35.4 (2026-11-03; REG_05.2026 5.2.1.2(b), port of DWR_Plugins ad4f5d9: a US or State highway is at least Medium whatever its AADT; a bare 'Highway 23' / 'Hwy 2' and 'North Dakota Highway 200' read as State highways, not 'County Highway 12'; NG9-1-1 SHIELD USHY / STHY read; the criteria table has a 5.2.1.2(b) row and the results a 'US / State highways overtopped' line. Test tests/test_highway_floor_reg05.py.)
+    
+    2.35.3 (2026-11-03; port of DWR_Plugins #254: DSS-WISE / hand-export names with units after the quantity - Depth_ft, Velocity_ftps, Depth_m, Velocity_ft_per_s - are found in the dam folder (were skipped as time steps; autodetect._is_time_step) and their units read from the name (dsswise.detect_units); metric names in a dam folder get a WARNING note. Test test_dsswise_unit_names.py.)
     
     2.35.2 (2026-11-01; option C, Nick: a structure's zone is classified on its peak depth with the peak velocity over its wet cells (structures.peak_pair), not cell by cell; can only keep or raise the zone. Margins from the same pair. Test tests/test_peak_depth_peak_velocity.py.)
     

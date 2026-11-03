@@ -46,11 +46,11 @@ STRUCT_SYNONYMS = {
     "S_MOBILE": ("mobile", "mobile_home", "is_mobile", "manufactured", "trailer", "prim_occ"),
 }
 ROAD_SYNONYMS = {
-    "R_ID": ("name", "road_name", "fullname", "rte_name", "route_name", "route", "id",
-             "objectid"),
+    "R_ID": ("name", "road_name", "fullname", "full_name", "rte_name", "route_name", "route",
+             "id", "objectid"),
     "R_AADT": ("aadt", "adt", "aadt_2024", "aadt_2023", "aadt_2022", "aadt_vn", "traffic",
                "vehicles_per_day"),
-    "R_CLASS": ("rttyp", "route_type", "rte_type", "road_class", "class", "fclass",
+    "R_CLASS": ("rttyp", "route_type", "rte_type", "shield", "road_class", "class", "fclass",
                 "func_class", "functional_class", "route_sign", "route", "highway",
                 "fullname", "name"),
     "R_PRIVATE": ("private", "is_private"),      # never ownership / access codes
@@ -133,6 +133,15 @@ def is_mobile(flag_value, occ_text):
 
 def is_interstate(class_text, name_text=""):
     return nh.interstate_from_text(class_text) or nh.interstate_from_text(name_text)
+
+
+def is_us_state(class_text, name_text="", class_field=""):
+    """3.27.2 (nd_hazard 1.3.0, port of DWR Runner 3.10.45): a US / State highway from the class field or the name
+    (5.2.1.2(b)). class_field: the class field's name; an OSM highway / fclass field also counts
+    'primary'."""
+    osm = str(class_field or "").strip().lower() in ("highway", "fclass")
+    return nh.us_state_highway_from_text(class_text, osm=osm) or \
+        nh.us_state_highway_from_text(name_text)
 
 
 def is_private(v):
@@ -356,7 +365,8 @@ class NDHazardAlgorithm(_ToolBase):
                 "is Medium by rule (the old option 'judgment zone counts as potentially lethal' "
                 "makes it High, 5.3). 1D model: deeper than 2 ft -> High. Inundated "
                 "at any depth -> at least Medium (economic loss). Roads (5.2.1.2): AADT > 2,000 "
-                "or interstate -> High, 500-2,000 -> Medium, private or < 500 -> Low, sole "
+                "or interstate -> High, US / State highway (5.2.1.2(b), any AADT) or 500-2,000 -> "
+                "Medium, private or < 500 (local / county roads) -> Low, sole "
                 "access to an occupied location -> Medium. Railroads (5.2.1.3): Medium, 10 or "
                 "more trains a day or passenger -> High. Lifeline facilities (5.2.2) inundated "
                 "-> Medium (access roads are not traced). A downstream dam the flood reaches "
@@ -571,6 +581,7 @@ class NDHazardAlgorithm(_ToolBase):
                     name or "road {}".format(f.id()), s["depth_ft"],
                     aadt=qio.num(_attr(f, fld["R_AADT"])),
                     interstate=is_interstate(_txt(_attr(f, fld["R_CLASS"])), name),
+                    us_state=is_us_state(_txt(_attr(f, fld["R_CLASS"])), name, fld["R_CLASS"]),
                     private=is_private(_attr(f, fld["R_PRIVATE"])),
                     sole_access=bool(_yesno(_attr(f, fld["R_SOLE"]))), x=s["x"], y=s["y"]))
             outside["roads"] = out_n

@@ -58,9 +58,11 @@ class HazardClassification(QgsProcessingAlgorithm):
                 "(5.3 cascading). HIGH: potentially lethal to occupants of a habitable structure; "
                 "interstate or AADT > 2,000; >= 10 trains a day or an active passenger line; a High "
                 "dam reached downstream. MEDIUM: a habitable structure inundated at any depth "
-                "(economic loss); AADT 500-2,000 or sole access to an occupied location; any other "
+                "(economic loss); a US / State highway (5.2.1.2(b), any AADT), AADT 500-2,000 or "
+                "sole access to an occupied location; any other "
                 "railroad; a lifeline facility inundated; a Medium (or unclassified) dam reached. "
-                "LOW: only uninhabited buildings, private or AADT < 500 roads, or nothing of these is "
+                "LOW: only uninhabited buildings, private or AADT < 500 local / county roads, or "
+                "nothing of these is "
                 "reached. A habitable structure in the charts' judgment zone is MEDIUM by rule (not "
                 "potentially lethal). Borderline results take the higher class (5.3): an unknown "
                 "velocity counts as potentially lethal (hz_border = yes when every "
@@ -411,8 +413,28 @@ class HazardClassification(QgsProcessingAlgorithm):
                         out.append(rec)
                         where[(kind, rid)] = ((s["x"], s["y"]), s, kind)
 
+            def _rname(r):
+                # 0.33.3 (port of DWR Screening 0.17.37): the road's name (and an ND NG9-1-1
+                # SHIELD code), so a US / State highway named only there ('HIGHWAY 23', 'US 2',
+                # SHIELD USHY / STHY) counts at least Medium (5.2.1.2(b)), as in the Runner
+                try:
+                    low = {n.lower(): n for n in r.fields().names()}
+                except Exception:                       # noqa  (never fails the tool)
+                    return ""
+                got = ""
+                for n in ("name", "fullname", "full_name", "road_name", "rte_name", "route_name"):
+                    v = r[low[n]] if n in low else None
+                    if v is not None and str(v) not in ("", "NULL"):
+                        got = str(v)
+                        break
+                sh = r[low["shield"]] if "shield" in low else None
+                if sh is not None and str(sh).strip().upper() in ("USHY", "STHY"):
+                    got = (got + " " + str(sh).strip()).strip()
+                return got
+
             if roads is not None:
                 lines(roads, tr, fr, "road", r_in, lambda r: {
+                    "name": _rname(r),
                     "aadt": r[f_aadt] if f_aadt else None,
                     "road_class": str(r[f_rcls]) if f_rcls and r[f_rcls] is not None else "",
                     "sole_access": nh.yes_no(r[f_sole]) is True if f_sole else False})
