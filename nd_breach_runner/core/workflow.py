@@ -54,7 +54,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.27.3"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.27.4"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -1684,7 +1684,6 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
     sel = np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= 30.0
     if not np.isfinite(z[sel]).any() and not getattr(st, "proposed", None):
         raise brmod.BreachInputError("{}: no DEM data at the dam point".format(dam.dam_id))
-    top_known = dam.top_of_dam_ft is not None
     if getattr(st, "proposed", None) and dam.top_of_dam_ft is None:
         dam.top_of_dam_ft = float(st.proposed["crest_m"]) / FT
     elif dam.top_of_dam_ft is None:

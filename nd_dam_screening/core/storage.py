@@ -238,12 +238,10 @@ def estimate_storage(dem, water_mask, cell, dam_xy_idx=None, crest_radius_m=50.0
     above = curve_above[-1][1]
     curve = [(e, v + below) for e, v in curve_above]
 
-    conf = "medium"
-    if any("defaulted" in s or "not found" in s or "spill level" in s or "leaks at the pool" in s
-           for s in notes):
-        conf = "low"
-    elif known_height_m:
-        conf = "medium"
+    # 0.33.5 (audit 2026-11-03): the "medium" known-height branch was the same as the default -
+    # removed; same result
+    conf = "low" if any("defaulted" in s or "not found" in s or "spill level" in s
+                        or "leaks at the pool" in s for s in notes) else "medium"
     return StorageResult(pool, crest, area_m2, below, above, below + above,
                          dmax, slope, conf, curve, notes)
 

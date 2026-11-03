@@ -1368,7 +1368,6 @@ def batch_matches_fields_by_name_and_reads_dam_inputs():
          "time_hr,cfs\n0,0\n4,4000\n20,0\n")
     _write_csv(os.path.join(d, "ND00001", "inputs"), "spillway_rating.csv",
          "elev_ft,cfs\n1846,0\n1848,500\n1852,4000\n")
-    from nd_breach_runner.tests import fake_qgis as fq
     def dm(fid, nid):
         return fq.FakeFeature(fq.FakeGeometry("point", [[(0, 0)]]), NIDID=nid, DAM_HEIGHT=25.0,
                               MAX_STORAGE=500.0, SURFACE_AREA=60.0, TOP_OF_DAM=1850.0,
