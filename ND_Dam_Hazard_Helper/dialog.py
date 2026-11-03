@@ -9,7 +9,7 @@ import traceback
 from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
-    QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox, QScrollArea, QCheckBox,
+    QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox, QCheckBox,
     QToolButton, QMenu,
 )
 
