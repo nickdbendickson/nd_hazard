@@ -39,7 +39,7 @@ class Triage(QgsProcessingAlgorithm):
                 "would hold 'volume factor' x the released volume.\n"
                 "tri_result = clear: no habitable structure (tool 8's rule: habitable unless the "
                 "occupancy names an uninhabited building), no road that could rate Medium or High "
-                "(only a known AADT < 500, not interstate, not sole access is left out; an unknown "
+                "(only a known AADT < 500, not interstate, not a US / State highway, not sole access is left out; an unknown "
                 "AADT counts), no railroad, no lifeline facility and no other dam of the layer lies "
                 "inside the envelope, so the dam screens LOW without the 2D model. needs 2D: something is inside, the envelope reached the terrain edge, or the "
                 "dam is above the size limit. Tool 7 skips cleared dams.\n"
@@ -233,7 +233,7 @@ class Triage(QgsProcessingAlgorithm):
                             if kind == "road":
                                 aadt = cm.fval(r, rnames, f_aadt, float)
                                 # same rule as tool 8 (nd_hazard): only a road KNOWN to be
-                                # low (AADT < 500, not interstate) cannot raise the class; an
+                                # low (AADT < 500, not interstate, not US / State) cannot raise the class; an
                                 # unknown AADT is assumed Medium there, so it counts here too
                                 rd = hz.nd_road("r", 1.0, aadt, str(r[f_rcls]) if f_rcls and r[f_rcls] else "",
                                                 sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False)

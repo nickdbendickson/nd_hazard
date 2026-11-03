@@ -89,12 +89,12 @@ class NDdamHazardHelperPlugin(QObject):
         # Add to Plugins Menu
         self.iface.addPluginToMenu(PLUGIN_NAME, self.action)
         # v2.12: the Dam suite home (the same window in all three plugins)
-        self.home_action = QAction(icon, "Dam suite home...", self.iface.mainWindow())
+        self.home_action = QAction(icon, "Dam suite home…", self.iface.mainWindow())
         self.home_action.setObjectName("NDDamHazardSuiteHomeAction")
         self.home_action.triggered.connect(self.run_home)
         self.iface.addPluginToMenu(PLUGIN_NAME, self.home_action)
         # 2.17.0: the suite data folder, the servers and "Get data for this dam" (suite_data.py)
-        self.data_action = QAction(icon, "Suite data and servers...", self.iface.mainWindow())
+        self.data_action = QAction(icon, "Suite data and servers…", self.iface.mainWindow())
         self.data_action.setObjectName("NDDamHazardSuiteDataAction")
         self.data_action.triggered.connect(self.run_suite_data)
         self.iface.addPluginToMenu(PLUGIN_NAME, self.data_action)
@@ -103,10 +103,10 @@ class NDdamHazardHelperPlugin(QObject):
         try:
             from . import suite_home
             for label, name, slot in ((PLUGIN_NAME + "...", "NDSuiteHazardWindow", self.run_plugin),
-                                      ("Dam suite home...", "NDSuiteHome", self.run_home),
-                                      ("Suite data and servers...", "NDSuiteData",
+                                      ("Dam suite home…", "NDSuiteHome", self.run_home),
+                                      ("Suite data and servers…", "NDSuiteData",
                                        self.run_suite_data),
-                                      ("Suite settings...", "NDSuiteSettings", self.run_settings)):
+                                      ("Suite settings…", "NDSuiteSettings", self.run_settings)):
                 a = suite_home.add_suite_action(self.iface, label, name, slot)
                 if a is not None:
                     self.suite_actions.append(a)

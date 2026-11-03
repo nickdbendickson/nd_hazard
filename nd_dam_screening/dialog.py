@@ -2871,7 +2871,7 @@ class NDDamScreeningDialog(QDialog):
             QMessageBox.information(self, TITLE, "ND Dam Hazard could not be opened ({}).".format(e))
 
     def show_settings(self):
-        """Open the window on its Settings tab (the suite menu's 'Suite settings...')."""
+        """Open the window on its Settings tab (the suite menu's 'Suite settings…')."""
         try:
             self.tabs.setCurrentIndex(3)
         except Exception:                                        # noqa

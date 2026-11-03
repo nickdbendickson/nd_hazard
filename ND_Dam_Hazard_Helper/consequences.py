@@ -161,7 +161,9 @@ def economic_estimate(rec, curves=None):
 
 
 def flood_severity(dv, depth, method="graham"):
-    """Low / Medium / High flood severity for Graham (1999) rates."""
+    """Low / Medium / High flood severity for Graham (1999) rates. dv is the structure's
+    peak depth x peak wet-cell velocity (structures.evaluate_structures, audit 2026-11-03
+    option C), never a DV raster's value; None when the velocity is unknown - then depth only."""
     if dv is not None and np.isfinite(dv):
         if method == "rcem" and dv > DV_HIGH_RCEM:
             return SEV_HIGH, "DV {:.0f} ft2/s > {:.0f} (RCEM)".format(dv, DV_HIGH_RCEM)
@@ -169,8 +171,8 @@ def flood_severity(dv, depth, method="graham"):
             return SEV_MEDIUM, "DV {:.0f} ft2/s >= {:.0f}".format(dv, DV_MEDIUM)
         return SEV_LOW, "DV {:.0f} ft2/s < {:.0f}".format(dv, DV_MEDIUM)
     if depth is not None and depth >= DEPTH_MEDIUM:
-        return SEV_MEDIUM, "depth {:.1f} ft >= 10 (no velocity)".format(depth)
-    return SEV_LOW, "depth {:.1f} ft < 10 (no velocity)".format(depth or 0.0)
+        return SEV_MEDIUM, "depth {:.1f} ft >= 10 (velocity unknown - no DV)".format(depth)
+    return SEV_LOW, "depth {:.1f} ft < 10 (velocity unknown - no DV)".format(depth or 0.0)
 
 
 def warning_category(arrival_hr, warning_issued_hr):

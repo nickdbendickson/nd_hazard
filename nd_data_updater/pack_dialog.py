@@ -440,7 +440,7 @@ class PackDialog(QDialog):
                 return
             pack = self.plugin.pack_path()
             if not os.path.isfile(os.path.join(pack, "manifest.json")):
-                self._warn("There is no pack yet: build it first (Check for Data Updates Now).")
+                self._warn("There is no pack yet: build it first (Check for data updates now).")
                 return
             if QMessageBox.question(
                     self, "Replace the layer",

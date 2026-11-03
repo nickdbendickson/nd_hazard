@@ -107,6 +107,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
             cls = ND_HIGH
     road_high = [r for r in roads if r["nd_class"] == ND_HIGH]
     road_med = [r for r in roads if r["nd_class"] == ND_MEDIUM]
+    # 2.35.4 (port of DWR 2.18.48): US / State highways, REG_05.2026 5.2.1.2(b): at least
+    # Medium whatever the AADT
+    road_us_state = [r for r in roads if r.get("road_class") in ("US Highway", "State Highway")]
     if road_high:
         reasons.append("HIGH - {} overtopped road stretch(es) on Interstates or with "
                        "AADT > 2,000 [5.2.1.2]: {}".format(len(road_high), _road_list(road_high)))
@@ -209,6 +212,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
         ("5.2.1.2", "Overtopped roads - US / State highway or AADT 500 - 2,000",
          "{} stretch(es)".format(len(road_med)) if roads_evaluated else "not evaluated",
          met(road_med, ND_MEDIUM) if roads_evaluated else "?"),
+        ("5.2.1.2(b)", "US / State highways overtopped - at least Medium whatever the AADT",
+         "{} stretch(es)".format(len(road_us_state)) if roads_evaluated else "not evaluated",
+         met(road_us_state, ND_MEDIUM + " (at least)") if roads_evaluated else "?"),
         ("5.2.1.2", "Overtopped roads without AADT data",
          "{} stretch(es)".format(len(no_aadt)) if roads_evaluated else "not evaluated",
          met(no_aadt, "Judgment") if roads_evaluated else "?"),
@@ -260,7 +266,7 @@ def tm11_rows(tm11):
          "{:.1f}".format(g("lij_vehicles_judgment") or 0)),
         ("Lives in jeopardy (LIJ)", "{:.1f}".format(g("lij") or 0)),
         ("Table 1: Low 0 / Significant 1 - 6 / High > 6", str(g("cls", "")).upper()),
-        ("Without judgment-zone items", str(g("cls_without_judgment", ""))),
+        ("Without judgment-zone items (TM 11 Table 1)", str(g("cls_without_judgment", ""))),
     ]
 
 
@@ -612,6 +618,7 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
                        ("changes", "CHANGES SINCE THE LAST RUN"),
                        ("method", "ACER ZONE METHOD"),
                        ("model_extent", "MODEL EXTENT CHECK"),
+                       ("datum", "VERTICAL DATUM OF THE DAM ELEVATIONS"),
                        ("consequences", "CONSEQUENCES (screening)"),
                        ("hcom", "DSS-WISE HCOM CROSS-CHECK (population at risk)"),
                        ("popsource", "SECOND POPULATION SOURCE (census / gridded)"),
@@ -660,7 +667,10 @@ def write_summary(output_folder, lines, nd, tm11, transform_ctx):
     rows += [("ND {} {}".format(c["section"], c["criterion"]),
               "{} -> {}".format(c["found"], c["result"]) if c["found"] else c["result"])
              for c in nd.get("criteria", [])]
-    rows += [("TM 11 classification", tm11["cls"]),
+    # 2.35.6 (as DWR 2.18.51): REG_05.2026 classes are High / Medium / Low; the ACER TM 11
+    # Table 1 class (Low / Significant / High) is a reference, said so in the item
+    rows += [("TM 11 classification (ACER TM 11 Table 1 reference, not the ND class)",
+              tm11["cls"]),
              ("TM 11 lives in jeopardy", "{:.1f}".format(tm11["lij"])),
              ("TM 11 without judgment-zone items", tm11["cls_without_judgment"])]
     rows += [("Judgment item", j) for j in nd["judgment"]]

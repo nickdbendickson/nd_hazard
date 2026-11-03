@@ -428,7 +428,7 @@ def apply_acer11_style(lyr):
         items = [
             QgsColorRampShader.ColorRampItem(CLASS_NODATA, QColor(0, 0, 0, 0), "No Data"),
             QgsColorRampShader.ColorRampItem(CLASS_HIGH, QColor("#F44336"), "HIGH DANGER ZONE"),
-            QgsColorRampShader.ColorRampItem(CLASS_JUDGMENT, QColor("#FFEB3B"), "JUDGEMENT ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_JUDGMENT, QColor("#FFEB3B"), "JUDGMENT ZONE"),
             QgsColorRampShader.ColorRampItem(CLASS_LOW, QColor("#4CAF50"), "LOW DANGER ZONE"),
         ]
         ramp_shader = QgsColorRampShader()
@@ -638,7 +638,7 @@ def finite_length_ft(da, geom, crs, ctx=None):
 
 
 def buffer_distance_in_layer_units(distance_ft, crs):
-    """Convert feet to the CRS's linear units (feet/US ft/meters/degrees)."""
+    """Convert feet to the CRS's linear units (feet/US ft/metres/degrees)."""
     try:
         if crs is None or not crs.isValid():
             return float(distance_ft)
@@ -1569,7 +1569,7 @@ def log_threshold_verification():
             vv = np.array([min(v, vmax)])
             lo = evaluate_polynomial(lo_c, vv)[0]
             hi = evaluate_polynomial(hi_c, vv)[0]
-            log_message("  V={:>5.1f} fps: low={:.2f} ft, high={:.2f} ft".format(v, lo, hi))
+            log_message("  V={:>5.1f} ft/s: low={:.2f} ft, high={:.2f} ft".format(v, lo, hi))
     names = {1: "HIGH(red)", 2: "JUDGMENT(yellow)", 3: "LOW(green)"}
     for h, v, kind in [(3.0, 6.0, "found"), (4.0, 4.0, "found"), (3.0, 12.0, "mobile"),
                        (2.5, 2.0, "vehicle")]:

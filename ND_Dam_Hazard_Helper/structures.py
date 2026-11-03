@@ -2190,7 +2190,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         except Exception as e:
             problems.log("structure {} evaluation area: {}".format(sid, e))
     # ---- 3. velocity, arrival, D x V for all wet cells at once ---------------
-    tick(55, "Reading velocity and arrival at {} structure(s)...".format(len(wet_ids)))
+    tick(55, "Reading velocity and arrival at {} structure(s)…".format(len(wet_ids)))
     if wet_ids:
         counts = [cells[s][2].size for s in wet_ids]
         offs = np.concatenate(([0], np.cumsum(counts)))
@@ -2217,6 +2217,9 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             a0, a1 = int(offs[i]), int(offs[i + 1])
             v = v_all[a0:a1]
             a = a_all[a0:a1]
+            # 2.35.5: velocity is known when the raster gives a value at one of the wet cells
+            vel_known = bool(vel_ok and np.isfinite(v).any())
+            rec["vel_unknown"] = bool(vel_ok and not vel_known)
             if np.isnan(v).any() and vel_ok:
                 rec["vel_missing"] = True
                 v = _fill_missing_velocity(v)
@@ -2228,17 +2231,20 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["max_depth"] = float(d.max())
             rec["max_vel"] = float(v.max()) if vel_ok else None
             rec["arrival"] = float(np.nanmin(a)) if np.isfinite(a).any() else None
-            dvv = None
-            if dv_all is not None:
-                dvv = dv_all[a0:a1]
-                rec["dv_max"] = float(np.nanmax(dvv)) if np.isfinite(dvv).any() else None
-            elif vel_ok and (not rec["vel_missing"] or v.any()):
-                dvv = d * v
-                rec["dv_max"] = float(dvv.max())
             # 2.35.2 (Nick, 2026-11-01, option C - TM 11 practice): the structure is
             # classified on its peak depth AND the peak velocity over its wet cells, even when
             # they come from different cells; the per-cell zones only say where it is worst.
             dpk, vpk = peak_pair(d, v, vel_ok)
+            # 2.35.5 (audit 2026-11-03, option C): DV is the peak depth x the peak wet-cell
+            # velocity - the pair the zone is classified on - never a DV raster's value (a DV
+            # raster is information only: it may mark where the worst cell is). Velocity
+            # unknown at every wet cell: no DV (None), not depth x 0.
+            if vel_known:
+                rec["dv_max"] = float(dpk[0] * vpk[0])
+                dvv = d * v
+            else:
+                rec["dv_max"] = None
+                dvv = dv_all[a0:a1] if dv_all is not None else None
             types = {}
             for typ in (TYPE_HOUSE, TYPE_MOBILE):
                 zcls = classify_values(d, v, *curves[typ])
@@ -2440,6 +2446,8 @@ def structure_notes(rec):
     if rec.get("vel_missing"):
         notes.append("velocity missing on some wet cells (filled with the structure's peak "
                      "velocity, else 0) - verify")
+    if rec.get("vel_unknown"):
+        notes.append("velocity unknown at every wet cell - depth only, no DV - verify")
     if rec.get("site_note"):
         notes.append(rec["site_note"])
     elif rec["category"] == CAT_UNVERIFIED:

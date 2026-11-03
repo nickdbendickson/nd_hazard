@@ -2,7 +2,7 @@
 
 QGIS parents a plugin submenu to the main window, not to the Plugins menu, so the old lookup
 (findChildren on the Plugins menu) never found the suite menu and each of the three plugins added
-its own "Dam suite home...", "Suite settings..." and "Suite data and servers..." - nine lines
+its own "Dam suite home…", "Suite settings…" and "Suite data and servers…" - nine lines
 for three. Seen in QGIS 3.34; this test builds the menus the way QGIS does, with real Qt.
 Run: python3 -m ND_Dam_Hazard_Helper.tests.run_tests (from the folder above the plugin)."""
 import os
@@ -52,15 +52,15 @@ def the_suite_menu_holds_each_shared_entry_once():
                               ("ND Dam Breach Runner...", "NDSuiteRunnerWindow"),
                               ("ND Dam Breach Screening...", "NDSuiteScreeningWindow")):
         for label, name in ((plugin_label, own),
-                            ("Dam suite home...", "NDSuiteHome"),
-                            ("Suite settings...", "NDSuiteSettings"),
-                            ("Suite data and servers...", "NDSuiteData")):
+                            ("Dam suite home…", "NDSuiteHome"),
+                            ("Suite settings…", "NDSuiteSettings"),
+                            ("Suite data and servers…", "NDSuiteData")):
             a = SH.add_suite_action(iface, label, name, lambda *_: None)
             if a is not None:
                 added.append(a)
     texts = [a.text() for a in iface.subs[SH.SUITE_MENU].actions()]
-    assert texts.count("Dam suite home...") == 1, texts
-    assert texts.count("Suite settings...") == 1 and texts.count("Suite data and servers...") == 1
+    assert texts.count("Dam suite home…") == 1, texts
+    assert texts.count("Suite settings…") == 1 and texts.count("Suite data and servers…") == 1
     assert len(texts) == 6 and len(added) == 6, texts
     SH.remove_suite_actions(iface, added)
     assert iface.subs[SH.SUITE_MENU].actions() == []

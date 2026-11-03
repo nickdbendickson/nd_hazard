@@ -3,7 +3,7 @@
 
 Byte-identical in ND Dam Hazard Classification Helper, ND Dam Breach Runner and ND Dam Breach
 Screening (the Hazard Helper's copy is the master; the release sync copies it). Each plugin opens
-it from its menu ("Dam suite home...").
+it from its menu ("Dam suite home…").
 
 Three tabs:
 

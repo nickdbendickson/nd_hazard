@@ -20,7 +20,7 @@ WIZARD = "wizard:"
 # tab -> tools: (algorithm, button label, tooltip). "wizard:" opens the guided wizard.
 TABS = (
     ("Dam", (
-        (WIZARD, "Guided setup for one dam (wizard)...",
+        (WIZARD, "Guided setup for one dam (wizard)…",
          "Five pages that fill in 'Run breach model for one dam', with a live run-time estimate."),
         ("rundam", "Run breach model for one dam...",
          "The breach hydrograph, the LISFLOOD-FP flood (and ANUGA if chosen), rasters, products and "

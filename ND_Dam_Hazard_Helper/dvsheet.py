@@ -826,7 +826,7 @@ def chart_svg(kind, rows, curve_at, window=None, labels=None):
                      X(vh), Y(min(dmax * 0.95, hi + dmax * 0.12)), _TEXT["high"]))
     if lo < dmax * 0.9 and (min(hi, dmax) - lo) > dmax * 0.06:
         o.append('<text x="{:.1f}" y="{:.1f}" font-size="13" font-weight="bold" '
-                 'text-anchor="middle" fill="{}">JUDGEMENT ZONE</text>'.format(
+                 'text-anchor="middle" fill="{}">JUDGMENT ZONE</text>'.format(
                      X(vh), Y((lo + min(hi, dmax)) / 2.0) + 5, _TEXT["judg"]))
     if lo > dmax * 0.06:
         o.append('<text x="{:.1f}" y="{:.1f}" font-size="14" font-weight="bold" '
