@@ -206,11 +206,22 @@ def detect_units(name, role):
         u = _unit_from(c, role)
         if u:
             return u, "file name"
-    for t in toks:
-        u = _unit_from([t], role, strict=True)
+    # 2.35.3: units right after the quantity word: "Depth_m", "Velocity_ft_s",
+    # "Velocity_m_per_s", "Depth_ft" (a lone "m" / "s" elsewhere stays ignored)
+    plain = [t for t in toks if t != "per"]
+    for i, t in enumerate(plain[:-1]):
+        if t in _QUANTITY_WORDS or re.match(r"^(max)?(depth|velocity|vel|speed)$", t):
+            u = _unit_from(plain[i + 1:i + 3], role)
+            if u:
+                return u, "file name"
+    for i, t in enumerate(plain):
+        u = _unit_from(plain[i:i + 2] if t in ("ft", "ft2") else [t], role, strict=True)
         if u:
             return u, "file name"
     return DEFAULT_UNITS[role], "assumed (DSS-WISE Lite US units)"
+
+
+_QUANTITY_WORDS = {"depth", "velocity", "vel", "speed", "hmax", "dmax", "vmax", "max", "dv"}
 
 
 def _unit_from(parts, role, strict=False):
