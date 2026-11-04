@@ -2,7 +2,7 @@
 
 LiDAR DEMs show road embankments but not the culverts or bridges under them,
 so a flood model ponds water behind every road until it overtops.  Along each
-stream line (NHD flowlines) this module finds short "barriers" - places where
+stream line (3DHP flowlines) this module finds short "barriers" - places where
 the ground rises above the lowest elevation already seen upstream and then
 drops again - and lowers a one-cell-wide, 4-connected channel through them to
 that upstream level.

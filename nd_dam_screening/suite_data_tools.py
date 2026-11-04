@@ -225,7 +225,7 @@ GET_DATA_HELP = (
     "data section: the DEM (your own DEM in the suite data folder's dem/, else the terrain server "
     "chosen in Suite data and servers, through the shared tile cache), land cover, building "
     "outlines and points, address points, roads, railroads, grade crossings, bridges, lifelines, "
-    "NID and DWR dams, DWR dam lines, NHD flowlines and waterbodies, FEMA flood zones and counties "
+    "NID and DWR dams, DWR dam lines, 3DHP flowlines and waterbodies, FEMA flood zones and counties "
     "(the offline pack when it covers the dam - Data source in Suite data and servers, where the "
     "pack location is chosen - else your files in dwr/ / hifld/, else the chosen server; with "
     "Data source = Download the pack is not read). The dam's NID / DWR values (height, storage, county, class, "

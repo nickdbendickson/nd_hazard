@@ -25,7 +25,7 @@ import traceback
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
     QTableWidgetItem, QFileDialog, QMessageBox, QComboBox, QCheckBox, QTextEdit, QGroupBox,
-    QInputDialog, QDoubleSpinBox, QFormLayout, QRadioButton, QButtonGroup,
+    QInputDialog, QDoubleSpinBox, QFormLayout, QRadioButton, QButtonGroup, QScrollArea, QWidget,
 )
 
 from .damsuite import damdata as DD
@@ -115,6 +115,49 @@ def run_in_background(description, fn, done):
 
 
 # ------------------------------------------------------------------- window --
+MIN_WIDTH = 640
+MIN_BODY_H = 240
+
+
+class _BodyScroll(QScrollArea):
+    """Asks for the page's full size (so a big screen shows it all) but may shrink and scroll."""
+
+    def sizeHint(self):
+        try:
+            h = self.widget().sizeHint()
+            return h.__class__(h.width() + 24, h.height() + 4)
+        except Exception:                                        # noqa
+            return QScrollArea.sizeHint(self)
+
+    def minimumSizeHint(self):
+        try:
+            h = self.widget().minimumSizeHint()
+            return h.__class__(min(h.width(), MIN_WIDTH - 40), min(h.height(), MIN_BODY_H))
+        except Exception:                                        # noqa
+            return QScrollArea.minimumSizeHint(self)
+
+
+def _scrolled(lay):
+    """The window's rows in a scroll area, so the window fits a 768 px screen (it asked for
+    805-836 px) and an 800x600 one. Falls back to the plain layout (the tests' stand-in Qt)."""
+    try:
+        body = QWidget()
+        body.setLayout(lay)
+        sa = _BodyScroll()
+        sa.setWidgetResizable(True)
+        try:
+            sa.setFrameShape(getattr(getattr(QScrollArea, "Shape", QScrollArea), "NoFrame"))
+        except Exception:                                        # noqa
+            pass
+        sa.setWidget(body)
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(sa)
+        return outer
+    except Exception:                                            # noqa
+        return lay
+
+
 class SuiteDataDialog(QDialog):
     def __init__(self, parent=None, iface=None, opened_from="", dam_folder=""):
         super().__init__(parent)
@@ -123,7 +166,7 @@ class SuiteDataDialog(QDialog):
         self.catalog = SV.load()
         self.tasks = []
         self.setWindowTitle(TITLE)
-        self.setMinimumWidth(920)
+        self.setMinimumWidth(MIN_WIDTH)          # was 920 (wider than 800 px)
         try:
             from qgis.PyQt.QtWidgets import QApplication
             self.setMaximumHeight(max(600, QApplication.primaryScreen().geometry().height() - 80))
@@ -341,7 +384,7 @@ class SuiteDataDialog(QDialog):
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(120)
         lay.addWidget(self.log_text)
-        self.setLayout(lay)
+        self.setLayout(_scrolled(lay))            # fits a 768 px screen and 800x600
 
     # ---------------------------------------------------------------- folders --
     def log(self, text):

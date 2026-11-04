@@ -5,14 +5,15 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Simple tab, settings grid, preflight check, run one dam, review, statewide priority list) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.33.5
+version=0.33.6
 icon=icon.svg
 author=
 about=Screening-level tool. Output is for prioritization only; official hazard classification is determined by the ND Department of Water Resources.
 tracker=
 repository=
 experimental=True
-changelog=0.33.5: (2026-11-03) With ND Dam Hazard 2.35.7. Audit fix E: core/storage.py: the 'medium' known-height confidence branch (the same as the default) removed; the result is unchanged. No behaviour change.
+changelog=0.33.6: (2026-11-03) With ND Dam Hazard 2.35.8. Stream inputs say 3DHP flowlines (the suite's current source; NHD still works; setting keys unchanged); Suite data and servers scrolls (fits a 768 px screen and 800x600). No behaviour change.
+    0.33.5: (2026-11-03) With ND Dam Hazard 2.35.7. Audit fix E: core/storage.py: the 'medium' known-height confidence branch (the same as the default) removed; the result is unchanged. No behaviour change.
     0.33.4: (2026-11-03) With ND Dam Hazard 2.35.6. Audit fix D: menus use the ellipsis character (Dam suite home…, Suite settings…). No behaviour change.
     0.33.3: (2026-11-03) With ND Dam Hazard 2.35.4 and ND Dam Breach Runner 3.27.2. REG_05.2026 5.2.1.2(b): core/nd_hazard.py 1.3.0 - tool 8 and triage give an overtopped US / State highway at least Medium whatever its AADT, read from the road class field or the road's name. Test tests/test_highway_floor.py.
     0.33.2: (2026-11-01) option C, Nick: peak depth with the peak velocity over the wet cells, even from different cells - core/nd_hazard.py and core/hazard.py Grid polygon (dv = footprint max)..

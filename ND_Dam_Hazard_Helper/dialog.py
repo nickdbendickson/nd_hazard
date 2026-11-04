@@ -128,7 +128,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     # ------------------------------------------------------------------ UI --
     def setup_ui(self):
         self.setWindowTitle("{} {}".format(PLUGIN_NAME, PLUGIN_VERSION))
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(760, 520)                            # 2.35.8: fits 800x600
         try:
             from qgis.PyQt.QtWidgets import QApplication
             self.setMaximumHeight(max(700, QApplication.primaryScreen().geometry().height() - 80))

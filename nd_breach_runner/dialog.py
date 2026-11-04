@@ -76,6 +76,7 @@ LOG_MIN_H = 44
 # 3.20.0: the window must fit a 768 px laptop screen with room for the title bar and the task
 # bar; the layout's own minimum decides the rest
 MIN_HEIGHT = 560
+MIN_WIDTH = 760          # 3.27.5: was 820, wider than an 800x600 screen
 
 
 def _scroll_tab(w):
@@ -95,6 +96,46 @@ def _scroll_tab(w):
     except Exception:                                            # pragma: no cover - noqa
         pass
     return sa
+
+
+DEM_ROWS_MIN_H = 72       # 3.27.5: the DEM box's rows may shrink to this and scroll
+
+
+class _RowsScroll(QScrollArea):
+    """3.27.5: asks for its page's full height, but may shrink to DEM_ROWS_MIN_H and scroll."""
+
+    def sizeHint(self):
+        try:
+            h = self.widget().sizeHint()
+            return h.__class__(h.width() + 4, h.height() + 4)
+        except Exception:                                        # noqa
+            return QScrollArea.sizeHint(self)
+
+    def minimumSizeHint(self):
+        try:
+            h = self.widget().minimumSizeHint()
+            return h.__class__(h.width(), min(h.height(), DEM_ROWS_MIN_H))
+        except Exception:                                        # noqa
+            return QScrollArea.minimumSizeHint(self)
+
+
+def _fit_rows(w):
+    """Wrap the DEM box's rows so they scroll instead of being crushed on a small screen."""
+    try:
+        sa = _RowsScroll()
+        sa.setWidgetResizable(True)
+        try:
+            sa.setFrameShape(getattr(getattr(QScrollArea, "Shape", QScrollArea), "NoFrame"))
+            from qgis.PyQt.QtCore import Qt
+            bar = getattr(Qt, "ScrollBarPolicy", Qt)
+            sa.setHorizontalScrollBarPolicy(bar.ScrollBarAlwaysOff)
+        except Exception:                                        # noqa
+            pass
+        sa.setWidget(w)
+        sa.setMinimumHeight(DEM_ROWS_MIN_H)
+        return sa
+    except Exception:                                            # noqa - the tests' stand-in Qt
+        return w
 
 
 def _escape_tab_mnemonics(widget):
@@ -119,7 +160,7 @@ class NDBreachRunnerDialog(QDialog):
         self.iface = iface
         self._loading = True
         self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())
-        self.setMinimumWidth(820)
+        self.setMinimumWidth(MIN_WIDTH)                          # 3.27.5: fits 800 px
         self.setMinimumHeight(MIN_HEIGHT)                        # 3.20.0: fits 768 px
         try:
             from qgis.PyQt.QtWidgets import QApplication
@@ -403,8 +444,11 @@ class NDBreachRunnerDialog(QDialog):
         self.dem_resolution.currentIndexChanged.connect(self._update_dem_info)
         # 3.20.0: the eight rows live in a body widget the group box can hide, so this box -
         # which matters once per dam - stops pushing the tool buttons off a laptop screen
-        body = QWidget()
-        body.setLayout(grid)
+        # 3.27.5: the rows scroll inside the box when the window is short (800x600), instead of
+        # being squeezed on top of each other
+        rows = QWidget()
+        rows.setLayout(grid)
+        body = _fit_rows(rows)
         outer = QVBoxLayout()
         outer.addWidget(body)
         box.setLayout(outer)
