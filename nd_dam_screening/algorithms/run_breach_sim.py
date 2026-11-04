@@ -226,9 +226,11 @@ class RunBreachSim(QgsProcessingAlgorithm):
         # v0.20.0: opt-in (it was always on from 0.15.0). 0.28.0: on by default - the clip is
         # sized from the valley before a flood is paid for that can only hit the edge. It costs
         # run time; switch it off for a large county and let the clip grow after a run instead.
-        P(QgsProcessingParameterBoolean("PREGROW", "Enlarge the clip before the flood run when the "
-                                        "downstream trace reaches its edge (otherwise it grows "
-                                        "after a run that reaches the edge)", defaultValue=True))
+        P(cm.with_help(QgsProcessingParameterBoolean(
+            "PREGROW", "Enlarge the clip before the run if the trace reaches its edge",
+            defaultValue=True),
+            "Enlarge the clip before the flood run when the downstream trace reaches its edge "
+            "(otherwise it grows after a run that reaches the edge)."))
         # 0.28.0: both loading cases in one run (core/scenarios.py)
         P(QgsProcessingParameterBoolean("SCEN_BOTH", "Also run the other scenario (top of dam AND "
                                         "sunny day): the worse class governs", defaultValue=False))

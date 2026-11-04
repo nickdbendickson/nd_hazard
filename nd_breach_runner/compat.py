@@ -48,6 +48,17 @@ def set_advanced(param):
     param.setFlags(param.flags() | FLAG_ADVANCED)
     return param
 
+
+def set_help(param, text):
+    """3.27.6 (GUI check 2026-11-04): the long explanation in the parameter's help / tooltip
+    (QGIS >= 3.16), so its label in the Processing panel stays short (long tick-box labels made
+    sensitivity / probabilistic / HEC-RAS model 900-1400 px wide). A test double: ignored."""
+    try:
+        param.setHelp(text)
+    except Exception:                                            # noqa
+        pass
+    return param
+
 # message levels (QgsMessageLog, the message bar)
 MSG_INFO = _first(lambda: Qgis.MessageLevel.Info, lambda: Qgis.Info, default=0)
 MSG_WARNING = _first(lambda: Qgis.MessageLevel.Warning, lambda: Qgis.Warning, default=1)

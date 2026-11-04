@@ -304,13 +304,13 @@ class HecRasModelAlgorithm(_ToolBase):
         self._num("BASE_FLOW_CFS", "Inflow to the reservoir in a sunny-day run (cfs)", 0.0,
                   minimum=0.0)
         # v3.12.0: the run's culverts, bridges and notches
-        self.addParameter(QgsProcessingParameterBoolean(
-            "STRUCTURES", "Put the run's culverts, bridges and notches in the 2D area "
-            "(connections inside it; not checked in HEC-RAS, see the README)", True))
+        self._bool("STRUCTURES", "Put the run's culverts, bridges and notches in the 2D area",
+                   True, help="Connections inside the 2D area; not checked in HEC-RAS, see the "
+                   "README.")
         # v3.23.0: breaklines along the dam crest and road embankments
-        self.addParameter(QgsProcessingParameterBoolean(
-            "BREAKLINES", "Add breaklines along the dam crest and road embankments so the "
-            "mesh faces line up on them when the computation points are regenerated", True))
+        self._bool("BREAKLINES", "Add breaklines along the dam crest and road embankments",
+                   True, help="So the mesh faces line up on them when the computation points "
+                   "are regenerated.")
         self._file("OUT_FOLDER", "Output folder (empty = <dam folder>/_hecras/model)",
                    folder=True)
         self.addOutput(QgsProcessingOutputFolder("FOLDER", "HEC-RAS project folder"))

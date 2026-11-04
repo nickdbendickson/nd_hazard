@@ -550,7 +550,12 @@ def ndhazard_tool_results_in_the_word_submittal_report():
             assert needle in t_, needle
         figs = {f["name"]: f for f in res.figures}
         assert set(figs) == {an.OUTPUT_NAMES["svg_house"], an.OUTPUT_NAMES["svg_mobile"]}
-        assert not any(f["embedded"] for f in figs.values())        # no cairosvg here
+        # 3.27.6 (GUI check 2026-11-04): the figures are embedded exactly when cairosvg is
+        # installed; the test assumed it never was and failed on a machine that has it
+        if "cairosvg" in R.available_svg_backends():
+            assert all(f["embedded"] for f in figs.values()), figs
+        else:
+            assert not any(f["embedded"] for f in figs.values()), figs
         m = re.search(r"Hazard classification screened \(ND 5\.2\)\n(Yes|No|Check|N/A)\n"
                       r"([^\n]*)", t_)
         assert m and m.group(1) == "Yes" and "class HIGH" in m.group(2), m and m.groups()

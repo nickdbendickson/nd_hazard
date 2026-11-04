@@ -164,10 +164,11 @@ class HazardClassification(QgsProcessingAlgorithm):
         P(QgsProcessingParameterFile("DEM_FOR_RECORD", "DEM to record in dam.json for ND Dam Breach Runner / ND Dam "
                                      "Hazard (optional; the chain passes the local DEM mosaic of step 2)",
                                      optional=True))
-        P(QgsProcessingParameterBoolean("CREATE_DAM_FOLDERS", "Create the dam folder (and dam.json) in the Dams "
-                                        "folder for every dam that has none - a run of chosen dams "
-                                        "hands them to ND Dam Breach Runner / ND Dam Hazard this way",
-                                        defaultValue=False))
+        P(cm.with_help(QgsProcessingParameterBoolean(
+            "CREATE_DAM_FOLDERS", "Create a dam folder (and dam.json) for dams with none",
+            defaultValue=False),
+            "Create the dam folder (and dam.json) in the Dams folder for every dam that has none - a "
+            "run of chosen dams hands them to ND Dam Breach Runner / ND Dam Hazard this way."))
         P(QgsProcessingParameterEnum("CRIT", "Lethality at habitable structures (ND 5.2.1.1)", CRIT_LABELS,
                                      defaultValue=0))
         P(QgsProcessingParameterFile("CHART_FILE", "Digitized ACER TM 11 chart file (.json; empty = "
@@ -189,17 +190,19 @@ class HazardClassification(QgsProcessingAlgorithm):
                                                minValue=hz.MIN_WET_M, optional=True)))
         P(QgsProcessingParameterNumber("RULE", "ND 1D rule: lethal depth at structures (ft; 1D models only)",
                                        NUM_DOUBLE, 2.0, minValue=0.1))
-        P(QgsProcessingParameterBoolean("INCREMENTAL", "Count impacts from the INCREMENTAL depth (breach minus "
-                                        "tool-7 no-breach baseline; screening approximation of ND's "
-                                        "flood-scenario comparison)", defaultValue=False))
+        P(cm.with_help(QgsProcessingParameterBoolean(
+            "INCREMENTAL", "Count impacts from the INCREMENTAL depth", defaultValue=False),
+            "Count impacts from the INCREMENTAL depth: breach minus the tool-7 no-breach baseline "
+            "(a screening approximation of ND's flood-scenario comparison)."))
         # 0.28.0: the breach-parameter sensitivity row needs the stage-storage curves to route
         # each band's breach (the same routing step 5 uses)
         P(QgsProcessingParameterFile("CURVES", "Stage-storage curve folder (tool 3; for the "
                                      "breach-parameter sensitivity row)", behavior=FILE_FOLDER,
                                      optional=True))
-        P(QgsProcessingParameterBoolean("BREACH_BAND", "Add the breach-parameter sensitivity row: the "
-                                        "class under the narrowest and the widest breach the "
-                                        "equations give", defaultValue=True))
+        P(cm.with_help(QgsProcessingParameterBoolean(
+            "BREACH_BAND", "Add the breach-parameter sensitivity row", defaultValue=True),
+            "Add the breach-parameter sensitivity row: the class under the narrowest and the widest "
+            "breach the equations give."))
         P(QgsProcessingParameterFeatureSink("OUT", "Dams with hazard classification", SRC_POINT))
         P(QgsProcessingParameterFeatureSink("IMP", "Impacted features", SRC_POINT))
 

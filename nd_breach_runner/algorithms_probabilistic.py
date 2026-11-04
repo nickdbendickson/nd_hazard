@@ -69,9 +69,9 @@ class ProbabilisticAlgorithm(SensitivityAlgorithm):
                    "empty = not varied)", probmod.default_manning().to_text())
         self._text("PROB_METHODS", "Breach methods to draw from, with weights (e.g. 'piping "
                    "0.6, overtopping 0.4'; empty = the chosen method)", "")
-        self._bool("PROB_RUN_RASTERS", "Write each run's rasters for the class probability "
-                   "(Probabilistic/Runs/run_NNN: depth, velocity, arrival and run.json, for ND "
-                   "Dam Hazard's class probability tool; takes disk space)", False)
+        self._bool("PROB_RUN_RASTERS", "Write each run's rasters for the class probability",
+                   False, help="Probabilistic/Runs/run_NNN: depth, velocity, arrival and "
+                   "run.json, for ND Dam Hazard's class probability tool; takes disk space.")
         self._bool("CLASSIFY", "Classify every run with the ND hazard classification plugin",
                    False, advanced=True)
         self._text("CLASS_ALG", "Classification algorithm ID (empty = ndhazard:classify)",

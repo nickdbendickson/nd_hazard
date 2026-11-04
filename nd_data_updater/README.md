@@ -138,8 +138,11 @@ Changing the version or the match distance rebuilds the NSI copy at the next che
 
 ## When it checks
 
-- About 20 seconds after QGIS starts, then hourly while QGIS is open, but never
-  more often than **Check at most every** (default 24 hours).
+- Only when you ask (**Check for data updates now**), unless you tick **Check for
+  updates automatically while QGIS is open** in Settings and status (off by default
+  from 1.7.2, as in DamSafety Data). With it ticked: about 20 seconds after QGIS
+  starts, then hourly while QGIS is open, but never more often than **Check at most
+  every** (default 24 hours), and only once a data folder has been chosen.
 - Automatic checks stay quiet unless something was downloaded or went wrong.
 - Nothing runs while QGIS is closed.
 

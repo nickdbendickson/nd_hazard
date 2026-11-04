@@ -111,13 +111,23 @@ class SuiteHomeDialog(QDialog):
         self.step_widgets = {}
         self.check_rows = {}
         self.setWindowTitle(TITLE)
-        self.setMinimumWidth(1000)          # 900 truncated the plugin button labels
         try:
             from qgis.PyQt.QtWidgets import QApplication
             self.setMaximumHeight(max(600, QApplication.primaryScreen().geometry().height() - 80))
         except Exception:                                        # noqa
             pass
         self._build()
+        # 2.35.9 (GUI check 2026-11-04): no fixed 1000 px minimum (wider than an 800 x 600
+        # screen). The four plugin buttons sit two to a row, the window opens at 1000 x 640 where
+        # the screen has room and may shrink to the screen, never below its own rows.
+        try:
+            from .ui_fit import fit_window
+            fit_window(self, prefer=(1000, 640))
+            need = min(self.layout().minimumSize().width(), self.maximumWidth())
+            if need > self.minimumWidth():
+                self.setMinimumWidth(need)
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
         self._load()
         self.refresh()
         try:
@@ -268,12 +278,12 @@ class SuiteHomeDialog(QDialog):
         row.addWidget(self.dam_data_btn)
         row.addStretch(1)
         lay.addLayout(row)
-        row = QHBoxLayout()
-        for key in ("ndupdater", "ndscreen", "ndbreach", "ndhazard"):
+        row = QGridLayout()                       # 2.35.9: two to a row (one row needed 736 px)
+        for i, key in enumerate(("ndupdater", "ndscreen", "ndbreach", "ndhazard")):
             btn = QPushButton(VS.LABELS.get(key, key) + "…")
             btn.clicked.connect(lambda _c=False, k=key: self.open_plugin(k))
             setattr(self, "btn_" + key, btn)
-            row.addWidget(btn)
+            row.addWidget(btn, i // 2, i % 2)
         lay.addLayout(row)
         self.plugins_label = QLabel("")
         self.plugins_label.setWordWrap(True)

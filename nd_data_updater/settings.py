@@ -61,7 +61,9 @@ class Settings:
 
     @property
     def auto_check(self):
-        return self._get("auto_check", True, bool)
+        # 1.7.2 (GUI check 2026-11-04): off until the engineer turns it on, as DamSafety Data. On
+        # it fired a network update about 20 s after every QGIS start once a data folder was set.
+        return self._get("auto_check", False, bool)
 
     @auto_check.setter
     def auto_check(self, v):
