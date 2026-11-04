@@ -208,14 +208,14 @@ def parse_dwr_path(text):
 
 def fetch_dwr(package, out_dir, products, feedback=None):
     """Download QL2 ASCII foot grids and/or Imagine DEMs from a staged map-site package."""
-    import ftplib
+    import ftplib  # nosec B402  # ND DWR LiDAR server offers only anonymous/guest FTP of public data; no private credentials
     import zipfile
     path = parse_dwr_path(package)
     wanted = [p for p in products if p in DWR_PRODUCTS]
     if not wanted:
         raise ValueError("choose ASCII_Grids_ft, DEM_Imagine, or both")
     os.makedirs(out_dir, exist_ok=True)
-    ftp = ftplib.FTP(DWR_HOST, timeout=120)
+    ftp = ftplib.FTP(DWR_HOST, timeout=120)  # nosec B321  # ND DWR LiDAR server offers only anonymous/guest FTP of public data; no private credentials
     ftp.login(DWR_USER, DWR_PASSWORD)
     found = []
 
@@ -268,8 +268,8 @@ INDEX_NAME = "IndexLiDARNorthDakotaQL2"
 
 
 def _ftp():
-    import ftplib
-    ftp = ftplib.FTP(DWR_HOST, timeout=120)
+    import ftplib  # nosec B402  # ND DWR LiDAR server offers only anonymous/guest FTP of public data; no private credentials
+    ftp = ftplib.FTP(DWR_HOST, timeout=120)  # nosec B321  # ND DWR LiDAR server offers only anonymous/guest FTP of public data; no private credentials
     ftp.login(DWR_USER, DWR_PASSWORD)
     return ftp
 

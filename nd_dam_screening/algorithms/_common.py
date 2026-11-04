@@ -350,7 +350,7 @@ def mosaic_key(tiles):
     """A short hash of the sorted tile list (path, size, modified time): the name of a mosaic
     that is reused only while the local DEM folder holds exactly these files."""
     import hashlib
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)
     for t in sorted(tiles):
         try:
             st = os.stat(t)

@@ -589,7 +589,7 @@ class Docx(object):
 
     # -- images -----------------------------------------------------------------------
     def _add_media(self, data, info):
-        key = hashlib.sha1(data).hexdigest()
+        key = hashlib.sha1(data, usedforsecurity=False).hexdigest()
         if key in self._media_by_hash:
             return self._media_by_hash[key]
         self._rid += 1
