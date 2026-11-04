@@ -24,6 +24,71 @@ from .helpers import log_message
 from .datafetch import AREA_CHOICES, DEFAULT_FLOOD_BUFFER_FT
 
 
+CHECK_MAX_PX = 420        # 2.35.8: a tick box / list wider than this is narrowed; the rest is the tip
+
+
+def _short_text(text):
+    """The head of a long tick-box label: up to ' - ', ' (' or ':' when that is short enough."""
+    for sep in (" - ", " (", ": ", ", "):
+        i = text.find(sep)
+        if 8 <= i <= 70:
+            return text[:i]
+    return text[:67].rsplit(" ", 1)[0] + "..."
+
+
+def fit_check_texts(root, max_px=CHECK_MAX_PX):
+    """2.35.8 (QGIS Dev, 800x600): shorten every tick box on the page that is wider than max_px
+    to its head and put the full sentence first in its tooltip, so the page - and its intro,
+    which wraps to the page's width - fits the window. A drop-down list wider than max_px sizes
+    to 24 characters instead of its longest choice. Returns the widgets changed."""
+    from qgis.PyQt.QtWidgets import QCheckBox
+    done = []
+    for cb in root.findChildren(QCheckBox):
+        try:
+            text = cb.text()
+            if not text or cb.sizeHint().width() <= max_px:
+                continue
+            short = _short_text(text)
+            fm = cb.fontMetrics()
+            advance = getattr(fm, "horizontalAdvance", None) or fm.width
+            box = cb.sizeHint().width() - advance(text)          # indicator and spacing
+            if advance(short) + box > max_px:                    # still too wide: elide it
+                from qgis.PyQt.QtCore import Qt
+                elide = getattr(Qt, "ElideRight", None) or Qt.TextElideMode.ElideRight
+                short = fm.elidedText(text, elide, max_px - box)
+            if short == text:
+                continue
+            tip = cb.toolTip() or ""
+            cb.setToolTip(text + ("\n\n" + tip if tip else ""))
+            cb.setText(short)
+            done.append(cb)
+        except Exception:                                        # noqa - never stop the window
+            continue
+    from qgis.PyQt.QtWidgets import QComboBox
+    for co in root.findChildren(QComboBox):                     # a long choice widens the page too
+        try:
+            if co.minimumSizeHint().width() > max_px:
+                co.setMinimumContentsLength(24)
+                pol = getattr(QComboBox, "AdjustToMinimumContentsLengthWithIcon", None)
+                if pol is None:
+                    pol = QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+                co.setSizeAdjustPolicy(pol)
+                co.setMinimumWidth(min(co.sizeHint().width(), max_px))   # Qt keeps the old
+                #   minimum hint cached otherwise
+                done.append(co)
+        except Exception:                                        # noqa
+            continue
+    try:
+        if done:
+            from qgis.PyQt.QtWidgets import QWidget
+            for w in [root] + root.findChildren(QWidget):
+                if w.layout() is not None:
+                    w.layout().invalidate()
+    except Exception:                                            # noqa
+        pass
+    return done
+
+
 class DataTabMixin(object):
     """Needs the main dialog's _inline_row, browse_output, _load_rasters,
     _study_area, _make_progress, _progress_tick, _finish_progress, _log,
@@ -337,6 +402,7 @@ class DataTabMixin(object):
         row.addStretch()
         outer.addLayout(row)
         self._data_area_changed()
+        fit_check_texts(body)                    # 2.35.8: the tab fits an 800 px window
         return tab
 
     # ------------------------------------------------ offline pack (v2.6.1) --

@@ -143,7 +143,7 @@ LAYER_SLOTS = (
     ("roads", "Roads", "roads"),
     ("rail", "Railroads", "railroads"),
     ("lifelines", "Lifeline facilities", "lifelines"),
-    ("streams", "NHD flowlines (stream lines)", "flowlines"),
+    ("streams", "3DHP flowlines (stream lines)", "flowlines"),
     ("waterbodies", "NHD waterbodies", "waterbodies"),
     ("dam_lines", "DWR dam lines", "dam_lines"),
     ("nlcd", "NLCD land cover (raster, optional)", None),
@@ -363,7 +363,7 @@ def _mtime(work, step):
 # ---------------------------------------------------------------- package --
 def _phrase(label):
     """A slot label in running text: no '(tool 1)' note, first letter lower case unless it
-    starts an acronym ('NHD flowlines', 'Roads' -> 'roads')."""
+    starts an acronym ('3DHP flowlines', 'Roads' -> 'roads')."""
     label = label.split(" (")[0]
     return label[0].lower() + label[1:] if len(label) > 1 and label[1].islower() else label
 

@@ -63,7 +63,7 @@ class DataPackage(QgsProcessingAlgorithm):
         P(QgsProcessingParameterFile("PACKAGE", "or: a data package exported by ND Dam Hazard (GeoPackage; "
                                      "fills every input left empty)", extension="gpkg", optional=True))
         P(QgsProcessingParameterFeatureSource("CLIP", "Clip to (e.g. ND boundary, optional)", A, optional=True))
-        P(QgsProcessingParameterFeatureSource("FLOW", "NHD flowlines", L, optional=True))
+        P(QgsProcessingParameterFeatureSource("FLOW", "3DHP flowlines", L, optional=True))
         P(QgsProcessingParameterFeatureSource("WB", "NHD waterbodies", A, optional=True))
         P(QgsProcessingParameterFeatureSource("DAML", "DWR dam lines", L, optional=True))
         P(QgsProcessingParameterFeatureSource("BLD", "Structures (USA Structures)", PT, optional=True))
