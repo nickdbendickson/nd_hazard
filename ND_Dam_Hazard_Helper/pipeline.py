@@ -3290,6 +3290,7 @@ def datum_lines(out, dam_folder=""):
     values, a band value replaced by a DEM elevation, and the mid-crest dam point
     (also read from a sibling "dam_point" when the record does not carry one).
     [] when neither file records a datum."""
+    import json
     from .damsuite import vdatum as VD
     cands = [os.path.join(out, "run_report.json")]
     if dam_folder:
