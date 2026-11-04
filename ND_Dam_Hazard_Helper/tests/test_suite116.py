@@ -26,8 +26,8 @@ from ND_Dam_Hazard_Helper.damsuite import suitecheck as SC  # noqa: E402
 from ND_Dam_Hazard_Helper.damsuite import suitedata as SD  # noqa: E402
 from ND_Dam_Hazard_Helper.damsuite import versions as VS  # noqa: E402
 
-RELEASE = {"ndhazard": "2.35.8", "ndbreach": "3.27.5", "ndscreen": "0.33.6",
-           "ndupdater": "1.7.1"}
+RELEASE = {"ndhazard": "2.35.9", "ndbreach": "3.27.6", "ndscreen": "0.33.7",
+           "ndupdater": "1.7.2"}
 
 
 def _row(did, cls="", existing="", **kw):
@@ -167,7 +167,7 @@ def suite116_an_old_plugin_is_a_warning_that_names_this_release():
         items = SC.check(iso.folder, versions={"ndhazard": "2.20.0"}, charts=False)
         row = SC.by_key(items)["plugin_ndhazard"]
         assert row["level"] == "warn", row
-        assert "2.35.8" in row["text"]
+        assert "2.35.9" in row["text"]
 
 
 @test

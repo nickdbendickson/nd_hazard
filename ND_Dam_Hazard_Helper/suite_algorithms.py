@@ -28,6 +28,17 @@ from .compat import _first
 FT_M = 0.3048
 
 
+def _with_help(param, text):
+    """`param` with `text` as its help / tooltip (QGIS >= 3.16), so the label in the Processing
+    panel stays short (GUI check 2026-11-04: runnerculverts was 893 px wide at 800 x 600). A
+    test double without setHelp: ignored."""
+    try:
+        param.setHelp(text)
+    except Exception:                                            # noqa
+        pass
+    return param
+
+
 def _hidden(param):
     """A parameter kept for old models / histories but not shown (QGIS 3.x FlagHidden, 3.36+ / 4
     Qgis.ProcessingParameterFlag.Hidden; the test double has no flags)."""
@@ -348,10 +359,11 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         P(QgsProcessingParameterBoolean("ALLOW_NO_EMBANKMENT", "Place a structure on the "
                                         "stream alone when no road / rail line crosses it "
                                         "nearby", defaultValue=D["allow_no_embankment"]))
-        P(QgsProcessingParameterBoolean("PASS_ELEVATIONS", "Write the NDDOT end elevations as "
-                                        "the inverts, in feet - the Runner checks them against "
-                                        "the LiDAR bed before using them; off: the Runner reads "
-                                        "the DEM", defaultValue=D["pass_elevations"]))
+        P(_with_help(QgsProcessingParameterBoolean(
+            "PASS_ELEVATIONS", "Write the NDDOT end elevations as the inverts",
+            defaultValue=D["pass_elevations"]),
+            "Write the NDDOT end elevations as the inverts, in feet - the Runner checks them "
+            "against the LiDAR bed before using them; off: the Runner reads the DEM."))
         self._add_output("OUTPUT", "Culvert lines (GeoPackage)")
         self.addOutput(QgsProcessingOutputFile("CSV", "Structures not placed (CSV)"))
         self.addOutput(QgsProcessingOutputString("SUMMARY", "Summary"))

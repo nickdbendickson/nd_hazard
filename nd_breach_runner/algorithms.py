@@ -23,7 +23,8 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, Qgs
 
 from . import qgis_io as qio
 from .compat import (NUM_DOUBLE, NUM_INT, FILE_FILE, FILE_FOLDER, SOURCE_POINT, SOURCE_LINE,
-                     SOURCE_POLYGON, FIELD_NUMERIC, FIELD_ANY, set_advanced)
+                     SOURCE_POLYGON, FIELD_NUMERIC, FIELD_ANY, set_advanced,
+                     set_help)
 from .core import (workflow, breach as brmod, flood as floodmod, impacts as impmod,
                    structures as structmod, conditioning as condmod, nd_data, handoff,
                    sensitivity as sensmod, cascade as cascmod, estimate as estmod,
@@ -314,8 +315,10 @@ class _Base(QgsProcessingAlgorithm):
             set_advanced(p)
         self.addParameter(p)
 
-    def _bool(self, name, desc, default=False, advanced=False):
+    def _bool(self, name, desc, default=False, advanced=False, help=None):
         p = QgsProcessingParameterBoolean(name, desc, default)
+        if help:
+            set_help(p, help)
         if advanced:
             set_advanced(p)
         self.addParameter(p)
@@ -1414,12 +1417,13 @@ class SensitivityAlgorithm(RunDamAlgorithm):
         self._text("SENS_WIDTH", "Breach width factors", "0.7, 1.4")
         self._text("SENS_TIME", "Formation time factors", "0.5, 2")
         self._text("SENS_N", "Manning's n factors", "0.75, 1.3")
-        self._bool("SENS_METHODS", "Also run the other parameter methods (Froehlich 2008 "
-                   "overtopping, Froehlich 1995, MacDonald, Von Thun & Gillette, TR-60)", True)
-        self._bool("SENS_CELL", "Cell-size convergence check: run the base case again at half "
-                   "the cell size on the same domain and report the fit index between the two "
-                   "depth rasters and whether the Runner's ND 5.2 preview class holds "
-                   "(class_stable_grid)", True)
+        self._bool("SENS_METHODS", "Also run the other parameter methods", True,
+                   help="Also run the other parameter methods: Froehlich 2008 overtopping, "
+                   "Froehlich 1995, MacDonald, Von Thun & Gillette, TR-60.")
+        self._bool("SENS_CELL", "Cell-size convergence check (half the cell size)", True,
+                   help="Run the base case again at half the cell size on the same domain and "
+                   "report the fit index between the two depth rasters and whether the Runner's "
+                   "ND 5.2 preview class holds (class_stable_grid).")
         self._num("SENS_MAX_CELLS", "Cell-size check: most cells in the finer run (the budget; "
                   "when half the cell size needs more, the next coarser factor that fits is "
                   "run and the report says so; starting value {:,} is the engineer's)".format(

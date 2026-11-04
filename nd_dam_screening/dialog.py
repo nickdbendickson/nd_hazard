@@ -94,6 +94,10 @@ def _escape_tab_mnemonics(widget):
         pass
 
 
+# 0.33.7 (GUI check 2026-11-04): fits an 800 x 600 screen; the layout's own minimum decides the rest
+MIN_WIDTH = 760
+
+
 def _scroll_tab(w):
     """Wrap a tab widget in a QScrollArea so tall pages are reachable on small screens."""
     sa = QScrollArea()
@@ -218,7 +222,7 @@ class NDDamScreeningDialog(QDialog):
         self.iface = iface
         self._loading = True
         self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())
-        self.setMinimumWidth(960)
+        self.setMinimumWidth(MIN_WIDTH)                          # 0.33.7: was 960 (> 800 px)
         try:
             from qgis.PyQt.QtWidgets import QApplication
             self.setMaximumHeight(max(700, QApplication.primaryScreen().geometry().height() - 80))
@@ -383,12 +387,17 @@ class NDDamScreeningDialog(QDialog):
         """The run buttons at the bottom right, Run county bold as the primary action (docs/
         gui-grammar.md); shown with the Simple tab, where their inputs are."""
         self.action_area = QWidget()
-        bar = QHBoxLayout(self.action_area)
-        bar.setContentsMargins(0, 0, 0, 0)
+        # 0.33.7 (GUI check 2026-11-04): the hint sits above the buttons; beside them the bar
+        # needed about 700-850 px, wider than an 800 x 600 screen with the window frame
+        outer = QVBoxLayout(self.action_area)
+        outer.setContentsMargins(0, 0, 0, 0)
         self.run_hint = QLabel("Choose a work folder and a county, then Run county.")
         self.run_hint.setWordWrap(True)
         self.run_hint.setStyleSheet("color: {};".format(TOKENS["muted"]))
-        bar.addWidget(self.run_hint, 1)
+        outer.addWidget(self.run_hint)
+        bar = QHBoxLayout()
+        outer.addLayout(bar)
+        bar.addStretch(1)
         for b in (self.preflight_btn, self.one_dam_btn, self.sel_dams_btn, self.stop_btn):
             b.setAutoDefault(False)
             bar.addWidget(b)

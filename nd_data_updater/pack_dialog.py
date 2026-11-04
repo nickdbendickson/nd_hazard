@@ -34,7 +34,7 @@ import threading
 from qgis.PyQt.QtCore import QTimer, QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressDialog, QPushButton,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -145,7 +145,6 @@ class PackDialog(QDialog):
         self.service_rows = []
         self._service_thread = None
         self.setWindowTitle("ND Data Updater — Offline pack and data folder")
-        self.setMinimumSize(900, 700)
         layout = QVBoxLayout(self)
 
         # ---- the one folder everything hangs off
@@ -193,6 +192,17 @@ class PackDialog(QDialog):
         self.poll = QTimer(self)
         self.poll.setInterval(900)
         self.poll.timeout.connect(self._poll_services)
+        # 1.7.2 (GUI check 2026-11-04): no fixed 900 x 700 minimum (wider and taller than an
+        # 800 x 600 screen). It opens at 900 x 700 where the screen has room and may shrink to the
+        # screen, never below its own rows.
+        try:
+            from .ui_fit import fit_window
+            fit_window(self, prefer=(900, 700))
+            need = min(layout.minimumSize().width(), self.maximumWidth())
+            if need > self.minimumWidth():
+                self.setMinimumWidth(need)
+        except Exception:                                        # noqa - sizing never breaks the window
+            pass
         self.refresh_all()
         if settings.service_check_on_open:
             QTimer.singleShot(200, self.check_services)
@@ -229,8 +239,8 @@ class PackDialog(QDialog):
         self.layers = _table(("Layer", "What it is", "Downloaded", "Features", "State", ""),
                              stretch=1)
         box.addWidget(self.layers, 1)
-        row = QHBoxLayout()
-        for label, tip, slot in (
+        row = QGridLayout()                       # 1.7.2: three to a row (one row needed 660 px)
+        for i, (label, tip, slot) in enumerate((
                 ("Rebuild only missing layers",
                  "Builds the layers that are not in the pack and leaves everything else alone. "
                  "This is what a refresh already does for missing layers; the button makes it "
@@ -246,20 +256,21 @@ class PackDialog(QDialog):
                  "out of date.", self.show_change_report),
                 ("Data vintage…",
                  "Layer, source, download date and feature count, to stamp a report with.",
-                 self.show_vintage)):
+                 self.show_vintage))):
             button = QPushButton(label)
             button.setToolTip(tip)
             button.clicked.connect(slot)
-            row.addWidget(button)
-        row.addStretch(1)
+            row.addWidget(button, i // 3, i % 3)
         box.addLayout(row)
         return page
 
     def _services_tab(self):
         page = QWidget()
         box = QVBoxLayout(page)
-        box.addWidget(QLabel("<b>Do the services answer?</b> Asked with one small question each, "
-                             "so you know before a run that would hang."))
+        intro = QLabel("<b>Do the services answer?</b> Asked with one small question each, "
+                       "so you know before a run that would hang.")
+        intro.setWordWrap(True)                   # 1.7.2: one line needed 649 px
+        box.addWidget(intro)
         self.services = _table(("", "Service", "Time", "What it is for / what it said"),
                                stretch=3)
         box.addWidget(self.services, 1)

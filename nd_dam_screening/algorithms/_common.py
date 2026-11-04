@@ -18,6 +18,17 @@ FT = 0.3048                      # metres per foot (user-facing depths are in fe
 _lock = threading.Lock()
 
 
+def with_help(param, text):
+    """`param` with `text` as its help / tooltip (QGIS >= 3.16), so the label in the Processing
+    panel stays short (GUI check 2026-11-04: long tick-box labels made the panel 865-1100 px
+    wide and the dialog scrolled sideways at 800 x 600). A test double without setHelp: ignored."""
+    try:
+        param.setHelp(text)
+    except Exception:                                            # noqa
+        pass
+    return param
+
+
 def hide(param):
     """Mark a Processing parameter hidden (kept for old models / saved histories that still pass
     the metre value; the dialog shows the feet parameter). Works on QGIS 3.x (legacy

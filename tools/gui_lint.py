@@ -45,7 +45,7 @@ from ND_Dam_Hazard_Helper.tokens import TOKENS  # noqa: E402
 
 SHOTS = sys.argv[1] if len(sys.argv) > 1 else ""
 MAX_MIN_HEIGHT = 1000        # a window must be able to shrink to fit a 1080p screen (taskbar too)
-MAX_MIN_WIDTH = 1400
+MAX_MIN_WIDTH = 800         # GUI check 2026-11-04: every window shrinks to an 800 x 600 screen's width
 HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-zA-Z])")
 TOKEN_HEX = {v.lower() for v in TOKENS.values()}
 LONE_AMP = re.compile(r"(?<!&)&(?!&)")
@@ -96,9 +96,12 @@ def rule_fits(label, win):
     hint = win.minimumSizeHint()
     h = max(win.minimumHeight(), hint.height() if hint.isValid() else 0)
     w = max(win.minimumWidth(), hint.width() if hint.isValid() else 0)
-    if h > MAX_MIN_HEIGHT or w > MAX_MIN_WIDTH:
-        fail(label, "cannot shrink below {}x{} (limit {}x{}): its bottom buttons go off a 1080p "
-             "screen".format(w, h, MAX_MIN_WIDTH, MAX_MIN_HEIGHT))
+    if h > MAX_MIN_HEIGHT:
+        fail(label, "cannot shrink below {} px high (limit {}): its bottom buttons go off a 1080p "
+             "screen".format(h, MAX_MIN_HEIGHT))
+    if w > MAX_MIN_WIDTH:
+        fail(label, "cannot shrink below {} px wide (limit {}): wider than an 800 x 600 "
+             "screen".format(w, MAX_MIN_WIDTH))
 
 
 def rule_colours(label, win):
