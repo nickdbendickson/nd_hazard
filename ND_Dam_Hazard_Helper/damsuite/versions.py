@@ -38,7 +38,7 @@ LABELS = {"ndhazard": "ND Dam Hazard Classification Helper",
           "ndbreach": "ND Dam Breach Runner",
           "ndscreen": "ND Dam Breach Screening",
           "ndupdater": "ND Data Updater"}
-RELEASE = {"ndhazard": "2.35.9", "ndbreach": "3.27.6", "ndscreen": "0.33.7",
+RELEASE = {"ndhazard": "2.35.10", "ndbreach": "3.27.7", "ndscreen": "0.33.8",
            "ndupdater": "1.7.2"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
