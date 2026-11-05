@@ -64,6 +64,13 @@ class NDBreachRunnerPlugin:
         QgsApplication.processingRegistry().addProvider(self.provider)
 
     def initGui(self):
+        # suite 1.18.5: the suite's map services as Browser connections (WMS/WMTS, XYZ Tiles,
+        # ArcGIS REST Servers), each added once (damsuite/connections.py)
+        try:
+            from .damsuite import connections as _conn, versions as _vs
+            _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
+        except Exception:  # noqa: BLE001 - never block the plugin's start-up
+            pass
         self.initProcessing()
         self._schedule_version_check()
         try:

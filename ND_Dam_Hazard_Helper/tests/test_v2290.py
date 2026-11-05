@@ -190,7 +190,8 @@ def builder_lists_3dhp_barriers_files_and_land_cover():
     s = rows["SARP_dams"]
     assert s[2] == "barriers" and s[4]["url"] == C.SARP_DAMS_URL and "NIDID" in s[4]["fields"]
     assert rows["SARP_surveyed_crossings"][4]["url"] == C.SARP_CROSSINGS_URL
-    assert "SARP_unsurveyed_crossings" not in rows
+    # 2.35.11: the unsurveyed crossings come from the national download (test_pack_crossings.py)
+    assert rows["SARP_unsurveyed_crossings"][3] == "sarp_zip"
     for n in PF.NAMES:
         assert rows[n][3] == "file", n
     assert rows["DWR_dams"][4]["fallback"]["url"] == C.DWR_DAMS_URL
@@ -224,6 +225,10 @@ def builder_transforms_each_batch_before_it_is_stored():
     class W(object):
         def __init__(self):
             self._cur = {"n": 0}
+
+        @property
+        def count(self):                 # suite 1.18.6: the engine reads the public count
+            return self._cur["n"]
 
         def chunks(self):
             return {}
@@ -272,6 +277,10 @@ def a_heavy_layer_is_read_in_tiles_paged_by_offset():
     class W(object):
         def __init__(self):
             self._cur = {"n": 0}
+
+        @property
+        def count(self):                 # suite 1.18.6: the engine reads the public count
+            return self._cur["n"]
 
         def chunks(self):
             return {}

@@ -77,6 +77,13 @@ class NDdamHazardHelperPlugin(QObject):
         Create the action that will be displayed in the menu/toolbar.
         Called when the plugin is enabled.
         """
+        # suite 1.18.5: the suite's map services as Browser connections (WMS/WMTS, XYZ Tiles,
+        # ArcGIS REST Servers), each added once (damsuite/connections.py)
+        try:
+            from .damsuite import connections as _conn, versions as _vs
+            _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
+        except Exception:  # noqa: BLE001 - never block the plugin's start-up
+            pass
         self.initProcessing()
         # Try to load an icon; if missing, use a blank icon
         icon_path = os.path.join(os.path.dirname(__file__), "icon.svg")
