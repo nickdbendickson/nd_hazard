@@ -714,9 +714,11 @@ def _fix_chart(chart, xref, yref, lref, xs, ys, labels, n, dmax):
 
 
 # ------------------------------------------------------------ report SVG --
-_LOW_FILL = "#999371"        # the template's green over red (40 % / 50 % on white)
-_JUDG_FILL = "#FFC040"       # its yellow over red
-_TEXT = {"high": "#C00000", "judg": "#C55A11", "low": "#375623"}
+# REG_05.2026 Fig 5.1 / 5.2 fills (sampled; DWR_Plugins helpers/styles after #126)
+_HIGH_FILL = "#EF9897"
+_JUDG_FILL = "#F9F4A3"
+_LOW_FILL = "#C4E0AD"
+_TEXT = {"high": "#951b21", "judg": "#b26222", "low": "#17632b"}
 _TITLES = {HOUSE: ("Houses on Foundation", "ND Figure 5.1 (ACER TM 11 Figure 2)"),
            MOBILE: ("Mobile Homes", "ND Figure 5.2 (ACER TM 11 Figure 3)")}
 
@@ -775,7 +777,7 @@ def chart_svg(kind, rows, curve_at, window=None, labels=None):
     title, fig = _TITLES[kind]
     if window:
         fig = "close-up, {} ft/s x {} ft".format(_num(vmax), _num(dmax))
-    o.append('<rect x="{}" y="8" width="{}" height="26" fill="#FFC000"/>'.format(L, pw))
+    # plain title (REG_05.2026 figures have no gold banner)
     o.append('<text x="{}" y="27" font-size="17" font-weight="bold" text-anchor="middle" '
              'fill="#000000">{} - {}</text>'.format(L + pw / 2.0, escape(title), escape(fig)))
     vs = [vmax * i / 200.0 for i in range(201)]
@@ -788,6 +790,9 @@ def chart_svg(kind, rows, curve_at, window=None, labels=None):
     o.append('<polygon points="{}" fill="{}" stroke="none"/>'.format(
         poly([(X(v), Y(d)) for v, d in zip(vs, low)] +
              [(X(v), Y(d)) for v, d in reversed(list(zip(vs, high)))]), _JUDG_FILL))
+    o.append('<polygon points="{}" fill="{}" stroke="none"/>'.format(
+        poly([(X(v), Y(d)) for v, d in zip(vs, high)] +
+             [(X(vmax), Y(dmax)), (X(0), Y(dmax))]), _HIGH_FILL))
     # grid: labelled depth lines, minor lines between; a line per velocity step
     if window:
         dstep = _nice_step(dmax, 8)
