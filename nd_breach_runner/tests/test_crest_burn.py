@@ -304,3 +304,65 @@ def grid_refine_leaves_unflagged_fine_and_fixed_plan_runs_alone():
         wf._run_dam_once = real
     assert [c[0] for c in calls] == [20.0, 10.0]               # check off: the record only
     assert "check" not in json.load(open(res.report_json))["grid_refine"]
+
+
+@test
+def grid_refine_notes_the_record_before_the_check_runs():
+    out = tempfile.mkdtemp()
+    seen = {}
+    once, calls = _fake_runs(True)
+
+    def spy(dam, dam_xy, st, *a, **k):
+        if st.cell_size_m == 5.0:          # the check starts: the record must already say so
+            seen["entry"] = json.load(open(os.path.join(
+                out, wf.MODEL_FOLDER, "run_report.json"))).get("grid_refine")
+            raise RuntimeError("stopped")
+        return once(dam, dam_xy, st, *a, **k)
+    real = wf._run_dam_once
+    wf._run_dam_once = spy
+    try:
+        res = wf.run_dam(None, (0, 0), wf.RunSettings(cell_size_m=20.0), None, None, out)
+    finally:
+        wf._run_dam_once = real
+    assert seen["entry"]["record_cell_m"] == 10.0
+    assert seen["entry"]["check"] == {"cell_m": 5.0, "status": "running"}
+    gr = json.load(open(res.report_json))["grid_refine"]
+    assert "error" in gr["check"]                               # the crash is recorded, record kept
+
+
+@test
+def crest_burn_3dep_retries_failed_tiles_then_gives_up():
+    from nd_breach_runner.damsuite import terrain_cache as TC
+    src = cb.ThreeDepSource(tempfile.mkdtemp(), "EPSG:26914")
+    waits, tries = [], []
+    src.sleep = waits.append
+    src._box_5070 = lambda b: b
+
+    def get(*a, **k):
+        tries.append(1)
+        if len(tries) < 3:
+            raise TC.TerrainError("2 of 4 terrain tile(s) could not be downloaded")
+        return {"vrt": "x.vrt", "fetched": 2, "cached": 2}
+
+    class _FS:
+        def __init__(self, *a, **k):
+            pass
+
+        def max_grid(self, bounds, cell, shape):
+            return np.ones(shape)
+    real_get, real_fs = TC.get, cb.FineSource
+    TC.get, cb.FineSource = get, _FS
+    try:
+        out = src.max_grid((0, 0, 20, 20), 10.0, (2, 2))
+        assert out.shape == (2, 2) and len(tries) == 3
+        assert waits == list(cb.RETRY_WAIT_S[:2])
+        TC.get = lambda *a, **k: (_ for _ in ()).throw(TC.TerrainError("down"))
+        waits[:] = []
+        try:
+            src.max_grid((0, 0, 20, 20), 10.0, (2, 2))
+            assert False, "should raise"
+        except TC.TerrainError:
+            pass
+        assert waits == list(cb.RETRY_WAIT_S)
+    finally:
+        TC.get, cb.FineSource = real_get, real_fs

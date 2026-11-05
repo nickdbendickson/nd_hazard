@@ -792,6 +792,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                               "cells (limit {:,.0f})".format(check, cells, GRID_CHECK_MAX_CELLS)}
         else:
             log("Grid check: running the same domain at {:g} m".format(check))
+            # The record is final now: note it in its report before the (long) check starts,
+            # so a check that is stopped or crashes still leaves the record explained.
+            _write_refine_entry(res2, dict(entry, check={"cell_m": check, "status": "running"}))
             st3 = copy.copy(st2)
             st3.cell_size_m = check
             st3.products = False
@@ -836,6 +839,19 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 entry["coarse_flooded_acres_over_arrival_depth"] or 0, cs))
     _amend_report(res2, entry, [text] + notes)
     return res2
+
+
+def _write_refine_entry(res, entry):
+    """Put report["grid_refine"] into a finished run's report json (no other change)."""
+    rep = _read_report(res)
+    if not rep:
+        return
+    rep["grid_refine"] = entry
+    try:
+        with open(res.report_json, "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=2, default=_json_default)
+    except OSError:
+        pass
 
 
 def _amend_report(res, entry, texts):

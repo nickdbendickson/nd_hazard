@@ -36,6 +36,7 @@ Pure numpy + GDAL; no QGIS.
 """
 import math
 import os
+import time
 
 import numpy as np
 
@@ -47,6 +48,7 @@ MAX_RAISE_M = 5.0          # a larger raise is a hill or a mis-drawn line, not a
 PATH_GUARD_CELLS = 1.5     # flow-path cells kept open: this many model cells either side
 BRIDGE_GUARD_CELLS = 1.5   # around a bridge point (plus half its span when known)
 CHUNK_CELLS = 256          # fine reads are made in blocks of this many model cells square
+RETRY_WAIT_S = (10.0, 30.0, 60.0)  # 3DEP 1 m tile retries (USGS gateway errors are common)
 FT = 0.3048
 
 SRC_PARAMETER = "parameter"
@@ -227,6 +229,7 @@ class ThreeDepSource:
                                    "3DEPElevation/ImageServer"}
         self.fetched = 0
         self.cached = 0
+        self.sleep = time.sleep
 
     def _box_5070(self, bounds):
         from .gdal_io import _gdal
@@ -257,9 +260,21 @@ class ThreeDepSource:
         cdir = TC.cache_dir(root, self.service["id"], self.CELL)
         os.makedirs(cdir, exist_ok=True)
         vrt = os.path.join(cdir, "crestburn_{}.vrt".format(abs(hash((bounds, cell))) % 10 ** 10))
-        res = TC.get(self._box_5070(bounds), self.CELL, cdir,
-                     TC.fetcher_for(self.service, self.http_get), vrt, cancel=self.cancel,
-                     log=self.log)
+        box = self._box_5070(bounds)
+        for attempt in range(len(RETRY_WAIT_S) + 1):
+            try:
+                res = TC.get(box, self.CELL, cdir, TC.fetcher_for(self.service, self.http_get),
+                             vrt, cancel=self.cancel, log=self.log)
+                break
+            except TC.TerrainError as e:
+                # USGS often answers 502 / 504 for a while; tiles that did arrive stay in the
+                # cache, so a retry fetches only the missing ones.
+                if attempt >= len(RETRY_WAIT_S) or (self.cancel and self.cancel()):
+                    raise
+                wait = RETRY_WAIT_S[attempt]
+                self.log("Crest burn: 1 m tiles failed ({}); trying again in {:g} s".format(
+                    str(e)[:120], wait))
+                self.sleep(wait)
         self.fetched += int(res.get("fetched") or 0)
         self.cached += int(res.get("cached") or 0)
         try:
