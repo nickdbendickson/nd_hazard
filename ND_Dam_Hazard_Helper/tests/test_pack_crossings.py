@@ -1,6 +1,9 @@
-"""2.35.11 (builder 1.4): two more barrier layers in the offline pack - SARP_unsurveyed_crossings (the
-SARP inventory's unsurveyed road-stream crossings, read from its national road-crossings download)
-and USGS_stream_crossings (the USGS Database of Stream Crossings in the United States).
+"""2.35.11 (builder 1.4): two more barrier layers in the offline pack - the SARP inventory's
+unsurveyed road-stream crossings (read from its national road-crossings download) and
+USGS_stream_crossings (the USGS Database of Stream Crossings in the United States).
+2.35.15 (packbuild 1.1): the unsurveyed crossings are ABI_road_crossings_unsurveyed, the shared
+layer of both suites (damsuite.abi, engine kind "abi"; every column kept, names lower case);
+SARP_unsurveyed_crossings is its alias.
 Run: python3 -m ND_Dam_Hazard_Helper.tests.run_tests (from the folder above the plugin)."""
 import os
 import sys
@@ -45,59 +48,69 @@ def _csv_lines():
 
 @test
 def both_crossing_layers_are_in_the_pack_under_barriers():
+    from ND_Dam_Hazard_Helper.damsuite import abi as A
     table = {t[0]: t for t in B.datasets()}
-    s = table["SARP_unsurveyed_crossings"]
+    s = table["ABI_road_crossings_unsurveyed"]
     u = table["USGS_stream_crossings"]
-    assert s[2] == "barriers" and s[3] == "sarp_zip", s
-    assert s[4]["url"] == C.SARP_ROAD_CROSSINGS_ZIP
-    assert s[4]["url"].endswith("/downloads/national/road_crossings.zip")
+    assert "SARP_unsurveyed_crossings" not in table
+    assert s[2] == "barriers" and s[3] == "abi", s
+    assert s[4]["mode"] == "zip" and A.url_of(s[4]).endswith("/downloads/national/road_crossings.zip")
     assert u[2] == "barriers" and u[3] == "arcgis", u
-    assert u[4]["url"] == C.USGS_STREAM_CROSSINGS_URL
+    assert u[4]["url"] == B.USGS_STREAM_CROSSINGS_URL == C.USGS_STREAM_CROSSINGS_URL
     assert "stream_crossings/FeatureServer/0" in u[4]["url"]
     assert u[4]["fields"].startswith("OBJECTID,")           # a crossing id repeats per road line
     assert "10.5066/P9YX6KTB" in u[4]["source"]
-    for n in ("SARP_unsurveyed_crossings", "USGS_stream_crossings"):
+    for n in ("ABI_road_crossings_unsurveyed", "SARP_unsurveyed_crossings", "USGS_stream_crossings"):
         assert GP.group_of(n) == "barriers", n
-    # the data-source file can change both addresses
-    assert "SARP_ROAD_CROSSINGS_ZIP" in C.SOURCE_KEYS and "USGS_STREAM_CROSSINGS_URL" in C.SOURCE_KEYS
+
+
+def _zip(path):
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("aquatic_barrier_ranks.csv", "\n".join(_csv_lines()) + "\n")
+        z.writestr("README.txt", "Data version: 3.26.0\n")
 
 
 @test
 def unsurveyed_rows_of_north_dakota_inside_the_box_only():
-    feats = list(B.sarp_zip_features(_csv_lines(), BOX, B.SARP_UNSURVEYED_FIELDS))
-    assert [f["properties"]["SARPID"] for f in feats] == ["cr1", "cr5"], feats
+    from ND_Dam_Hazard_Helper.damsuite import abi as A
+    d = tempfile.mkdtemp()
+    _zip(os.path.join(d, "road_crossings.zip"))
+
+    def dl(url, dest, refresh, log, max_age=86400):
+        return dest, False                                   # the file above, as it is
+    head, rows, prov = A.abi_rows({"mode": "zip", "kind": "road_crossings"}, d, dl)
+    feats = A.abi_features(head, rows, BOX)
+    assert [f["properties"]["sarpid"] for f in feats] == ["cr1", "cr5"], feats
     p = feats[0]["properties"]
     assert feats[0]["geometry"] == {"type": "Point", "coordinates": [-97.15, 46.84]}
-    assert p["Surveyed"] == "not likely" and p["State"] == "North Dakota"
-    assert p["HUC8"] == "09020104"                           # leading zero: kept as text
-    assert p["USGSCrossingID"] == 3602476 and p["OnNetwork"] == 1
-    assert "SARP_Score" not in p                             # not in the kept fields
-    assert p["lat"] == 46.84 and p["lon"] == -97.15
+    assert p["surveyed"] == "not likely" and p["state"] == "North Dakota"
+    assert p["huc8"] == "09020104"                           # leading zero: kept as text
+    assert p["usgscrossingid"] == 3602476
+    assert p["network"] == "on-network" and p["barrier_status"] == "present"
+    assert p["sarp_score"] == 0.5                            # every column kept
+    assert prov["data_version"] == "3.26.0"
 
 
 @test
-def fetch_reads_the_zip_in_place_into_the_pack():
+def fetch_reads_the_zip_into_the_pack():
     d = tempfile.mkdtemp()
     db = os.path.join(d, "work", "p.sqlite")
-    os.makedirs(os.path.dirname(db))
-    dl = os.path.join(d, "work", "downloads")
+    dl = os.path.join(d, "work", "downloads", "abi")
     os.makedirs(dl)
-    zp = os.path.join(dl, "sarp_road_crossings.zip")
-    with zipfile.ZipFile(zp, "w") as z:
-        z.writestr(B.SARP_ZIP_MEMBER, "\n".join(_csv_lines()) + "\n")
-        z.writestr("README.txt", "Data version: 3.26.0\n")
+    _zip(os.path.join(dl, "road_crossings.zip"))
     w = OP.PackWriter(db, BOX, created_by="t")
     logs = []
     ctx = B._Ctx(w, 1, logs.append, lambda p, m="": None, lambda t: None, False)
-    w.begin("SARP_unsurveyed_crossings", "unsurveyed", C.SARP_ROAD_CROSSINGS_ZIP)
+    w.begin("ABI_road_crossings_unsurveyed", "unsurveyed", "x")
     # a fresh download in the work folder is used as it is: no network here
-    note = B.fetch_sarp_zip(ctx, BOX, {"url": "http://127.0.0.1:9/never",
-                                       "fields": B.SARP_UNSURVEYED_FIELDS})
+    note = B.fetch_abi(ctx, BOX, {"mode": "zip", "kind": "road_crossings"})
     w.finish(note)
     w.close(finalize=True)
     assert "3.26.0" in note and "not likely" in note, note
     assert any("kept from an earlier run" in m for m in logs), logs
     r = OP.PackReader(db)
+    assert r.info("ABI_road_crossings_unsurveyed")["count"] == 2
+    # the old ND name answers
     assert r.info("SARP_unsurveyed_crossings")["count"] == 2
 
 
@@ -107,7 +120,7 @@ def an_old_download_is_fetched_again():
     dest = os.path.join(d, "a.zip")
     with open(dest, "wb") as f:
         f.write(b"old")
-    old = time.time() - B.SARP_ZIP_MAX_AGE_S - 60
+    old = time.time() - B.ZIP_MAX_AGE_S - 60
     os.utime(dest, (old, old))
     calls = []
 
