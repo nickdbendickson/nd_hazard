@@ -1,4 +1,4 @@
-"""3.27.8: terrain-aware grid default on flat section-road plains.
+"""3.27.9: terrain-aware grid default on flat section-road plains.
 
 On flat plains (low DEM relief and gentle slope) the Runner starts at 10 m, with
 5 m offered when the engineer can afford the run time. Coarser cells (20-30 m)

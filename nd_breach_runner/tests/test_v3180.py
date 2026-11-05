@@ -192,7 +192,7 @@ def v3180_largest_domain_side_and_duration_cap_are_cut_offs():
                            SyntheticTerrain(), _recording_writer(writes), os.path.join(d, "T5"))
         rep = _json(r.report_json)
         assert "cut_off" not in rep and "products_pass" not in rep
-        # 3.27.8: flat synthetic valley + 50 m cell raises the terrain-grid coarse-cell
+        # 3.27.9: flat synthetic valley + 50 m cell raises the terrain-grid coarse-cell
         # advisory; a clean finish still means no cut-off / solver warnings.
         other = [w for w in rep["warnings"]
                  if "Flat section-road plain" not in w]

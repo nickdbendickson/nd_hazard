@@ -644,7 +644,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     tol_m = st.edge_tolerance_ft * FT
     cs = st.cell_size_m
 
-    # 3.27.8: terrain-aware grid default on flat section-road plains (DWR-2801 / Nick).
+    # 3.27.9: terrain-aware grid default on flat section-road plains (DWR-2801 / Nick).
     # Classify a coarse DEM window around the dam; record report["terrain_grid"]; warn when
     # the cell is coarser than 10 m on a flat plain. Does not change the run's cell.
     try:
