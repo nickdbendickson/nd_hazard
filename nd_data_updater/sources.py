@@ -37,8 +37,9 @@ SOURCE_INFO = {
     "pack": ("Offline pack for the ND dam plugins (all layers)",
              "Builds and keeps up to date the statewide offline data pack the ND Dam Hazard Helper, "
              "Breach Runner and Breach Screening read: structures, roads, rail, lifelines, dams, "
-             "USGS 3DHP flowlines and waterbodies, SARP aquatic barrier dams and surveyed "
-             "and unsurveyed crossings, USGS road-stream crossings, DWR and HIFLD layers (from files in the data folder's dwr/ and hifld/), "
+             "USGS 3DHP flowlines and waterbodies, aquatic barrier dams and surveyed "
+             "and unsurveyed crossings (SARP inventory, ABI_*), USGS road-stream crossings, "
+             "ND DEQ landfills and source water protection areas, DWR and HIFLD layers (from files in the data folder's dwr/ and hifld/), "
              "NLCD land cover and counties. A layer that is missing or older than the refresh "
              "interval is fetched; the rest is left alone.", True),
     "nsi_generator": ("nsi-generator source code",

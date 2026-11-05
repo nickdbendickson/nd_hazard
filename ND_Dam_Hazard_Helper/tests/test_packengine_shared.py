@@ -23,15 +23,20 @@ def helper_builder_is_the_shared_engine_with_the_nd_layers():
     assert B is E and PFS is PF
     assert E.C.__dict__["_mod"] is C and E.pack_layers() == "nd" == C.PACK_LAYERS
     names = [t[0] for t in E.datasets()]
-    for n in ("3DHP_flowlines", "3DHP_waterbodies", "SARP_dams", "SARP_surveyed_crossings",
-              "SARP_unsurveyed_crossings", "USGS_stream_crossings", E.NLCD_NAME):
+    for n in ("3DHP_flowlines", "3DHP_waterbodies", "ABI_dams", "ABI_small_barriers_surveyed",
+              "ABI_road_crossings_unsurveyed", "USGS_stream_crossings", "NDDEQ_landfills",
+              E.NLCD_NAME):
         assert n in names, (n, names)
-    assert not [n for n in names if n.startswith("NHD_")], names
+    assert not [n for n in names if n.startswith(("NHD_", "SARP_"))], names
+    # 2.35.15 (packbuild 1.1): the barrier and ND DEQ layers are the same entries as DamSafety's
+    dwr = {t[0]: t for t in E.datasets(layers="dwr")}
+    for t in E.shared_datasets():
+        assert t in E.datasets() and dwr[t[0]] == t, t[0]
     table = E.datasets()
     assert E._pick("nhd", table) == {"hydro"} and E._pick("sarp", table) == {"barriers"}
     # the DamSafety additions are there for both suites
     for f in ("fetch_arcgis_tiled", "_page_400", "_page_anchor", "fetch_local_gpkg",
-              "download_dwr_shapefiles", "fetch_sarp_zip", "fetch_arcgis_tiles", "_add_rasters"):
+              "download_dwr_shapefiles", "fetch_abi", "fetch_arcgis_tiles", "_add_rasters"):
         assert callable(getattr(E, f)), f
 
 

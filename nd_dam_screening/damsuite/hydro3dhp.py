@@ -36,6 +36,13 @@ FLOWLINE_NAMES = (FLOWLINES, OLD_FLOWLINES)
 WATERBODY_NAMES = (WATERBODIES, OLD_WATERBODIES)
 ALIASES = {FLOWLINES: OLD_FLOWLINES, OLD_FLOWLINES: FLOWLINES,
            WATERBODIES: OLD_WATERBODIES, OLD_WATERBODIES: WATERBODIES}
+# packbuild 1.1: the barrier layers are one list in both suites under DamSafety's ABI_* names
+# (damsuite.abi); an ND pack built before it holds SARP_*. Each name answers to the other.
+BARRIER_ALIASES = {"SARP_dams": "ABI_dams",
+                   "SARP_surveyed_crossings": "ABI_small_barriers_surveyed",
+                   "SARP_unsurveyed_crossings": "ABI_road_crossings_unsurveyed"}
+BARRIER_ALIASES.update({v: k for k, v in list(BARRIER_ALIASES.items())})
+ALIASES.update(BARRIER_ALIASES)
 
 # fields the pack keeps (a 3DHP flowline has about 40; these are the ones a user or a later
 # release can use: identity, name, type, network order). Names are lower case as the service has them.

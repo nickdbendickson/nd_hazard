@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The offline data pack builder of both dam suites (packbuild 1.0, suite 1.18.6).
+"""The offline data pack builder of both dam suites (packbuild 1.1, suite 1.18.7).
 
 ONE engine for the ND Dam Suite (nd_hazard: ND Dam Hazard Helper, ND Data Updater) and the
 DamSafety suite (DWR_Plugins: DamSafety_Hazard, DamSafety_Data). Before 1.18.6 each plugin
@@ -14,7 +14,8 @@ plugin's constants and osm_parse and then IS this module (sys.modules alias), so
                                  data-source file overrides) and its Overpass parser; read at
                                  call time, so the data-source file still applies
     pack_layers()                "nd" or "dwr" - constants.PACK_LAYERS; picks the layer list
-                                 (the two lists become one in the next step)
+                                 (packbuild 1.1: the barrier and ND DEQ layers are one list,
+                                 shared_datasets(); see below)
     build(out, ...)              the pack (folder of GeoPackages, or the one-file zip)
     main(argv)                   the command line (python build_nd_pack.py --help)
 
@@ -45,6 +46,14 @@ flowlines and waterbodies are cut out of it instead.
 unsurveyed, modelled road-stream crossings, from its national road-crossings download: the
 services above hold the surveyed ones only) and USGS_stream_crossings (the USGS Database of
 Stream Crossings in the United States, the TIGER x NHD HR base those crossings are built on).
+
+Packbuild 1.1 (suite 1.18.7): ONE list of the barrier and ND DEQ layers for both suites
+(shared_datasets()): the SARP / NACC Aquatic Barrier Inventory as ABI_dams,
+ABI_small_barriers_surveyed and ABI_road_crossings_unsurveyed (kind "abi", damsuite.abi - every
+column kept, network and barrier_status added), USGS_stream_crossings and NDDEQ_landfills /
+NDDEQ_source_water_protection_*. The ND pack's SARP_dams / SARP_surveyed_crossings /
+SARP_unsurveyed_crossings are replaced by the ABI_* layers; the old names still answer (the pack
+readers' aliases, hydro3dhp.ALIASES, and --only).
 
 2.24.0: the pack is a folder with one GeoPackage per layer (damsuite.gpkgpack: manifest.json,
 LAYERS.txt with each layer and its source, <theme>/<name>.gpkg). The downloads still go into
@@ -107,7 +116,7 @@ from .offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME, ND_BBOX,
                            DEFAULT_PAD_DEG, PackError, STATUS_PARTIAL,
                            write_clean_copy, geom_bbox)
 
-PACKBUILD_VERSION = "1.0"
+PACKBUILD_VERSION = "1.1"
 
 
 class _Bound(object):
@@ -149,7 +158,7 @@ def bound():
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BUILDER_VERSION = "1.4"
+BUILDER_VERSION = "1.5"
 NLCD_NAME = "NLCD_2021_landcover"
 
 
@@ -1605,11 +1614,11 @@ def fetch_osm(ctx, bbox, make_query, parse):
 
 
 def pack_layers():
-    """Which layer list this plugin's pack holds: "nd" (the ND Dam Suite: 3DHP hydro, SARP
-    barriers, layer files, land cover; a folder pack) or "dwr" (the DamSafety suite: NHD
-    hydro, ABI / USGS barriers via DamSafety_Data, a one-file zip). constants.PACK_LAYERS of
-    the plugin that bound this engine; "dwr" when it has none. Packbuild 1.0 (suite 1.18.6):
-    one engine for both suites, the two layer lists are kept as they were."""
+    """Which layer list this plugin's pack holds: "nd" (the ND Dam Suite: 3DHP hydro, layer
+    files, land cover; a folder pack) or "dwr" (the DamSafety suite: NHD hydro, a one-file zip).
+    constants.PACK_LAYERS of the plugin that bound this engine; "dwr" when it has none.
+    Packbuild 1.0 (suite 1.18.6): one engine for both suites. Packbuild 1.1: both lists hold
+    the same barrier and ND DEQ layers (shared_datasets())."""
     return getattr(C, "PACK_LAYERS", "dwr") or "dwr"
 
 
@@ -1676,6 +1685,7 @@ def _datasets_dwr():
         ("OSM_places", "OpenStreetMap cities / towns / villages", "osm", "osm",
          {"query": O.places_query, "parse": O.place_features}),
     ]
+    d += shared_datasets()
     return d
 
 
@@ -1715,34 +1725,6 @@ def _datasets_nd():
          _hydro_spec(C.NHD_FLOWLINE_URL, True)),
         ("3DHP_waterbodies", "USGS 3DHP waterbodies (3D Hydrography Program)", "hydro", "arcgis",
          _hydro_spec(C.NHD_WATERBODY_URL, False)),
-        ("SARP_dams", "Aquatic barrier dams - SARP (tool.aquaticbarriers.org)", "barriers",
-         "arcgis", {"url": C.SARP_DAMS_URL, "fields": SARP_DAM_FIELDS, "precision": 6,
-                    "source": "Southeast Aquatic Resources Partnership (SARP) aquatic barrier "
-                              "prioritization, dams (the data behind tool.aquaticbarriers.org, "
-                              "Great Plains / Intermountain West region)",
-                    "used_by": "reference (fish passage / dam inventory cross-check)"}),
-        ("SARP_surveyed_crossings", "Aquatic barrier road-stream crossings, surveyed - SARP",
-         "barriers", "arcgis",
-         {"url": C.SARP_CROSSINGS_URL, "fields": SARP_CROSSING_FIELDS, "precision": 6,
-          "source": "Southeast Aquatic Resources Partnership (SARP) aquatic barrier "
-                    "prioritization, assessed (field-surveyed) road-stream crossings (the data "
-                    "behind tool.aquaticbarriers.org, Great Plains / Intermountain West region)",
-          "used_by": "reference (culverts and bridges on streams)"}),
-        ("SARP_unsurveyed_crossings", "Aquatic barrier road-stream crossings, unsurveyed - SARP",
-         "barriers", "sarp_zip",
-         {"url": C.SARP_ROAD_CROSSINGS_ZIP, "fields": SARP_UNSURVEYED_FIELDS,
-          "source": "Southeast Aquatic Resources Partnership (SARP) / NACC National Aquatic "
-                    "Barrier Inventory, unsurveyed (modelled) road-stream crossings: the national "
-                    "road-crossings download, North Dakota rows with Surveyed = 'not likely'",
-          "used_by": "reference (likely culverts and bridges on streams, not field-checked)"}),
-        ("USGS_stream_crossings", "USGS road-stream crossings (Database of Stream Crossings)",
-         "barriers", "arcgis",
-         {"url": C.USGS_STREAM_CROSSINGS_URL, "fields": USGS_CROSSING_FIELDS, "precision": 6,
-          "source": "Wieferich, D.J., 2022, Database of Stream Crossings in the United States: "
-                    "U.S. Geological Survey data release, doi:10.5066/P9YX6KTB (TIGER 2020 roads "
-                    "x NHD High Resolution flowlines; bridge / culvert type from the 2019 NBI)",
-          "used_by": "reference (modelled road-stream crossings; the base of the SARP "
-                     "unsurveyed crossings)"}),
         ("OSM_lifelines", "OpenStreetMap lifeline facilities", "osm", "osm",
          {"query": O.overpass_query, "parse": O.overpass_to_features}),
         ("OSM_crossings", "OpenStreetMap culverts / fords / rail bridges", "osm", "osm",
@@ -1754,51 +1736,74 @@ def _datasets_nd():
         ("OSM_places", "OpenStreetMap cities / towns / villages", "osm", "osm",
          {"query": O.places_query, "parse": O.place_features}),
     ]
+    d += shared_datasets()
     d += file_datasets()
     d += suite_datasets()
     return d
 
 
-# 1.19.0: pack fields kept from the SARP services (they have 257 / 236 fields; a field the layer
-# lacks is left out with a note - _known_fields)
-SARP_DAM_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,NIDID,River,StreamSizeClass,"
-                   "YearCompleted,Height,Length,Width,Hazard,Construction,Purpose,Passability,"
-                   "Condition,Feasibility,StorageVolume,WaterbodyAcres,Fatality,LowheadDam,"
-                   "Diversion,Canal,Intermittent,StreamOrder,TotDASqKm,StateRegulated,"
-                   "FERCRegulated,Removed,YearRemoved,YearSurveyed,OwnerType,BarrierOwnerType,"
-                   "SourceLink,NHDPlusID,Snapped,HUC8,HUC12,State,County")
-
-
-SARP_CROSSING_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,CrossingCode,SurveyID,River,"
-                        "StreamSizeClass,Road,RoadType,CrossingType,Constriction,"
-                        "PotentialProject,BarrierSeverity,SARP_Score,ProtocolUsed,Resurveyed,"
-                        "Removed,YearRemoved,YearSurveyed,Condition,Canal,Intermittent,"
-                        "StreamOrder,TotDASqKm,OwnerType,BarrierOwnerType,SourceLink,NHDPlusID,"
-                        "Snapped,HUC8,HUC12,State,County")
-
-
-# 2.35.11: the unsurveyed crossings (national road-crossings CSV) and the USGS stream crossings
-SARP_UNSURVEYED_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,CrossingCode,USGSCrossingID,River,"
-                          "StreamSizeClass,CrossingType,Surveyed,OnNetwork,Removed,YearRemoved,"
-                          "Excluded,Intermittent,Canal,StreamOrder,TotDASqKm,OwnerType,"
-                          "BarrierOwnerType,NHDPlusID,Snapped,HUC8,HUC12,State,County")
-
-
+# ------------------------------------------- the barrier and ND DEQ layers (one list) --
+# packbuild 1.1: the same layers, names and sources in both suites' packs. DamSafety_Data's
+# registry() and the ND list above both take them from shared_datasets().
+USGS_STREAM_CROSSINGS_URL = ("https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/"
+                             "stream_crossings/FeatureServer/0")
 # OBJECTID is kept as the row key: some crossings appear more than once under one
 # stream_crossing_id (one row per TIGER road line or structure type), all of them are kept
 USGS_CROSSING_FIELDS = ("OBJECTID,stream_crossing_id,nhdhr_permanent_identifier,"
                         "nhdhr_gnis_stream_name,tiger2020_linearids,tiger2020_feature_names,"
                         "nhdhr_reachcode,nhdhr_fdate,tiger2020_mtfcc_feature_class,"
                         "crossing_type")
+USGS_CROSSING_SOURCE = ("Wieferich, D.J., 2022, Database of Stream Crossings in the United "
+                        "States: U.S. Geological Survey data release, doi:10.5066/P9YX6KTB "
+                        "(TIGER 2020 roads x NHD High Resolution flowlines; bridge / culvert "
+                        "type from the 2019 NBI; modelled, not field-checked)")
+# ND Department of Environmental Quality layers published on the ND GIS Hub (public ArcGIS
+# REST; DEQ's own ArcGIS Online services hold no facility points). DEQ does not publish
+# wastewater / NDPDES facilities, public water system plants or intakes as GIS layers.
+NDDEQ_HUB = "https://ndgishub.nd.gov/arcgis/rest/services/All_Locations/MapServer/"
+NDDEQ = (
+    ("NDDEQ_landfills", "ND DEQ permitted landfills (Division of Waste Management)", 12,
+     "Selected landfills permitted in North Dakota; WasteType = the primary waste accepted"),
+    ("NDDEQ_source_water_protection_community", "ND DEQ source water protection areas - "
+     "community public water systems", 16, "Drinking-water source protection areas of "
+     "community public water systems (PWS_NAME, PWS_TYPE, PWS_SOURCE); intakes not published"),
+    ("NDDEQ_source_water_protection_noncommunity", "ND DEQ source water protection areas - "
+     "non-community public water systems", 17, "Drinking-water source protection areas of "
+     "non-community public water systems; intakes not published"),
+)
 
 
-SARP_ZIP_MEMBER = "aquatic_barrier_ranks.csv"
-SARP_ZIP_STATE = "North Dakota"
-SARP_ZIP_MAX_AGE_S = 7 * 86400               # the download is used again for a week
-SARP_ZIP_BATCH = 2000                        # features written per batch
+def shared_datasets():
+    """[(name, label, group, kind, spec)] of the layers both suites' packs hold the same way:
+    the Aquatic Barrier Inventory (ABI_*, kind "abi"), the USGS stream crossings and the ND DEQ
+    layers. spec["source"] / ["note"] / ["used_by"] describe the layer (the ND pack's
+    LAYERS.txt, DamSafety_Data's manifest)."""
+    from . import abi as A
+    d = []
+    for name, label, spec in A.ABI:
+        d.append((name, label, "barriers", "abi", dict(
+            spec, source=A.source_of(spec), note=A.ABI_NOTE,
+            used_by="reference (fish passage / dam inventory cross-check)" if spec["kind"] ==
+            "dams" else "reference (culverts and bridges on streams)")))
+    d.append(("USGS_stream_crossings", "USGS road / stream crossings (Database of Stream "
+              "Crossings in the United States)", "barriers", "arcgis",
+              {"url": USGS_STREAM_CROSSINGS_URL, "fields": USGS_CROSSING_FIELDS, "precision": 6,
+               "source": USGS_CROSSING_SOURCE,
+               "used_by": "reference (modelled road-stream crossings; the base of the "
+                          "inventory's unsurveyed crossings)"}))
+    for name, label, lid, note in NDDEQ:
+        d.append((name, label, "nddeq", "arcgis", {
+            "url": NDDEQ_HUB + str(lid), "note": note,
+            "source": "ND Department of Environmental Quality, via the ND GIS Hub "
+                      "(All_Locations layer {})".format(lid)}))
+    return d
 
 
-def _download_resume(url, dest, max_age=SARP_ZIP_MAX_AGE_S, refresh=False, beat=None):
+ZIP_MAX_AGE_S = 7 * 86400                    # a national download is used again for a week
+ABI_BATCH = 2000                             # features written per batch
+
+
+def _download_resume(url, dest, max_age=ZIP_MAX_AGE_S, refresh=False, beat=None):
     """Download url to dest (streaming, continued with an HTTP Range request after a broken
     connection); a file younger than max_age is used as it is. Returns (path, downloaded_now)."""
     if not refresh and os.path.isfile(dest) and time.time() - os.path.getmtime(dest) < max_age:
@@ -1845,69 +1850,13 @@ def _download_resume(url, dest, max_age=SARP_ZIP_MAX_AGE_S, refresh=False, beat=
     raise BuildError("download failed: " + url)
 
 
-def _num(v):
-    """A CSV value as int / float when it is a plain number (no leading zero, so HUC codes and
-    ids stay text), else the text ('' -> None)."""
-    if v is None or v == "":
-        return None
-    s = v.strip()
-    if s[:1] == "-":
-        body = s[1:]
-    else:
-        body = s
-    if body.isdigit() and (body == "0" or body[0] != "0"):
-        try:
-            return int(s)
-        except ValueError:
-            return v
-    if body.count(".") == 1 and body.replace(".", "").isdigit() and body[0] != "." and \
-            (body.split(".")[0] == "0" or body[0] != "0"):
-        try:
-            return float(s)
-        except ValueError:
-            return v
-    return v
-
-
-def sarp_zip_features(lines, bbox, fields, state=SARP_ZIP_STATE):
-    """GeoJSON points from the national road-crossings CSV (an iterator of text lines): the rows
-    of `state` with Surveyed = 'not likely' (unsurveyed; 'yes' / 'likely' are the surveyed small
-    barriers, in SARP_surveyed_crossings) inside bbox, `fields` kept. Yields features."""
-    import csv
-    lines = iter(lines)
-    head = next(csv.reader([next(lines)]))
-    idx = {h: i for i, h in enumerate(head)}
-    for need in ("lat", "lon", "State", "Surveyed"):
-        if need not in idx:
-            raise BuildError("road-crossings CSV has no {} column".format(need))
-    keep = [f for f in (fields.split(",") if isinstance(fields, str) else fields) if f in idx]
-    si, vi, la, lo = idx["State"], idx["Surveyed"], idx["lat"], idx["lon"]
-    key = '"{}"'.format(state)
-    for line in lines:
-        if key not in line:                  # most of the 6 GB file is other states
-            continue
-        r = next(csv.reader([line]))
-        if len(r) != len(head) or r[si] != state or r[vi].strip().lower() != "not likely":
-            continue
-        try:
-            x, y = float(r[lo]), float(r[la])
-        except ValueError:
-            continue
-        if not (bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]):
-            continue
-        props = {f: _num(r[idx[f]]) for f in keep if f not in ("lat", "lon")}
-        props["lat"], props["lon"] = round(y, 6), round(x, 6)
-        yield {"type": "Feature", "geometry": {"type": "Point",
-                                               "coordinates": [round(x, 6), round(y, 6)]},
-               "properties": props}
-
-
-def fetch_sarp_zip(ctx, bbox, spec):
-    """2.35.11: SARP_unsurveyed_crossings from the inventory's national road-crossings download.
-    The zip (~600 MB) is kept in <work>/downloads/ for a week (a rebuild in that time reads it
-    again, --refresh downloads it again) and read in place (the 6 GB CSV is never unpacked)."""
-    work = os.path.dirname(os.path.abspath(ctx.writer.path))
-    dest = os.path.join(work, "downloads", "sarp_road_crossings.zip")
+def fetch_abi(ctx, bbox, spec):
+    """Packbuild 1.1: one Aquatic Barrier Inventory layer (damsuite.abi): the public API's state
+    CSV, or the national road-crossings download (~600 MB zip, kept in <work>/downloads/abi/ for
+    a week, continued after a broken connection; --refresh downloads it again), its North Dakota
+    unsurveyed rows. Every column kept, network and barrier_status added."""
+    from . import abi as A
+    dest = os.path.join(os.path.dirname(os.path.abspath(ctx.writer.path)), "downloads", "abi")
 
     def beat(got, total):
         if total:
@@ -1915,35 +1864,26 @@ def fetch_sarp_zip(ctx, bbox, spec):
                 got >> 20, total >> 20))
         else:
             ctx.sub(30.0, "downloading {:,} MB".format(got >> 20))
-    path, new = _download_resume(spec["url"], dest, refresh=getattr(ctx, "refresh", False),
-                                 beat=beat)
-    ctx.log("  road-crossings download: {} ({:,} MB, {})".format(
-        path, os.path.getsize(path) >> 20, "downloaded now" if new else "kept from an earlier "
-        "run (under a week old)"))
-    ctx.sub(60.0, "reading the North Dakota rows")
-    import io
-    member = spec.get("member", SARP_ZIP_MEMBER)
-    batch, n, version = [], 0, ""
-    with zipfile.ZipFile(path) as z:
-        if member not in z.namelist():
-            raise BuildError("{} is not in the road-crossings download".format(member))
-        if "README.txt" in z.namelist():
-            for line in z.read("README.txt").decode("utf-8", "replace").splitlines():
-                if line.startswith("Data version:"):
-                    version = line.split(":", 1)[1].strip()
-        with z.open(member) as raw:
-            text = io.TextIOWrapper(raw, encoding="utf-8", newline="")
-            for feat in sarp_zip_features(text, bbox, spec.get("fields", SARP_UNSURVEYED_FIELDS)):
-                batch.append(feat)
-                if len(batch) >= SARP_ZIP_BATCH:
-                    n += ctx.writer.add(batch, lambda f: f["properties"].get("SARPID"))
-                    batch = []
-                    ctx.sub(60.0 + min(39.0, n / 2000.0), "{:,} crossings".format(n))
-                    _check_cancel()
-    if batch:
-        ctx.writer.add(batch, lambda f: f["properties"].get("SARPID"))
-    return "unsurveyed crossings (Surveyed = 'not likely'){}".format(
-        "; data version " + version if version else "")
+
+    def download(url, path, refresh, log, max_age=86400):
+        got = _download_resume(url, path, max_age=max_age, refresh=refresh, beat=beat)
+        if log:
+            log("  {}: {} ({:,} KB)".format(url.split("?")[0], "downloaded now" if got[1] else
+                                            "kept from an earlier run",
+                                            os.path.getsize(got[0]) >> 10))
+        return got
+    head, rows, prov = A.abi_rows(spec, dest, download, refresh=getattr(ctx, "refresh", False),
+                                  log=ctx.log, errors=_NET_ERRORS)
+    _check_cancel()
+    ctx.sub(60.0, "reading {:,} rows".format(len(rows)))
+    feats = A.abi_features(head, rows, bbox)
+    n = 0
+    for i in range(0, len(feats), ABI_BATCH):
+        _check_cancel()
+        n += ctx.writer.add(feats[i:i + ABI_BATCH], A.feature_uid)
+        ctx.sub(60.0 + 39.0 * min(len(feats), i + ABI_BATCH) / max(1, len(feats)),
+                "{:,} features".format(min(len(feats), i + ABI_BATCH)))
+    return "{} (data version {})".format(prov.get("filter"), prov.get("data_version") or "?")
 
 
 def _hydro_spec(url, flow):
@@ -2081,7 +2021,10 @@ class _Ctx(object):
 
 
 _GROUP_ALIASES = {"nhd": "hydro", "3dhp": "hydro", "nlcd": "landcover", "sarp": "barriers",
+                  "abi": "barriers", "deq": "nddeq",
                   "NHD_flowlines": "3DHP_flowlines", "NHD_waterbodies": "3DHP_waterbodies"}
+# packbuild 1.1: --only SARP_dams etc. (the ND names before the shared list) pick the ABI_* layers
+_GROUP_ALIASES.update((k, v) for k, v in H3.BARRIER_ALIASES.items() if k.startswith("SARP_"))
 
 
 def _pick(names_or_groups, table):
@@ -2382,8 +2325,11 @@ def _run_one(ctx, name, label, kind, spec, bbox):
             raise
         return w.finish(note, status="complete")
     url = spec.get("url") or (C.NSI_API_URL if kind == "nsi" else C.OVERPASS_URL)
+    if kind == "abi":                        # packbuild 1.1: one file per layer, no chunks
+        from . import abi as A
+        url = A.url_of(spec)
     # v2.8.0: continue the chunks an interrupted run stored (not with --refresh)
-    kept = w.begin(name, label, url, resume=not getattr(ctx, "refresh", False),
+    kept = w.begin(name, label, url, resume=not getattr(ctx, "refresh", False) and kind != "abi",
                    signature=_signature(kind, spec, bbox))
     if kept:
         ctx.log("  continuing an interrupted download: {} finished chunk(s) kept, {:,} "
@@ -2412,8 +2358,8 @@ def _run_one(ctx, name, label, kind, spec, bbox):
             note = fetch_osm(ctx, bbox, spec["query"], spec["parse"])
         elif kind == "arcgis_tiled":
             note = fetch_arcgis_tiled(ctx, url, bbox, spec)
-        elif kind == "sarp_zip":
-            note = fetch_sarp_zip(ctx, bbox, spec)
+        elif kind == "abi":
+            note = fetch_abi(ctx, bbox, spec)
         else:
             raise BuildError("unknown kind " + kind)
     except BuildCancelled:
@@ -2449,6 +2395,8 @@ def _signature(kind, spec, bbox):
         return "local_gpkg|{}|{}".format(spec.get("layer"), _df().file_date(spec["path"]))
     if kind == "nsi":
         return "nsi|{}".format(_nsi_tile_deg())
+    if kind == "abi":
+        return "abi|{}|{}".format(spec.get("mode"), spec.get("kind"))
     if kind == "osm":
         try:
             q = spec["query"](tuple(bbox))
