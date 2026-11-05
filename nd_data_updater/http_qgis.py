@@ -18,6 +18,7 @@ from .core import Cancelled, NetworkError, UpdateError
 USER_AGENT = b"ND-Data-Updater-QGIS/1.0"
 # HTTP statuses that mean "the link is wrong", as opposed to "can't connect right now".
 PERMANENT_STATUSES = {400, 401, 403, 404, 405, 410}
+MAX_BYTES = 2 * 1024 * 1024 * 1024   # refuse a download larger than 2 GB
 
 
 class QgisHttp:
@@ -73,6 +74,16 @@ class QgisHttp:
         err = blocking.get(self._request(url, headers), True, self.qgs_feedback)
         return bytes(self._check(blocking, err, url).content())
 
+    def get_json(self, url, params=None):
+        import json
+        import urllib.parse
+        if params:
+            url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
+        raw = self.get_bytes(url)
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return json.loads(raw)
+
     def download(self, url, dest, feedback):
         blocking = QgsBlockingNetworkRequest()
 
@@ -84,6 +95,8 @@ class QgisHttp:
         err = blocking.get(self._request(url), True, self.qgs_feedback)
         reply = self._check(blocking, err, url)
         content = reply.content()
+        if content.size() > MAX_BYTES:
+            raise UpdateError(f"download is {content.size()} bytes, over the {MAX_BYTES} byte limit")
         expected = self._headers(reply).get("content-length")
         if expected and expected.isdigit() and int(expected) != content.size():
             raise NetworkError(f"download interrupted ({content.size()} of {expected} bytes)")
