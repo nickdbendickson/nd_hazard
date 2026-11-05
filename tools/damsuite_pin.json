@@ -1,8 +1,9 @@
 {
  "files": {
-  "__init__.py": "5bc368242aef8cc9cfea308ab4583873677213ac3fc5136520d79364922a9772",
+  "__init__.py": "63cf86d5874576dab28bf468292baed3aa960a1adee67d10ca10e09e43c7886d",
   "cascade.py": "c793fd0d12cb6e45e1cae588df34de9bb45616ee8b9ebecc50fa75e0b8aa1f69",
   "chain.py": "439b80486c0136beb77ab73b71bfcd1122e723186f25325780068ab36cddbe9b",
+  "connections.py": "b51745f14dc94e145ce78cd1429af5ddb4171adeafc97875ae776aca9499486f",
   "dam_record.py": "821782f88d46289c2626720da226149be2aff80783147270f50612a37d36fcba",
   "damdata.py": "ff1b5a2dedab603e4d544a5aa734b056a71f85f83927076c9a1c62af84bd8eaf",
   "gdalsafe.py": "5bd1066c9b4b9268c27d73e37d5224b2c487aed8f6aa77fad669da6789249259",
@@ -11,7 +12,7 @@
   "hydro3dhp.py": "c544278f19d86bcebc07009ce86bba04f1dcaaa481cf087fed6641468cd52076",
   "keepawake.py": "f52be4fcdbb1543de1301e496c1d07a5ad64567441e5031090309076cd9cc49b",
   "layout.py": "0b7302c2cf025edf54ca70b2e667a7bb57a9bbc49b0f40d17d9b14d0497a263f",
-  "loss.py": "ea4ffe5cd18eb2525670650a8207cd80684d8ad0a6a5cc41ab90f18da53bf028",
+  "loss.py": "3a8b411c2fe6ca1841c19c2c52e36074a4af58d7ab77ecb9491bf096681cbded",
   "midcrest.py": "22249c4ed8e41d986526f4977c60892459b3646d638173a505127a5b1a43fd14",
   "netproxy.py": "ba09fe4098331bb7c2bda889793ff9d7d82f5fad274b1cfbaa53d16eb6435128",
   "offline_pack.py": "1ad90715dce3c44e0c1e770e5be6a1846d9488ea54577cb9be70224e8fa659fe",
@@ -20,8 +21,8 @@
   "packdiff.py": "979eac6f7a4523768e85d587754bf65c608f9a67c90244da610253195979ef13",
   "priority.py": "bd7f1e7b86c1ecd93193f777a1fc4ab4508b1b918ff31546bb0479d2f8b0ccab",
   "record.py": "ad55837f431051825ba65dad6e9445b9d78d26623fb80d6abfdc373a9af1c4ce",
-  "servers.py": "804991d33bd6b84cbe4cf683e1e6f668ab6f02442c74573c197a1d1c1d2c9b36",
-  "services.py": "240f539d2c9ea41e83971048d781a0efe3ec37cfe99c3597d3bb82e75196a04b",
+  "servers.py": "96afd4d0c10c56da4c01a8a2fb18f0dd660da5db06b281330dc272e31d353c3e",
+  "services.py": "ffe05d45f0ca490801f94832c8d782b4b56e0ef35929c3b3b431c0da817d1fff",
   "settings.py": "87bb840224ffb56db7127ad2956b272b70d52f8ff2c71e3e39480003f4d5d8d1",
   "solvegate.py": "ce938b1c7930dc027ee60fecdc5a0aceb83c6b6e425fc8cd92fa80e3e029f1da",
   "structure_flags.py": "25864cea36e53112222f01e0a8e5eae32101598a586845b68ddf57bb9e5697f6",
@@ -36,7 +37,7 @@
   "transformguard.py": "33f4cdb38bd1bb3f678c266b5221b1cbf721c81a29d6e2e18866c49270829ff1",
   "units.py": "2cd0b0208220ee8ae470c7c10adc8968cfd2bda7c05b9a836ab05130afc501d1",
   "vdatum.py": "1d3f7ec9c943abe94e90e125e48324a1e019a547957530024723db640cb45e9e",
-  "versions.py": "69b68a7f1878d3acfd014ee2b3061a8621fec7b22de16bff2895a178908db415",
+  "versions.py": "c793369d714589d82ba025df085ceeded2b74f4b3fe9201d4f0a1fcea76ec29b",
   "vertcon_nd.py": "337cc8512d2ddc31e2edd6986b15f7535ebb53ca791b5e08faf15c716af2c3a8",
   "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
  },
@@ -45,7 +46,7 @@
   "suite_home.py",
   "versions.py"
  ],
- "pin": "damsuite-pin-v1",
- "pin_sha256": "d65e005f2a7d2eaa2977dc30be9ae262ec399bc36751a9f302d1f9f48ed3a4be",
+ "pin": "damsuite-pin-v3",
+ "pin_sha256": "b8a27e947a6bfd73b090e09ff3dc35da152e1e12f257130ccb5b14c33585a915",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }

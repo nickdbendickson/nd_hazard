@@ -55,7 +55,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.27.9"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.27.10"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
