@@ -143,6 +143,14 @@ class SuiteHomeDialog(QDialog):
         self.tabs.addTab(self._build_start(), "Start")
         self.tabs.addTab(self._build_dams(), "Dams")
         self.tabs.addTab(self._build_guide(), "Getting started")
+        # 2.35.10 (second GUI check 2026-11-04): each page scrolls. The window may shrink to the
+        # screen (fit_window), and at 640 x 480 the Start tab's step rows were squeezed to about
+        # 20 of their 25 px; in a scroll area every row keeps its height and the page scrolls
+        try:
+            from .ui_fit import wrap_tabs
+            wrap_tabs(self.tabs)
+        except Exception:                                        # noqa: the tests' stand-in Qt
+            pass
         lay.addWidget(self.tabs, 1)
         self.setLayout(lay)
 
