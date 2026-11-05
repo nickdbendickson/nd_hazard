@@ -55,7 +55,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.27.9"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.27.10"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -127,6 +127,22 @@ def grid_spread_flagged(cell_m, flooded_acres, median_depth_ft):
     return (cell_m > GRID_SPREAD_WARN_CELL_M
             and flooded_acres >= GRID_SPREAD_WARN_MIN_AC
             and median_depth_ft <= GRID_SPREAD_WARN_MEDIAN_FT)
+
+
+def _footprint_bounds(grid, mask, pad_m):
+    """World (xmin, ymin, xmax, ymax) of the True cells of `mask` (a bool array on `grid`),
+    grown by pad_m and clipped to the grid. Used to read a finer ANUGA terrain over the
+    flooded footprint only, so a whole-domain fine DEM is never held in memory."""
+    rows = np.where(mask.any(axis=1))[0]
+    cols = np.where(mask.any(axis=0))[0]
+    if not rows.size or not cols.size:
+        return grid.bounds
+    xmin = grid.x0 + cols[0] * grid.dx - pad_m
+    xmax = grid.x0 + (cols[-1] + 1) * grid.dx + pad_m
+    ymax = grid.y0 - rows[0] * grid.dx + pad_m
+    ymin = grid.y0 - (rows[-1] + 1) * grid.dx - pad_m
+    gx0, gy0, gx1, gy1 = grid.bounds
+    return (max(xmin, gx0), max(ymin, gy0), min(xmax, gx1), min(ymax, gy1))
 # 3.26.5: an edge carrying at least this share of the leaving water (terrain.edge_flux_shares)
 # moves out once outflow_extend_pct of the breach volume has left, even under the edge tolerance
 OUTFLOW_EDGE_SHARE = 0.10
@@ -191,6 +207,13 @@ class RunSettings:
         self.anuga_near_field_mi = 1.0
         self.anuga_buffer_m = 500.0
         self.anuga_algorithm = "DE0"
+        # 3.27.10: optional finer terrain for the ANUGA mesh. 0 = read the terrain at the model
+        # cell size (cell_size_m), as before. A smaller value makes ANUGA sample its mesh
+        # elevations from the DEM at that resolution (e.g. a 1 m VRT) so embankment crests
+        # survive under the mesh edges, while the model grid, the output rasters and LISFLOOD
+        # stay at cell_size_m. The fine terrain is read only over the flooded footprint, so a
+        # whole-domain 1 m array is never held in memory.
+        self.anuga_cell_m = 0.0
         self.keep_model_files = True
         # scenario
         self.scenario = SCENARIO_SUNNY
@@ -1447,6 +1470,20 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         dem_a = dem_for("anuga", bounds, cs)
         flooded = np.isfinite(lf_env.depth.data) & (lf_env.depth.data > 0.05)
         man_a = manning_for(dem_a.bounds, cs)
+        # 3.27.10: optional finer ANUGA terrain (anuga_cell_m). Read the DEM at the finer cell
+        # over the flooded footprint only (plus the mesh buffer), so embankment crests survive
+        # under the mesh while the grid/output/LISFLOOD stay at cs and no whole-domain fine
+        # array is held. anmod.run samples elevation from this grid and keeps dem_a as the
+        # output grid.
+        elev_dem = None
+        acell = float(getattr(st, "anuga_cell_m", 0.0) or 0.0)
+        if 0.0 < acell < cs and flooded.any():
+            fb = _footprint_bounds(dem_a, flooded, st.anuga_buffer_m + 3.0 * cs)
+            elev_dem = dem_for("anuga", fb, acell)
+            report["anuga_terrain_cell_m"] = acell
+            log("ANUGA terrain: reading the DEM at {:g} m over the flooded footprint "
+                "({:d} x {:d} cells) while the grid stays at {:g} m".format(
+                    acell, elev_dem.nx, elev_dem.ny, cs))
         ast = anmod.AnugaSettings(st.anuga_python, st.threads, st.manning_n, man_a,
                                   arrival_m, sim_time, 300.0, st.anuga_near_field_mi * MILE,
                                   st.anuga_fine_area_m2, st.anuga_coarse_area_m2,
@@ -1462,7 +1499,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             an_env, outer, fine = anmod.run(
                 os.path.join(model_dir, "anuga"), dem_a, flooded, inflow_xy, direction, width_m,
                 hy_a, ast, aprog, cancel, log, structures=st.structures, initial_depth=init_grid,
-                refine_lines=st.refine_lines, reuse=reuse and k == 0)
+                refine_lines=st.refine_lines, reuse=reuse and k == 0, mesh_elev_dem=elev_dem)
             a_runs.append({"buffer_m": ast.buffer_m, "stats": an_env.stats})
             warnings += [n for n in an_env.notes if n not in warnings]
             edge_ft = an_env.stats.get("max_edge_depth_ft", 0.0)
@@ -1495,7 +1532,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 os.path.join(model_dir, "anuga_base"), dem_a, fl_b, inflow_xy, direction,
                 width_m, hy_nb_a, ast, _span(progress, 82, 92), cancel, log,
                 structures=st.structures, initial_depth=init_grid, refine_lines=st.refine_lines,
-                reuse=reuse)
+                reuse=reuse, mesh_elev_dem=elev_dem)
             lf_base_arrays = write_qa("_base", an_base_env, "anuga", init_grid)
 
     # --- v3.4.0: what the DEM conditioning did (report + manifest) -------------------------

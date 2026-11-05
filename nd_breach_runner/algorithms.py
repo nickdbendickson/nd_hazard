@@ -634,6 +634,10 @@ class _Base(QgsProcessingAlgorithm):
                   minimum=0.0, advanced=True)
         self._num("ANUGA_BUFFER", "ANUGA: mesh margin around the LISFLOOD-FP extent (m; 500 m "
                   "= 1,640 ft)", 500.0, minimum=0.0, advanced=True)
+        self._num("ANUGA_CELL", "ANUGA: terrain cell size (m; 0 = the model cell size). A smaller "
+                  "value reads the DEM at that resolution for the ANUGA mesh (e.g. 1 m), so "
+                  "embankment crests survive; the grid and outputs stay at the model cell size",
+                  0.0, minimum=0.0, advanced=True)
         self._num("THREADS", "Threads (0 = the provider setting / all)", 0, minimum=0,
                   integer=True, advanced=True)
         self._file("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting, an installed LISFLOOD-FP, the "
@@ -722,7 +726,7 @@ class _Base(QgsProcessingAlgorithm):
             sim_max_hr=sim_max if sim_max > 0 else None, lisflood_exe=exe, anuga_python=py,
             threads=threads, anuga_fine_area_m2=g("ANUGA_FINE"),
             anuga_coarse_area_m2=g("ANUGA_COARSE"), anuga_near_field_mi=g("ANUGA_NEAR_MI"),
-            anuga_buffer_m=g("ANUGA_BUFFER"), scenario=scen,
+            anuga_buffer_m=g("ANUGA_BUFFER"), anuga_cell_m=g("ANUGA_CELL"), scenario=scen,
             keep_model_files=self.parameterAsBool(parameters, "KEEP_FILES", context),
             products=self.parameterAsBool(parameters, "PRODUCTS", context),
             arrival_contours_hr=_floats(self._str(parameters, "CONTOURS_HR", context),

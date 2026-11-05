@@ -634,8 +634,8 @@ _OK = ("done", "no breach")
 _KEY_SKIP = ("resume", "threads", "lisflood_exe", "anuga_python", "products", "keep_model_files",
              "write_final", "keep_arrays", "gauges", "gauge_massint_s", "fixed_plan", "receptors",
              "tier", "baseline", "arrival_contours_hr", "refine_lines", "anuga_fine_area_m2",
-             "anuga_coarse_area_m2", "anuga_near_field_mi", "anuga_buffer_m", "anuga_algorithm",
-             "impact_look_ahead_mi", "incr_thresholds_ft")
+             "anuga_coarse_area_m2", "anuga_near_field_mi", "anuga_buffer_m", "anuga_cell_m",
+             "anuga_algorithm", "impact_look_ahead_mi", "incr_thresholds_ft")
 
 
 def raster_names(thresholds_ft):
