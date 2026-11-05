@@ -989,6 +989,7 @@ def run_probabilistic(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_x
 
     # --- the base run: its plan (domain, inflow point, duration) is every run's -----------
     base_st = copy.copy(st)
+    base_st.grid_refine = False          # 3.28.0: every run of this tool keeps its own cell
     base_st.keep_arrays = False
     if st.tier != workflow.TIER_LISFLOOD:
         out.warnings.append("The probabilistic runs use LISFLOOD-FP only; the base run was "

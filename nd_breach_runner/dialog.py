@@ -274,9 +274,22 @@ class NDBreachRunnerDialog(QDialog):
         self.force_anuga.setToolTip("Run ANUGA after LISFLOOD-FP finds the extent, and take the "
                                     "final depth, velocity and arrival from ANUGA, even if Models "
                                     "is set to LISFLOOD-FP only.")
+        # 3.28.0: crest burn and the automatic finer grid (both on by default)
+        self.crest_burn = QCheckBox("Crest burn: keep road and rail embankments (1 m ground)")
+        self.crest_burn.setToolTip("Raise each model cell a road or railway crosses to the "
+                                   "highest 1 m ground inside it, so the embankment the cell "
+                                   "average flattens still holds water back on flat ground. "
+                                   "The 1 m ground is the statewide VRT set in Processing "
+                                   "options, the run's DEM when 2 m or finer, the suite data "
+                                   "folder's DEM, or USGS 3DEP 1 m downloaded once.")
+        self.grid_refine = QCheckBox("Finer grid automatically when the flood over-spreads")
+        self.grid_refine.setToolTip("When a run coarser than 10 m floods a wide, shallow area, "
+                                    "run it again on the same domain at 10 m and keep that as "
+                                    "the record, with a 5 m check run beside it.")
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
-        self.force_anuga.toggled.connect(self._changed)
+        for cb in (self.force_anuga, self.crest_burn, self.grid_refine):
+            cb.toggled.connect(self._changed)
         # 3.20.0: the four run settings are on the Advanced tab, not on the header; the header
         # keeps only what tells the window WHICH dam it is working on
         lay.addLayout(grid)
@@ -765,6 +778,8 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(QLabel("Longest simulated time (h):"), 3, 0)
         grid.addWidget(self.simmax, 3, 1)
         grid.addWidget(self.force_anuga, 4, 1)
+        grid.addWidget(self.crest_burn, 5, 1)
+        grid.addWidget(self.grid_refine, 6, 1)
         lay.addLayout(grid)
         self.handoff_label = QLabel("")
         self.handoff_label.setWordWrap(True)
@@ -1015,7 +1030,9 @@ class NDBreachRunnerDialog(QDialog):
                 "dem": self.dem_combo.currentData() or "",
                 "settings_file": self.settings_file_edit.text().strip(),
                 "grid_m": float(self.grid_m.value()), "simh": float(self.simh.value()),
-                "simmax": float(self.simmax.value()), "force_anuga": bool(self.force_anuga.isChecked())}
+                "simmax": float(self.simmax.value()), "force_anuga": bool(self.force_anuga.isChecked()),
+                "crest_burn": bool(self.crest_burn.isChecked()),
+                "grid_refine": bool(self.grid_refine.isChecked())}
 
     def _apply(self, s):
         # 3.9.0: no Dams folder of its own: the suite's (Suite data and servers)
@@ -1034,6 +1051,8 @@ class NDBreachRunnerDialog(QDialog):
         self.simh.setValue(float(s.get("simh", pl.DEFAULT_SETTINGS["simh"])))
         self.simmax.setValue(float(s.get("simmax", pl.DEFAULT_SETTINGS["simmax"])))
         self.force_anuga.setChecked(bool(s.get("force_anuga", False)))
+        self.crest_burn.setChecked(bool(s.get("crest_burn", True)))
+        self.grid_refine.setChecked(bool(s.get("grid_refine", True)))
 
     def _save_state(self):
         if self._loading:

@@ -188,6 +188,7 @@ def run_nested(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     reach_m = reach_mi * MILE
 
     base = copy.copy(st)
+    base.grid_refine = False          # 3.28.0: every run of this tool keeps its own cell
     base.tier = workflow.TIER_LISFLOOD
     base.keep_arrays = True
     base.animation = False
