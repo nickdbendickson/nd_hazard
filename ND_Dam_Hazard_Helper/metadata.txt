@@ -5,10 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.35.10
+version=2.35.11
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.35.10 (2026-11-04; Dam suite home's pages scroll (ui_fit.wrap_tabs): at 640 x 480 the window shrank to the screen and the Start tab's 'The four steps' rows were squeezed to about 20 of their 25 px (second GUI check of 2026-11-04). Test: tests/test_suite_home_rows.py)
+changelog=2.35.11 (2026-11-05; REG_05.2026 Fig 5.1/5.2 DV chart palette: High #EF9897 (filled), Judgment #F9F4A3, Low #C4E0AD; zone label text #951b21/#b26222/#17632b; gold title banner removed. Test: tests/test_zone_colors_reg05.py.)
+    2.35.10 (2026-11-04; Dam suite home's pages scroll (ui_fit.wrap_tabs): at 640 x 480 the window shrank to the screen and the Start tab's 'The four steps' rows were squeezed to about 20 of their 25 px (second GUI check of 2026-11-04). Test: tests/test_suite_home_rows.py)
     2.35.9 (2026-11-04; GUI check of 2026-11-04, Nick approved: Dam suite home has no fixed 1000 px minimum - it opens at 1000 x 640 where the screen has room and shrinks to an 800 x 600 screen, the four plugin buttons two to a row; Runner culverts (ndhazard:runnerculverts) 'Write the NDDOT end elevations as the inverts' has a short label with the detail in the help, so the Processing panel fits 800 px (was 893 px). Lint: tools/gui_lint.py limits every window to 800 px wide.)
     2.35.8 (2026-11-03; GUI fit, QGIS Dev's 800x600 review: the window's minimum is 760x520 (was 900x700); long tick boxes on Data & Output keep their head and put the full sentence in the tooltip and long drop-down lists size to 24 characters, so the intro wraps to the window; Suite data and servers scrolls inside the window (fits a 768 px screen and 800x600). No behaviour change.)
     2.35.7 (2026-11-03; audit fix E, lint only: unused QScrollArea import removed from the window. No behaviour change.)
