@@ -1,4 +1,4 @@
-"""2.35.12 (suite pin v3): the suite's map services become QGIS Browser connections when a plugin
+"""2.35.13 (suite pin v3): the suite's map services become QGIS Browser connections when a plugin
 starts (damsuite/connections.py), each added once, named 'ND Dam Suite: ...'.
 Run: python3 -m ND_Dam_Hazard_Helper.tests.run_tests (from the folder above the plugin)."""
 import os

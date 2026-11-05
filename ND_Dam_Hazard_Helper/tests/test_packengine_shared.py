@@ -1,4 +1,4 @@
-"""2.35.13 (suite 1.18.6, pin v4): ONE offline pack builder for both suites. The Helper's
+"""2.35.14 (suite 1.18.6, pin v4): ONE offline pack builder for both suites. The Helper's
 build_nd_pack.py / packfiles.py and the Updater's ndpack/ copies are shims over the shared
 damsuite/packengine.py / packfiles.py, bound to the ND constants (PACK_LAYERS = "nd").
 Run: python3 -m ND_Dam_Hazard_Helper.tests.run_tests (from the folder above the plugin)."""

@@ -40,7 +40,7 @@ LABELS = {"ndhazard": "ND Dam Hazard Classification Helper",
           "ndupdater": "ND Data Updater"}
 # suite 1.18.5: the name that starts each Browser connection connections.py adds
 CONNECTION_PREFIX = "ND Dam Suite"
-RELEASE = {"ndhazard": "2.35.13", "ndbreach": "3.27.11", "ndscreen": "0.33.10",
+RELEASE = {"ndhazard": "2.35.14", "ndbreach": "3.27.11", "ndscreen": "0.33.10",
            "ndupdater": "1.7.5"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
