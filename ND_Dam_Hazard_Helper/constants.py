@@ -451,6 +451,14 @@ SARP_DAMS_URL = ("https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/servi
                  "Aquatic_Barrier_Prioritization_Dams_v360/FeatureServer/0")
 SARP_CROSSINGS_URL = ("https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/services/"
                       "Aquatic_Barrier_Prioritization_RoadBarriers_v360/FeatureServer/0")
+# 2.35.11: the unsurveyed (modelled) road-stream crossings are not in the SARP services: they come
+# from the inventory's national road-crossings download (CSV in a zip, ~600 MB; the ND rows with
+# Surveyed = 'not likely' are kept). The USGS Database of Stream Crossings in the United States
+# (Wieferich 2022, doi:10.5066/P9YX6KTB; TIGER 2020 roads x NHD HR flowlines) is the base layer
+# the SARP crossings are built on.
+SARP_ROAD_CROSSINGS_ZIP = "https://tool.aquaticbarriers.org/downloads/national/road_crossings.zip"
+USGS_STREAM_CROSSINGS_URL = ("https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/"
+                             "stream_crossings/FeatureServer/0")
 TRAVEL_STATION_MI = 0.5       # travel-time table: a station every ... miles
 TRAVEL_SEARCH_FT = 150.0      # station value: deepest / earliest cell within this
 TRAVEL_MAX_MI = 200.0         # traced channel is cut here
@@ -484,7 +492,8 @@ SOURCE_KEYS = ("NSI_API_URL", "NARN_URL", "CROSSINGS_URL", "USA_STRUCTURES_URL",
                "ND_ADDRESS_POINTS_URL", "NID_URL", "NID_MIRROR_URL", "OVERPASS_URL",
                "ND_ROADS_URL", "HPMS_ND_URLS", "ND_COUNTY_ROADS_URL", "NBI_URL",
                "NDDOT_AADT_URL", "NHD_FLOWLINE_URL", "NHD_WATERBODY_URL",
-               "SARP_DAMS_URL", "SARP_CROSSINGS_URL", "DWR_DAMS_URL",
+               "SARP_DAMS_URL", "SARP_CROSSINGS_URL", "SARP_ROAD_CROSSINGS_ZIP",
+               "USGS_STREAM_CROSSINGS_URL", "DWR_DAMS_URL",
                "AERIAL_IMAGERY_URL", "WEBMAP_URL_TEMPLATE")
 SOURCES_FILE_NAME = "ND_Dam_Hazard_Helper_data_sources.json"
 SOURCE_OVERRIDES = {}          # what the file changed (shown in the run log)
