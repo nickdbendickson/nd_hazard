@@ -172,3 +172,26 @@ def from_terrain_stub_on_bad_src():
     info3 = gd.from_terrain(FlatSrc(), (500000.0, 5200000.0))
     assert info3["kind"] == gd.KIND_FLAT_SECTION_PLAIN
     assert info3["default_cell_m"] == 10.0
+
+
+# Golden: measured on the r4 Absaraka (DWR-2801) composite DEM, 30 m average
+# read, by half-window (Docs & QA review 2026-11-05). Numbers only; no DEM data.
+ABSARAKA_RELIEF_BY_HALF = {2000: (21.22, 0.00940), 3000: (26.42, 0.00812),
+                           4000: (32.25, 0.00724), 5000: (41.75, 0.00709),
+                           6000: (49.69, 0.00750)}
+
+
+@test
+def absaraka_golden_flags_flat_at_shipped_window():
+    assert gd.SAMPLE_HALF_M in ABSARAKA_RELIEF_BY_HALF
+    relief, slope = ABSARAKA_RELIEF_BY_HALF[int(gd.SAMPLE_HALF_M)]
+    st = {"n": 1000, "relief_m": relief, "mean_slope": slope}
+    kind = gd.classify_terrain(st)
+    assert kind == gd.KIND_FLAT_SECTION_PLAIN, (gd.SAMPLE_HALF_M, relief, kind)
+    assert gd.coarse_cell_warning(30.0, kind)
+    assert gd.coarse_cell_warning(20.0, kind)
+    assert not gd.coarse_cell_warning(10.0, kind)
+    # relief cap stays strict: the 8 km window (32.25 m) would still be "other"
+    assert gd.FLAT_PLAIN_RELIEF_M <= 25.0
+    r8, s8 = ABSARAKA_RELIEF_BY_HALF[4000]
+    assert gd.classify_terrain({"n": 1000, "relief_m": r8, "mean_slope": s8}) == gd.KIND_OTHER

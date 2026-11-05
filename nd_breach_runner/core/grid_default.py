@@ -37,7 +37,12 @@ OTHER_DEFAULT_CELL_M = 10.0       # unchanged starting value for other terrain
 COARSE_ON_FLAT_M = 10.0           # warn when cell is coarser than this on a flat plain
 
 # Sample window used when classifying from a terrain_src (metres from the dam).
-SAMPLE_HALF_M = 4000.0
+# ~4 km across. Relief (p95-p5) grows with the window on prairie because of
+# regional tilt and creek valleys: on the r4 Absaraka (DWR-2801) DEM at 30 m it
+# is 21.2 / 26.4 / 32.3 / 41.8 / 49.7 m at half = 2 / 3 / 4 / 5 / 6 km. A 2 km
+# half-window keeps the strict 25 m relief cap (Absaraka 21.2 m, slope 0.0094)
+# instead of loosening relief to ~40 m, which would admit more rolling terrain.
+SAMPLE_HALF_M = 2000.0
 SAMPLE_CELL_M = 30.0              # coarse read; classification needs extent, not detail
 
 KIND_FLAT_SECTION_PLAIN = "flat_section_plain"

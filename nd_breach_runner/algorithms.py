@@ -562,7 +562,7 @@ class _Base(QgsProcessingAlgorithm):
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
                    "Models is set to LISFLOOD-FP only", False)
-        self._num("CELL", "Model cell size (m; 10 m = 32.8 ft default; on flat plains keep >=10 m, or 5 m finer/slower)",
+        self._num("CELL", "Model cell size (m; 10 m = 32.8 ft default; on flat plains use 10 m (or 5 m finer/slower); avoid coarser than 10 m)",
                   10.0, minimum=0.5)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
                   maximum=1.0)

@@ -259,7 +259,7 @@ class NDBreachRunnerDialog(QDialog):
         self.grid_m.setRange(0.5, 500.0)
         self.grid_m.setDecimals(1)
         self.grid_m.setSingleStep(1.0)
-        self.grid_m.setToolTip("The flood grid. 10 m is the starting value. On flat section-road plains keep at least 10 m (DWR-2801 vs DSS-WISE CSI at >=0.5 ft: 0.36 at 20 m, 0.43 at 10 m, 0.57 at 5 m); use 5 m (finer, slower) when you can afford the run time. Coarser is faster; finer than the DEM does not add terrain that was never surveyed.")
+        self.grid_m.setToolTip("The flood grid. 10 m is the starting value. On flat plains use 10 m, or 5 m (finer, slower) when you can afford the run time; avoid coarser than 10 m (DWR-2801 vs DSS-WISE CSI at >=0.5 ft: 0.36 at 20 m, 0.43 at 10 m, 0.57 at 5 m). Coarser is faster; finer than the DEM does not add terrain that was never surveyed.")
         self.simh = QDoubleSpinBox()
         self.simh.setRange(0.0, 240.0)
         self.simh.setDecimals(1)
