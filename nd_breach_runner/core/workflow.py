@@ -54,7 +54,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.27.7"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.27.8"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -108,6 +108,24 @@ CUT_OFF_RUNS = "domain-run limit"
 CUT_OFF_EXTENT = "largest domain side"
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
 OUTFLOW_WARN_PCT = 5.0     # warn when at least this share of the breach volume leaves the model
+# 3.27.7: a coarse model cell over a wide, shallow flood over-spreads on flat terrain, because
+# averaging fine terrain onto a big cell lowers road embankments and fills ditches, so water
+# that finer grids keep in the channels and road ditches sheets across the floodplain instead.
+# It does not change this run; it advises a finer grid or the sensitivity tool's cell-size
+# convergence check. (Calibrated on DWR-2801: 20 m floods ~1.7x the area of an 8 ft reference,
+# shrinking to ~1.2x at 5 m, with the median depth rising as the cell gets finer.)
+GRID_SPREAD_WARN_CELL_M = 10.0     # only when the model cell is coarser than this
+GRID_SPREAD_WARN_MIN_AC = 1000.0   # skip small floods (a finer grid changes little there)
+GRID_SPREAD_WARN_MEDIAN_FT = 1.0   # the wide-shallow signature: median wet depth at or below this
+
+
+def grid_spread_flagged(cell_m, flooded_acres, median_depth_ft):
+    """True when the run shows the coarse-grid over-spread signature (see GRID_SPREAD_WARN_*):
+    the model cell is coarser than 10 m AND the flood is wide (>= 1,000 ac) AND shallow in the
+    median (<= 1.0 ft). Pure predicate so it can be unit-tested without a LISFLOOD run."""
+    return (cell_m > GRID_SPREAD_WARN_CELL_M
+            and flooded_acres >= GRID_SPREAD_WARN_MIN_AC
+            and median_depth_ft <= GRID_SPREAD_WARN_MEDIAN_FT)
 # 3.26.5: an edge carrying at least this share of the leaving water (terrain.edge_flux_shares)
 # moves out once outflow_extend_pct of the breach volume has left, even under the edge tolerance
 OUTFLOW_EDGE_SHARE = 0.10
@@ -1599,6 +1617,26 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         "scenario": st.scenario, "breach_occurs": True,
         "units": "depth ft, velocity ft/s, arrival hours after breach initiation, WSE ft",
     }
+    # 3.27.7: a coarse cell over a wide, shallow flood on flat terrain can over-spread the
+    # extent (see GRID_SPREAD_WARN_*). An advisory only - it changes nothing in this run.
+    wet = np.isfinite(d) & (d >= arrival_m)
+    if wet.any() and plan is None:
+        area_ac = float(wet.sum()) * cell_ac
+        median_depth_ft = float(np.median(d[wet])) / FT
+        flagged = grid_spread_flagged(cs, area_ac, median_depth_ft)
+        report["grid_spread_check"] = {
+            "cell_m": round(cs, 2), "flooded_acres": round(area_ac, 1),
+            "median_depth_ft": round(median_depth_ft, 2),
+            "flagged": flagged}
+        if flagged:
+            warnings.append(
+                "Coarse grid on a wide, shallow flood: the model cell is {:.0f} m and the "
+                "flood is {:,.0f} ac with a median depth of only {:.1f} ft. On flat, "
+                "multi-channel terrain a cell this coarse averages road embankments and "
+                "ditches away, so the water sheets across the floodplain and the extent can "
+                "be over-predicted. Re-run at 10 m or finer, or use the sensitivity tool's "
+                "cell-size convergence check, before relying on the extent.".format(
+                    cs, area_ac, median_depth_ft))
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
     if "incremental" in report:
