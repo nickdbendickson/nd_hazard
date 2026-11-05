@@ -192,7 +192,13 @@ def v3180_largest_domain_side_and_duration_cap_are_cut_offs():
                            SyntheticTerrain(), _recording_writer(writes), os.path.join(d, "T5"))
         rep = _json(r.report_json)
         assert "cut_off" not in rep and "products_pass" not in rep
-        assert len(rep["lisflood_runs"]) == 1 and len(rep["warnings"]) == 0, rep["warnings"]
+        # 3.27.9: flat synthetic valley + 50 m cell raises the terrain-grid coarse-cell
+        # advisory; a clean finish still means no cut-off / solver warnings.
+        other = [w for w in rep["warnings"]
+                 if "Flat section-road plain" not in w]
+        assert len(rep["lisflood_runs"]) == 1 and other == [], rep["warnings"]
+        assert rep.get("terrain_grid", {}).get("kind") == "flat_section_plain"
+        assert any("Flat section-road plain" in w for w in rep["warnings"])
         assert not os.path.exists(os.path.join(d, "T5", "Depth (Max).tif"))
         assert not any(n == "Depth (Max).tif" for n, _s in writes), writes
         assert "## Results cut off" not in open(r.report_md, encoding="utf-8").read()
