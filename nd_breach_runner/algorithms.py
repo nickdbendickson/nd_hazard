@@ -566,20 +566,22 @@ class _Base(QgsProcessingAlgorithm):
         self._num("CELL", "Model cell size (m; 10 m = 32.8 ft default; on flat plains use 10 m, or 5 m finer/slower; avoid coarser than 10 m)",
                   10.0, minimum=0.5)
         # 3.28.0: crest-burn terrain prep and the automatic finer grid (both on by default)
-        self._bool("CREST_BURN", "Crest burn: raise each model cell a road or railway crosses "
-                   "to the highest 1 m ground inside it, so embankments the cell average "
-                   "flattens still hold water back (needs the Roads / Railways layers; bridges "
-                   "and the main channel are left open; on by default)", True, advanced=True)
-        self._file("CREST_BURN_DEM", "Crest burn: 1 m DEM or VRT (empty = the provider "
-                   "setting, else the run's DEM when 2 m or finer, else the suite data "
-                   "folder's DEM, else USGS 3DEP 1 m downloaded into the terrain cache)",
-                   advanced=True)
-        self._bool("GRID_REFINE", "Finer grid automatically: when a run coarser than 10 m "
-                   "floods a wide, shallow area (the over-spread signature), run it again on "
-                   "the same domain at 10 m and keep that as the record (on by default)", True,
-                   advanced=True)
-        self._num("GRID_CHECK_CELL", "Finer grid automatically: also run this cell size on "
-                  "the same domain as a convergence check (m; 0 = no check; 5 m = 16.4 ft)",
+        self._bool("CREST_BURN", "Crest burn: keep road and rail embankments (on by default)",
+                   True, advanced=True, help=(
+                       "Raise each model cell a road or railway crosses (the Roads / Railways "
+                       "layers) to the highest 1 m ground inside it, so embankments the cell "
+                       "average flattens still hold water back. Never lowers a cell; the traced "
+                       "main channel, bridges and raises over 5 m are left alone."))
+        self._file("CREST_BURN_DEM", "Crest burn: 1 m DEM or VRT (optional)", advanced=True)
+        set_help(self.parameterDefinition("CREST_BURN_DEM"), (
+                "Empty = the provider setting, else the run's DEM when 2 m or finer, else the "
+                "suite data folder's DEM, else USGS 3DEP 1 m downloaded into the terrain cache."))
+        self._bool("GRID_REFINE", "Finer grid automatically on over-spread (on by default)",
+                   True, advanced=True, help=(
+                       "When a run coarser than 10 m floods a wide, shallow area (at least "
+                       "1,000 ac, median depth 1 ft or less), run it again on the same domain "
+                       "at 10 m and keep that as the record."))
+        self._num("GRID_CHECK_CELL", "Finer grid: check run cell (m; 0 = no check)",
                   workflow.GRID_CHECK_CELL_M, minimum=0.0, advanced=True)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
                   maximum=1.0)
