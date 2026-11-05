@@ -31,11 +31,17 @@ def check(fn):
 
 
 class Env(object):
-    """A temporary data folder and suite config (no QGIS settings involved)."""
+    """A temporary data folder and suite config (no QGIS settings involved).
+
+    Under real QGIS suitedata reads and writes QgsSettings, which is the user's real profile:
+    a set_data_folder() here would leave ndsuite/data_folder behind for the next run and for
+    the user's QGIS. So QgsSettings is switched off inside Env (the config file is used)."""
 
     def __enter__(self):
         self.tmp = tempfile.mkdtemp(prefix="suitedata_")
-        self.old = (os.environ.get(SD.ENV_DATA), os.environ.get(SD.ENV_DAMS), SD.CONFIG)
+        self.old = (os.environ.get(SD.ENV_DATA), os.environ.get(SD.ENV_DAMS), SD.CONFIG,
+                    SD._qsettings)
+        SD._qsettings = lambda: None
         SD.CONFIG = os.path.join(self.tmp, "cfg", "config.json")
         self.data = os.path.join(self.tmp, "data")
         os.environ[SD.ENV_DATA] = self.data
@@ -49,6 +55,7 @@ class Env(object):
             else:
                 os.environ[k] = v
         SD.CONFIG = self.old[2]
+        SD._qsettings = self.old[3]
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
