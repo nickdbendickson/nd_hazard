@@ -48,13 +48,14 @@ from . import impacts as impmod
 from . import structures as structmod
 from . import gaps as gapsmod
 from . import terrain
+from . import grid_default as griddef
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.27.7"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.27.8"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -642,6 +643,19 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     arrival_m = st.arrival_depth_ft * FT
     tol_m = st.edge_tolerance_ft * FT
     cs = st.cell_size_m
+
+    # 3.27.8: terrain-aware grid default on flat section-road plains (DWR-2801 / Nick).
+    # Classify a coarse DEM window around the dam; record report["terrain_grid"]; warn when
+    # the cell is coarser than 10 m on a flat plain. Does not change the run's cell.
+    try:
+        _tg = griddef.from_terrain(terrain_src, dam_xy)
+        report["terrain_grid"] = griddef.report_entry(_tg, cs)
+        _tg_warn = griddef.coarse_cell_warning(cs, _tg["kind"])
+        if _tg_warn:
+            warnings.append(_tg_warn)
+            log(_tg_warn)
+    except Exception as _tg_err:
+        report["terrain_grid"] = {"kind": griddef.KIND_UNKNOWN, "error": str(_tg_err)}
 
     def cut_off(reason, text):
         """3.18.0: the run ends with the flood still moving. The warning is kept as before and
