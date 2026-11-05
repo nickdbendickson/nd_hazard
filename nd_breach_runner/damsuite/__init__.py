@@ -41,6 +41,10 @@ Modules:
   gpkgpack    the offline pack as a folder with one GeoPackage per layer, manifest.json and
               LAYERS.txt (pack format 2): writer and reader (1.10.0)
   netproxy    the proxy set in QGIS, for the downloads that go through urllib (1.16.2)
+  packengine  the offline data pack builder of both suites (1.18.6, packbuild 1.0): the
+              Helper's build_nd_pack.py and the Updater's ndpack/build_nd_pack.py bind their
+              constants and are this module
+  packfiles   the pack layers that come from files (DWR / HIFLD / 3DHP national file) (1.18.6)
 
 `selfcheck()` compares this package's files with FILES.json and returns a list of problems
 ("missing: x.py", "changed: x.py", "unexpected file: x.py"); [] means the copy is intact.

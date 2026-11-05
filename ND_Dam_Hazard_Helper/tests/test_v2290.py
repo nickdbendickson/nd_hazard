@@ -226,6 +226,10 @@ def builder_transforms_each_batch_before_it_is_stored():
         def __init__(self):
             self._cur = {"n": 0}
 
+        @property
+        def count(self):                 # suite 1.18.6: the engine reads the public count
+            return self._cur["n"]
+
         def chunks(self):
             return {}
 
@@ -273,6 +277,10 @@ def a_heavy_layer_is_read_in_tiles_paged_by_offset():
     class W(object):
         def __init__(self):
             self._cur = {"n": 0}
+
+        @property
+        def count(self):                 # suite 1.18.6: the engine reads the public count
+            return self._cur["n"]
 
         def chunks(self):
             return {}

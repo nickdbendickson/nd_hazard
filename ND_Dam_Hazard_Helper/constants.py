@@ -292,6 +292,9 @@ ARCGIS_MAX_PAGES = 200
 # v2.6: downloads run side by side - services, ArcGIS pages and NSI tiles.
 # At most this many HTTP requests are in flight at once (Overpass: 2).
 DOWNLOAD_WORKERS = 6
+# suite 1.18.6: the layer list of the shared pack builder (damsuite/packengine.py) - "nd" (this
+# suite: 3DHP hydro, SARP barriers, layer files, land cover, a pack folder) or "dwr" (DamSafety)
+PACK_LAYERS = "nd"
 OVERPASS_WORKERS = 2
 DOWNLOAD_FOLDER_NAME = "_downloads"
 # ND GIS Hub "NDGISHUB SiteStructure Address Points" (NENA NG9-1-1 site /

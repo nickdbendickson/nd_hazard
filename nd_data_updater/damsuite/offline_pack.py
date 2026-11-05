@@ -35,6 +35,7 @@ opened (it is read-only by design); build_spatial_index() adds the R*Trees
 to a pack's work file, and the builder does so when it writes the zip.
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -54,6 +55,15 @@ MANIFEST_NAME = "manifest.json"
 # North Dakota (lon / lat, WGS 84) - the pack covers this box plus a margin
 ND_BBOX = (-104.0489, 45.9351, -96.5543, 49.0000)
 DEFAULT_PAD_DEG = 0.1
+
+
+def _log(msg):
+    """OP.3: a line in the QGIS log (nothing outside QGIS)."""
+    try:
+        from qgis.core import QgsMessageLog
+        QgsMessageLog.logMessage(str(msg), "Dam Suite")
+    except Exception:                                   # noqa: BLE001 - outside QGIS
+        pass
 
 
 class PackError(Exception):
@@ -510,6 +520,19 @@ class PackWriter(object):
         self._reset_stage(cur["name"], cur["url"], self._stage_sig(cur["name"]))
         cur.update(n=0, maxw=0.0, maxh=0.0, types=set(), resumed=0)
 
+    @property
+    def count(self):
+        """BP.3: features stored so far for the data set being fetched (0 when
+        none is being fetched) - public, instead of reading _cur["n"]."""
+        return int(self._cur["n"]) if self._cur else 0
+
+    def stage_started(self, name=None):
+        """BP.2: when the (resumed) staging of data set `name` started, as the
+        stored "YYYY-MM-DDTHH:MM:SS" text, or None."""
+        name = name or (self._cur or {}).get("name")
+        row = self.con.execute("SELECT started FROM stages WHERE name=?", (name,)).fetchone()
+        return row[0] if row and row[0] else None
+
     def _stage_sig(self, name):
         row = self.con.execute("SELECT sig FROM stages WHERE name=?", (name,)).fetchone()
         return row[0] if row else ""
@@ -559,10 +582,14 @@ class PackWriter(object):
             g = f.get("geometry") if isinstance(f, dict) else None
             bb = geom_bbox(g) if g else None
             if bb is None:
+                cur["no_geom"] = cur.get("no_geom", 0) + 1     # OP.3: counted, noted
                 continue                  # no geometry: a query could never return it
             uid = uid_of(f)
             if uid is None:
-                uid = json.dumps(g, sort_keys=True)[:400]
+                # OP.4: a hash of the WHOLE geometry (a 400-character prefix made two
+                # long lines with the same first vertices one feature)
+                uid = "g:" + hashlib.sha1(json.dumps(g, sort_keys=True).encode(
+                    "utf-8"), usedforsecurity=False).hexdigest()
             cur["maxw"] = max(cur["maxw"], bb[2] - bb[0])
             cur["maxh"] = max(cur["maxh"], bb[3] - bb[1])
             cur["types"].add(g.get("type"))
@@ -594,6 +621,10 @@ class PackWriter(object):
         """gaps: [(xmin, ymin, xmax, ymax)] areas that could not be read."""
         cur = self._cur
         n = self.con.execute("SELECT COUNT(*) FROM {}".format(cur["table"])).fetchone()[0]
+        if cur.get("no_geom"):                        # OP.3: into the manifest note + log
+            msg = "{} feature(s) without geometry skipped".format(cur["no_geom"])
+            note = "{}; {}".format(note, msg) if note else msg
+            _log("Offline pack {}: {}".format(cur["name"], msg))
         _drop_index(self.con, cur["name"])        # v2.9.0: the old table's R*Tree
         self.con.commit()
         self.con.execute("DROP TABLE IF EXISTS {}".format(cur["final"]))
