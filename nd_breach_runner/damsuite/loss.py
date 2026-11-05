@@ -9,7 +9,7 @@ What this gives you, per structure and for the dam:
     literature uses (under 15 minutes, 15 to 60, over 60).
 
 What this deliberately does NOT do by itself: turn that into a number of deaths. A fatality rate
-table (Graham / RCEM style) is an engineering judgement that belongs to a named engineer, not to
+table (Graham / RCEM style) is an engineering judgment that belongs to a named engineer, not to
 a plugin's source code, and this suite already has the pattern for that - the ACER TM 11 charts
 are a signed-off data file, and nothing uses them until an engineer signs them. So:
 
@@ -26,7 +26,7 @@ Severity bands (depth in feet, velocity in feet per second, DV = depth x velocit
     high    DV >= 160, or depth >= 13 ft     - a house is destroyed or swept
     medium  DV >= 40                         - a house is damaged, people cannot stand
     low     anything wet above the counting depth
-These are the same thresholds the ND rule's judgement zone uses at its upper edge; they are
+These are the same thresholds the ND rule's judgment zone uses at its upper edge; they are
 constants here so a reviewer can see and change them in one place.
 
 Pure Python standard library.

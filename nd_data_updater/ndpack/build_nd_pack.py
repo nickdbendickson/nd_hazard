@@ -20,6 +20,11 @@ dwr/ and hifld/ (or --files; DWR_dams from the DWR service when there is no file
 Map's 3DHP national file (zip / gdb / gpkg) is in the suite data folder's 3dhp/ (or --files) the
 flowlines and waterbodies are cut out of it instead.
 
+2.35.11 (builder 1.4): two more barrier layers - SARP_unsurveyed_crossings (the inventory's
+unsurveyed, modelled road-stream crossings, from its national road-crossings download: the
+services above hold the surveyed ones only) and USGS_stream_crossings (the USGS Database of
+Stream Crossings in the United States, the TIGER x NHD HR base those crossings are built on).
+
 2.24.0: the pack is a folder with one GeoPackage per layer (damsuite.gpkgpack: manifest.json,
 LAYERS.txt with each layer and its source, <theme>/<name>.gpkg). The downloads still go into
 the working file first (<folder>_work/, resume as below); then every data set fetched in this
@@ -94,7 +99,7 @@ else:                                # run as a script: the plugin folder is bes
                                        ND_BBOX, DEFAULT_PAD_DEG, PackError,
                                        STATUS_PARTIAL, write_clean_copy)
 
-BUILDER_VERSION = "1.3"
+BUILDER_VERSION = "1.4"
 NLCD_NAME = "NLCD_2021_landcover"
 TIMEOUT_S = 180
 RETRIES = 5
@@ -873,9 +878,23 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None, transform=None,
     return note
 
 
+def _feat_oid(feat, oid):
+    """The object id of one ArcGIS feature, or None."""
+    if not oid or not isinstance(feat, dict):
+        return None
+    props = feat.get("properties") or feat.get("attributes") or {}
+    if oid in props:
+        return props[oid]
+    low = oid.lower()
+    for k, v in props.items():
+        if str(k).lower() == low:
+            return v
+    return None
+
+
 def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, transform=None):
     transform = transform or (lambda feats: feats)
-    offset, page = 0, 0
+    offset, page, prev_last = 0, 0, None
     size = max(1, min(2000, mrc))
     # v2.8.0: a page is a chunk too (key = offset and size; payload = how many
     # features it returned and whether more follow)
@@ -907,8 +926,16 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, tr
         feats = transform(d.get("features", []) if isinstance(d, dict) else [])
         exceeded = bool(d.get("exceededTransferLimit") or
                         (d.get("properties") or {}).get("exceededTransferLimit"))
-        added = ctx.writer.add(feats, uid, chunk=key,
-                               payload=_pack_json({"n": len(feats), "exceeded": exceeded}))
+        oids = [_feat_oid(f, oid) for f in feats]
+        oids = [v for v in oids if v is not None]
+        payload = {"n": len(feats), "exceeded": exceeded}
+        if oids:
+            payload["first_oid"], payload["last_oid"] = oids[0], oids[-1]
+        if oid and prev_last is not None and oids and oids[0] <= prev_last:
+            ctx.log("  page order changed (first oid {} is not after {}); starting over"
+                    .format(oids[0], prev_last))
+            return "page order changed; run again to rebuild"
+        added = ctx.writer.add(feats, uid, chunk=key, payload=_pack_json(payload))
         page += 1
         ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer._cur["n"]))
         if not feats or (len(feats) < size and not exceeded):
@@ -916,6 +943,8 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, tr
         if added == 0:
             return "the service repeats the same page (no paging) - {:,} kept".format(
                 ctx.writer._cur["n"])
+        if oids:
+            prev_last = oids[-1]
         offset += len(feats)
 
 
@@ -1081,6 +1110,21 @@ def datasets():
                     "prioritization, assessed (field-surveyed) road-stream crossings (the data "
                     "behind tool.aquaticbarriers.org, Great Plains / Intermountain West region)",
           "used_by": "reference (culverts and bridges on streams)"}),
+        ("SARP_unsurveyed_crossings", "Aquatic barrier road-stream crossings, unsurveyed - SARP",
+         "barriers", "sarp_zip",
+         {"url": C.SARP_ROAD_CROSSINGS_ZIP, "fields": SARP_UNSURVEYED_FIELDS,
+          "source": "Southeast Aquatic Resources Partnership (SARP) / NACC National Aquatic "
+                    "Barrier Inventory, unsurveyed (modelled) road-stream crossings: the national "
+                    "road-crossings download, North Dakota rows with Surveyed = 'not likely'",
+          "used_by": "reference (likely culverts and bridges on streams, not field-checked)"}),
+        ("USGS_stream_crossings", "USGS road-stream crossings (Database of Stream Crossings)",
+         "barriers", "arcgis",
+         {"url": C.USGS_STREAM_CROSSINGS_URL, "fields": USGS_CROSSING_FIELDS, "precision": 6,
+          "source": "Wieferich, D.J., 2022, Database of Stream Crossings in the United States: "
+                    "U.S. Geological Survey data release, doi:10.5066/P9YX6KTB (TIGER 2020 roads "
+                    "x NHD High Resolution flowlines; bridge / culvert type from the 2019 NBI)",
+          "used_by": "reference (modelled road-stream crossings; the base of the SARP "
+                     "unsurveyed crossings)"}),
         ("OSM_lifelines", "OpenStreetMap lifeline facilities", "osm", "osm",
          {"query": O.overpass_query, "parse": O.overpass_to_features}),
         ("OSM_crossings", "OpenStreetMap culverts / fords / rail bridges", "osm", "osm",
@@ -1111,6 +1155,170 @@ SARP_CROSSING_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,CrossingCode,Survey
                         "Removed,YearRemoved,YearSurveyed,Condition,Canal,Intermittent,"
                         "StreamOrder,TotDASqKm,OwnerType,BarrierOwnerType,SourceLink,NHDPlusID,"
                         "Snapped,HUC8,HUC12,State,County")
+
+# 2.35.11: the unsurveyed crossings (national road-crossings CSV) and the USGS stream crossings
+SARP_UNSURVEYED_FIELDS = ("lat,lon,Name,SARPID,Source,SourceID,CrossingCode,USGSCrossingID,River,"
+                          "StreamSizeClass,CrossingType,Surveyed,OnNetwork,Removed,YearRemoved,"
+                          "Excluded,Intermittent,Canal,StreamOrder,TotDASqKm,OwnerType,"
+                          "BarrierOwnerType,NHDPlusID,Snapped,HUC8,HUC12,State,County")
+# OBJECTID is kept as the row key: some crossings appear more than once under one
+# stream_crossing_id (one row per TIGER road line or structure type), all of them are kept
+USGS_CROSSING_FIELDS = ("OBJECTID,stream_crossing_id,nhdhr_permanent_identifier,"
+                        "nhdhr_gnis_stream_name,tiger2020_linearids,tiger2020_feature_names,"
+                        "nhdhr_reachcode,nhdhr_fdate,tiger2020_mtfcc_feature_class,"
+                        "crossing_type")
+SARP_ZIP_MEMBER = "aquatic_barrier_ranks.csv"
+SARP_ZIP_STATE = "North Dakota"
+SARP_ZIP_MAX_AGE_S = 7 * 86400               # the download is used again for a week
+SARP_ZIP_BATCH = 2000                        # features written per batch
+
+
+def _download_resume(url, dest, max_age=SARP_ZIP_MAX_AGE_S, refresh=False, beat=None):
+    """Download url to dest (streaming, continued with an HTTP Range request after a broken
+    connection); a file younger than max_age is used as it is. Returns (path, downloaded_now)."""
+    if not refresh and os.path.isfile(dest) and time.time() - os.path.getmtime(dest) < max_age:
+        return dest, False
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    part = dest + ".part"
+    if refresh and os.path.exists(part):
+        os.remove(part)
+    for attempt in range(6):
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        headers = {"User-Agent": _ua()}
+        if have:
+            headers["Range"] = "bytes={}-".format(have)
+        try:
+            with urlopen(Request(url, headers=headers), timeout=TIMEOUT_S) as r:
+                status = getattr(r, "status", 200)
+                mode = "ab" if have and status == 206 else "wb"
+                total = r.headers.get("Content-Length")
+                total = int(total) + (have if mode == "ab" else 0) if total else None
+                got = have if mode == "ab" else 0
+                with open(part, mode) as f:
+                    for block in iter(lambda: r.read(1 << 20), b""):
+                        _check_cancel()
+                        f.write(block)
+                        got += len(block)
+                        if beat:
+                            beat(got, total)
+            if total and got < total:
+                raise BuildError("download cut off at {:,} of {:,} bytes".format(got, total))
+            os.replace(part, dest)
+            return dest, True
+        except BuildCancelled:
+            raise
+        except HTTPError as e:
+            if e.code == 416 and have:              # the part is whole already
+                os.replace(part, dest)
+                return dest, True
+            if attempt == 5:
+                raise
+        except (URLError, TimeoutError, OSError, BuildError):
+            if attempt == 5:
+                raise
+        _sleep_plain(min(60, 5 * 2 ** attempt))
+    raise BuildError("download failed: " + url)
+
+
+def _num(v):
+    """A CSV value as int / float when it is a plain number (no leading zero, so HUC codes and
+    ids stay text), else the text ('' -> None)."""
+    if v is None or v == "":
+        return None
+    s = v.strip()
+    if s[:1] == "-":
+        body = s[1:]
+    else:
+        body = s
+    if body.isdigit() and (body == "0" or body[0] != "0"):
+        try:
+            return int(s)
+        except ValueError:
+            return v
+    if body.count(".") == 1 and body.replace(".", "").isdigit() and body[0] != "." and \
+            (body.split(".")[0] == "0" or body[0] != "0"):
+        try:
+            return float(s)
+        except ValueError:
+            return v
+    return v
+
+
+def sarp_zip_features(lines, bbox, fields, state=SARP_ZIP_STATE):
+    """GeoJSON points from the national road-crossings CSV (an iterator of text lines): the rows
+    of `state` with Surveyed = 'not likely' (unsurveyed; 'yes' / 'likely' are the surveyed small
+    barriers, in SARP_surveyed_crossings) inside bbox, `fields` kept. Yields features."""
+    import csv
+    lines = iter(lines)
+    head = next(csv.reader([next(lines)]))
+    idx = {h: i for i, h in enumerate(head)}
+    for need in ("lat", "lon", "State", "Surveyed"):
+        if need not in idx:
+            raise BuildError("road-crossings CSV has no {} column".format(need))
+    keep = [f for f in (fields.split(",") if isinstance(fields, str) else fields) if f in idx]
+    si, vi, la, lo = idx["State"], idx["Surveyed"], idx["lat"], idx["lon"]
+    key = '"{}"'.format(state)
+    for line in lines:
+        if key not in line:                  # most of the 6 GB file is other states
+            continue
+        r = next(csv.reader([line]))
+        if len(r) != len(head) or r[si] != state or r[vi].strip().lower() != "not likely":
+            continue
+        try:
+            x, y = float(r[lo]), float(r[la])
+        except ValueError:
+            continue
+        if not (bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]):
+            continue
+        props = {f: _num(r[idx[f]]) for f in keep if f not in ("lat", "lon")}
+        props["lat"], props["lon"] = round(y, 6), round(x, 6)
+        yield {"type": "Feature", "geometry": {"type": "Point",
+                                               "coordinates": [round(x, 6), round(y, 6)]},
+               "properties": props}
+
+
+def fetch_sarp_zip(ctx, bbox, spec):
+    """2.35.11: SARP_unsurveyed_crossings from the inventory's national road-crossings download.
+    The zip (~600 MB) is kept in <work>/downloads/ for a week (a rebuild in that time reads it
+    again, --refresh downloads it again) and read in place (the 6 GB CSV is never unpacked)."""
+    work = os.path.dirname(os.path.abspath(ctx.writer.path))
+    dest = os.path.join(work, "downloads", "sarp_road_crossings.zip")
+
+    def beat(got, total):
+        if total:
+            ctx.sub(60.0 * got / total, "downloading {:,} of {:,} MB".format(
+                got >> 20, total >> 20))
+        else:
+            ctx.sub(30.0, "downloading {:,} MB".format(got >> 20))
+    path, new = _download_resume(spec["url"], dest, refresh=getattr(ctx, "refresh", False),
+                                 beat=beat)
+    ctx.log("  road-crossings download: {} ({:,} MB, {})".format(
+        path, os.path.getsize(path) >> 20, "downloaded now" if new else "kept from an earlier "
+        "run (under a week old)"))
+    ctx.sub(60.0, "reading the North Dakota rows")
+    import io
+    member = spec.get("member", SARP_ZIP_MEMBER)
+    batch, n, version = [], 0, ""
+    with zipfile.ZipFile(path) as z:
+        if member not in z.namelist():
+            raise BuildError("{} is not in the road-crossings download".format(member))
+        if "README.txt" in z.namelist():
+            for line in z.read("README.txt").decode("utf-8", "replace").splitlines():
+                if line.startswith("Data version:"):
+                    version = line.split(":", 1)[1].strip()
+        with z.open(member) as raw:
+            text = io.TextIOWrapper(raw, encoding="utf-8", newline="")
+            for feat in sarp_zip_features(text, bbox, spec.get("fields", SARP_UNSURVEYED_FIELDS)):
+                batch.append(feat)
+                if len(batch) >= SARP_ZIP_BATCH:
+                    n += ctx.writer.add(batch, lambda f: f["properties"].get("SARPID"))
+                    batch = []
+                    ctx.sub(60.0 + min(39.0, n / 2000.0), "{:,} crossings".format(n))
+                    _check_cancel()
+    if batch:
+        ctx.writer.add(batch, lambda f: f["properties"].get("SARPID"))
+    return "unsurveyed crossings (Surveyed = 'not likely'){}".format(
+        "; data version " + version if version else "")
 
 
 def _hydro_spec(url, flow):
@@ -1411,6 +1619,8 @@ def _run_one(ctx, name, label, kind, spec, bbox):
                                 spec.get("id_grid", 1), spec.get("tile_deg"))
         elif kind == "osm":
             note = fetch_osm(ctx, bbox, spec["query"], spec["parse"])
+        elif kind == "sarp_zip":
+            note = fetch_sarp_zip(ctx, bbox, spec)
         else:
             raise BuildError("unknown kind " + kind)
     except BuildCancelled:
