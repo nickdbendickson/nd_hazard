@@ -114,7 +114,9 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
         # 3.28.0: where the 1 m crest ground comes from, and the grid-refine switches, never
         # change one run's flood (the burn itself, crest_burn*, is on by default and in the key)
         "crest_burn_http", "crest_burn_download", "crest_burn_data_folder",
-        "grid_refine", "grid_refine_cell_m", "grid_check_cell_m")
+        "grid_refine", "grid_refine_cell_m", "grid_check_cell_m",
+        # 3.28.1: the stability re-run never changes a run that balances
+        "lisflood_stability_retry")
         and not k.startswith("class_stop")
         and k not in workflow._REFINE_KEYS}          # refine_lines (ANUGA, 3.0) stays
     assert workflow.key_settings(st) == old
