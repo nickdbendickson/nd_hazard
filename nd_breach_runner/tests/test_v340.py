@@ -42,7 +42,7 @@ def lisflood_solver_keyword_is_written_to_the_par_file():
     from nd_breach_runner.core import lisflood as lf
     from nd_breach_runner.core.breach import Hydrograph
     from nd_breach_runner.core.grid import Grid
-    assert lf.SOLVERS == ("acceleration", "fv1")
+    assert lf.SOLVERS[:2] == ("acceleration", "fv1")       # 3.29.0 / 3.16.0 add fv2, mwdg2
     st = lf.LisfloodSettings("x")
     assert st.solver == lf.SOLVER_ACC
     try:

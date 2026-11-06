@@ -54,7 +54,50 @@ def patch_missing(logtxt):
 EDGE_LETTERS = ("N", "S", "E", "W")
 SOLVER_ACC = "acceleration"
 SOLVER_FV1 = "fv1"
-SOLVERS = (SOLVER_ACC, SOLVER_FV1)
+# 3.29.0: the main run's solver is a choice among the solvers that write everything the
+# hazard classification needs - maximum velocity (.maxVc) and arrival time honouring the
+# arrival-depth patch (inittm_depth) - with ACC the default (Nick, 2026-11-06). FV2 is the
+# second-order finite-volume and MWDG2 the adaptive multiwavelet DG2 solver of LISFLOOD-FP 8;
+# both run with the slope limiter ("limitslopes") unless limit_slopes is off. FV1 is NOT
+# offered for the main run: LISFLOOD-FP 8.1 writes no maximum velocity and no arrival time for
+# it (it stays the near-dam refine's solver, which keeps the ACC velocities). Plain DG2 is not
+# offered either: it needs slope-coefficient DEMs this plugin does not make.
+SOLVER_FV2 = "fv2"
+SOLVER_MWDG2 = "mwdg2"
+SOLVERS = (SOLVER_ACC, SOLVER_FV1, SOLVER_FV2, SOLVER_MWDG2)      # what the .par may hold
+MAIN_SOLVERS = (SOLVER_ACC, SOLVER_FV2, SOLVER_MWDG2)             # what the main run may use
+LIMIT_SLOPES_SOLVERS = (SOLVER_FV2, SOLVER_MWDG2)
+SOLVER_LABELS = {SOLVER_ACC: "ACC (local inertial, default)",
+                 SOLVER_FV1: "FV1 (first-order finite volume)",
+                 SOLVER_FV2: "FV2 (second-order finite volume, slope limiter)",
+                 SOLVER_MWDG2: "MWDG2 (adaptive multiwavelet DG2, slope limiter)"}
+SOLVER_SHORT = {SOLVER_ACC: "ACC", SOLVER_FV1: "FV1", SOLVER_FV2: "FV2", SOLVER_MWDG2: "MWDG2"}
+SOLVER_ALIASES = {"acc": SOLVER_ACC, "acceleration": SOLVER_ACC, "inertial": SOLVER_ACC,
+                  "lia": SOLVER_ACC, "fv2": SOLVER_FV2, "fv2-ll": SOLVER_FV2,
+                  "fv2ll": SOLVER_FV2, "mwdg2": SOLVER_MWDG2, "mwdg2-ll": SOLVER_MWDG2,
+                  "mwdg2ll": SOLVER_MWDG2}
+SOLVER_REFUSED = {"fv1": "FV1 writes no maximum velocity or arrival time",
+                  "dg2": "DG2 needs slope-coefficient DEMs this plugin does not make",
+                  "hwfv1": "HWFV1 is not tested with this plugin"}
+SOLVER_ENV = "NDBREACH_LISFLOOD_SOLVER"
+
+
+def solver_from_text(text, default=SOLVER_ACC):
+    """The main-run solver keyword for a name ("ACC", "fv2", "mwdg2-ll" ...); empty =
+    `default`. Any other name raises ModelError: the run never falls back to another solver."""
+    t = str(text or "").strip().lower()
+    if not t:
+        return default
+    if t not in SOLVER_ALIASES:
+        why = SOLVER_REFUSED.get(t)
+        raise ModelError("LISFLOOD-FP solver '{}' cannot be used for the main run{} - choose "
+                         "ACC, FV2 or MWDG2".format(text, " ({})".format(why) if why else ""))
+    return SOLVER_ALIASES[t]
+
+
+def solver_from_env(default=SOLVER_ACC):
+    """The solver named by the NDBREACH_LISFLOOD_SOLVER environment variable, else `default`."""
+    return solver_from_text(os.environ.get(SOLVER_ENV, ""), default)
 # 3.28.1: stable settings for the ACC (local-inertial) solver. With LISFLOOD-FP's defaults (theta
 # 1.0, no numerical diffusion, Bates et al. 2010; cfl 0.7, a time step from the wave celerity
 # only) the scheme can go unstable on a fine grid and MAKE water: the depth is clipped where a
@@ -144,11 +187,13 @@ class LisfloodSettings:
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
-                 cfl=None):
+                 cfl=None, limit_slopes=True):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
         self.solver = solver                    # v3.4.0: "acceleration" (default) or "fv1"
+        # 3.29.0: "limitslopes" for FV2 / MWDG2 (ignored by the other solvers)
+        self.limit_slopes = bool(limit_slopes)
         # 3.28.1: ACC theta (1.0 = LISFLOOD-FP's own, nothing written) and cfl (None = LISFLOOD-FP's
         # own 0.7, nothing written); STABLE_THETA / STABLE_CFL for a run that lost its balance
         self.theta = float(theta)
@@ -317,6 +362,11 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         "bcifile {}.bci".format(name),
         "bdyfile {}.bdy".format(name),
         getattr(st, "solver", SOLVER_ACC),
+    ]
+    if getattr(st, "solver", SOLVER_ACC) in LIMIT_SLOPES_SOLVERS and \
+            getattr(st, "limit_slopes", True):
+        lines.append("limitslopes")
+    lines += [
         "hazard",
         "elevoff",
         "inittm_depth {:.4f}".format(st.arrival_depth_m),
@@ -487,7 +537,9 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
         raise ModelError("LISFLOOD-FP stopped with code {}:\n{}".format(proc.returncode,
                                                                       logtxt[-1500:]))
     if patch_missing(logtxt):
-        if getattr(st, "allow_unpatched", False):
+        # 3.29.0: FV2 / MWDG2 are never run without the patch, whatever allow_unpatched says
+        if getattr(st, "allow_unpatched", False) and \
+                getattr(st, "solver", SOLVER_ACC) in (SOLVER_ACC, SOLVER_FV1):
             st.unpatched_used = True
             if log:
                 log("WARNING: " + PATCH_MISSING_WARNING)
@@ -574,6 +626,7 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": velocity_written,
+        "solver": SOLVER_SHORT.get(getattr(st, "solver", SOLVER_ACC), getattr(st, "solver", "")),
         "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
     }
@@ -671,9 +724,11 @@ def collect_snapshots(workdir, st, out_path, name="run", step=1, remove=True):
     return np.asarray(times), out_path
 
 
-def check_lisflood(exe, workdir):
+def check_lisflood(exe, workdir, solver=SOLVER_ACC):
     """Run a 2 km synthetic channel for 20 minutes. Returns a dict with 'ok',
-    'patched' (arrival-depth keyword honoured) and 'message'."""
+    'patched' (arrival-depth keyword honoured), 'velocity' (a maximum velocity was written) and
+    'message'. 3.29.0: `solver` checks that solver (workflow.run_dam does before an FV2 / MWDG2
+    run)."""
     from .breach import Hydrograph
     os.makedirs(workdir, exist_ok=True)
     nr, nc, dx = 20, 100, 20.0
@@ -682,14 +737,19 @@ def check_lisflood(exe, workdir):
     dem = Grid(z[::-1], 0.0, nr * dx, dx)
     hy = Hydrograph(np.array([0.0, 600.0, 1200.0]), np.array([30.0, 30.0, 0.0]), "test")
     st = LisfloodSettings(exe, arrival_depth_m=0.3, sim_time_s=1200.0, massint_s=60.0,
-                          initial_tstep_s=1.0)
+                          initial_tstep_s=1.0, solver=solver)
     try:
         par = write_inputs(workdir, dem, (30.0, nr * dx / 2 + 5), hy, st)
         run(workdir, par, st)
         env = read_results(workdir, dem, st, hy)
     except Exception as e:  # report, don't raise
-        return {"ok": False, "patched": False, "message": str(e)}
-    raw = Grid.read_asc(os.path.join(workdir, "results", "run.inittm")).data
+        return {"ok": False, "patched": False, "velocity": False, "message": str(e)}
+    p_init = os.path.join(workdir, "results", "run.inittm")
+    if not os.path.exists(p_init):
+        return {"ok": True, "patched": False, "velocity": bool(env.stats.get("velocity_written")),
+                "message": "{} ran {} but wrote no arrival time.".format(
+                    describe_exe(exe), SOLVER_SHORT.get(solver, solver))}
+    raw = Grid.read_asc(p_init).data
     raw_wet = int((raw >= 0).sum())
     thr_wet = int(np.isfinite(env.arrival_hr.data).sum())
     # Patched: arrival is recorded only where the depth passed 0.3 m. Unpatched:
@@ -700,7 +760,8 @@ def check_lisflood(exe, workdir):
     if not patched:
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_macos.sh.")
-    return {"ok": True, "patched": patched, "message": msg}
+    return {"ok": True, "patched": patched, "velocity": bool(env.stats.get("velocity_written")),
+            "message": msg}
 
 
 def calibrate(exe, workdir, threads=0, cell_m=10.0, sim_s=1800.0):

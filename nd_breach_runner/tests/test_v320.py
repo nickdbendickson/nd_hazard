@@ -116,7 +116,9 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
         "crest_burn_http", "crest_burn_download", "crest_burn_data_folder",
         "grid_refine", "grid_refine_cell_m", "grid_check_cell_m",
         # 3.28.1: the stability re-run never changes a run that balances
-        "lisflood_stability_retry")
+        "lisflood_stability_retry",
+        # the slope limiter only counts for FV2 / MWDG2 runs; a bad solver name is only a warning
+        "lisflood_limit_slopes", "lisflood_solver_error")
         and not k.startswith("class_stop")
         and k not in workflow._REFINE_KEYS}          # refine_lines (ANUGA, 3.0) stays
     assert workflow.key_settings(st) == old

@@ -5,7 +5,7 @@ from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
 from .algorithms import ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ANUGA, SET_LISFLOOD, SET_THREADS, \
-    SET_BUILTIN, SET_ALLOW_UNPATCHED, SET_CREST_DEM
+    SET_BUILTIN, SET_ALLOW_UNPATCHED, SET_CREST_DEM, SET_SOLVER
 from .algorithms_tools import _ToolBase
 from .core import damjson, nd_data
 from . import popup_logic as pl
@@ -108,6 +108,10 @@ class Provider(QgsProcessingProvider):
                 self.name(), SET_LISFLOOD, "LISFLOOD-FP executable (built with the "
                 "arrival-depth patch; empty = the one bundled with the plugin on Windows and "
                 "Linux, else the built-in engine)", lf, valuetype=Setting.FILE))
+            # 3.29.0: the default LISFLOOD-FP solver (ACC, FV2 or MWDG2; empty = ACC)
+            ProcessingConfig.addSetting(Setting(
+                self.name(), SET_SOLVER, "Default LISFLOOD-FP solver: ACC, FV2 or MWDG2 "
+                "(empty = ACC; the NDBREACH_LISFLOOD_SOLVER environment variable wins)", ""))
             # 3.11.0
             ProcessingConfig.addSetting(Setting(
                 self.name(), SET_BUILTIN, "Use the built-in flood engine instead of LISFLOOD-FP "
@@ -137,7 +141,7 @@ class Provider(QgsProcessingProvider):
     def unload(self):
         try:
             from processing.core.ProcessingConfig import ProcessingConfig
-            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED,
+            for k in (SET_SOLVER, SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED,
                       SET_CREST_DEM):
                 ProcessingConfig.removeSetting(k)
         except Exception:
