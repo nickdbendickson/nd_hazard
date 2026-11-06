@@ -194,6 +194,37 @@ def _num(v):
     return str(v)
 
 
+PIPING_COEF = 0.5                     # HEC-RAS piping coefficient default
+F08_AUTO = "Froehlich (2008) piping, auto"
+VW_CURVE_TOL = 0.05                   # curve vs maximum storage: warn above 5 %
+
+
+def froehlich_2008_piping_ft(dam, params, bottom_ft):
+    """Froehlich (2008) piping breach (K0 1.0, z 0.7). Vw is the dam's maximum storage as
+    given (DWR's max storage: DamData.storage_top_acft) and hb = top - bottom, both from the
+    run's dam (NAVD88: the DWR value plus the run's VERTCON shift, core/vdatum_run.apply).
+    The elevation-volume curve is only a check: a storage at failure that differs from Vw by
+    more than VW_CURVE_TOL gives a warning ('curve_warning'). Returns {'avg_width_ft',
+    'tf_hr', 'z', 'vw_acft', 'curve_warning'} or None when it cannot be computed."""
+    from . import breach
+    p = dict(params or {})
+    hb_ft = dam.top_of_dam_ft - bottom_ft
+    vw_acft = dam.storage_top_acft
+    try:
+        b_m, tf_s, z = breach.froehlich_2008(float(vw_acft) * ACFT, hb_ft * FT, "piping")
+    except (TypeError, ValueError):
+        return None
+    warn = ""
+    curve = p.get("storage_at_failure_acft")
+    if curve is not None and vw_acft and \
+            abs(float(curve) - float(vw_acft)) > VW_CURVE_TOL * float(vw_acft):
+        warn = ("Check: the elevation-volume curve gives {} ac-ft at the starting pool, "
+                "{:+.0f} % from the maximum storage {} ac-ft used as Vw.".format(
+                    _num(curve), 100.0 * (float(curve) / float(vw_acft) - 1.0), _num(vw_acft)))
+    return {"avg_width_ft": b_m / FT, "tf_hr": tf_s / 3600.0, "z": z,
+            "vw_acft": round(float(vw_acft), 2), "curve_warning": warn}
+
+
 def breach_parameter_rows(dam, params, peak_cfs=None):
     """Rows (dicts item, value, units, basis, note) of the HEC-RAS breach editor.
 
@@ -223,7 +254,22 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     if b_bottom is None and avg is not None and z is not None:
         b_bottom = max(0.0, float(avg) - float(z) * hb)
     tf = p.get("formation_time_hr")
-    mode = str(p.get("failure_mode") or "").lower()
+    # 3.16.1 (Nick, 2026-11-06): the HEC-RAS breach defaults to piping, Froehlich (2008)
+    mode_given = bool(p.get("failure_mode"))
+    mode = str(p.get("failure_mode") or "piping").lower()
+    f08 = None
+    if mode == "piping" and (b_bottom is None or z is None or tf is None):
+        f08 = froehlich_2008_piping_ft(dam, p, bottom)
+        if f08 is not None:
+            if z is None:
+                z = f08["z"]
+            if avg is None:
+                avg = f08["avg_width_ft"]
+            if b_bottom is None:
+                b_bottom = max(0.0, avg - z * hb)
+            if tf is None:
+                tf = f08["tf_hr"]
+            src = (src + "; " if src else "") + F08_AUTO
 
     add("Breach center station", None, "station", BASIS_BLANK,
         "Where the breach sits along the embankment; depends on your HEC-RAS geometry.")
@@ -257,24 +303,30 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     add("Breach progression", "Linear", "", BASIS_ASSUME,
         "The plugin lowers the crest and widens the bottom linearly over the formation time; "
         "HEC-RAS's sine-wave option gives a different hydrograph shape.")
-    if mode:
-        add("Breach mode", mode.capitalize(), "", BASIS_EST,
-            "Froehlich parameters for a {} failure. The plugin routes the opening as a weir "
-            "either way (except with the pipe phase).".format(mode))
+    add("Breach mode", mode.capitalize(), "", BASIS_EST if mode_given else BASIS_ASSUME,
+        ("Froehlich parameters for a {} failure. The plugin routes the opening as a weir "
+         "either way (except with the pipe phase).".format(mode)) if mode_given else
+        "The run gives no failure mode; HEC-RAS piping is the default (Froehlich 2008).")
+    if f08 is not None:
+        add("Froehlich (2008) piping", "auto", "", BASIS_ASSUME,
+            "{}: Vw {} ac-ft, hb {:.2f} ft, K0 1.0, side slope 0.7, average width {} ft, "
+            "formation time {} h; filled where the run's method gives none.".format(
+                F08_AUTO, _num(f08["vw_acft"]), hb, _num(f08["avg_width_ft"]),
+                _num(f08["tf_hr"])) + (" " + f08["curve_warning"] if f08["curve_warning"]
+                                       else ""))
     if mode == "piping":
+        cd = p.get("pipe_cd")
+        add("Piping coefficient", float(cd) if cd is not None else PIPING_COEF, "",
+            BASIS_ASSUME, "Orifice coefficient used for the pipe phase." if cd is not None
+            else "HEC-RAS piping coefficient (its default, 0.5).")
         if p.get("pipe_initial_dia_ft") is not None:
-            cd = p.get("pipe_cd")
-            add("Piping coefficient", cd, "", BASIS_ASSUME,
-                "Orifice coefficient used for the pipe phase.")
             add("Initial piping elevation", bottom + float(p["pipe_initial_dia_ft"]) / 2.0,
                 "ft", BASIS_ASSUME,
                 "Centre of the starting pipe ({} ft across) resting on the breach bottom."
                 .format(_num(p["pipe_initial_dia_ft"])))
         else:
-            add("Piping coefficient", None, "", BASIS_BLANK,
-                "Only needed in HEC-RAS piping mode (its default is 0.5).")
-            add("Initial piping elevation", None, "ft", BASIS_BLANK,
-                "Only needed in HEC-RAS piping mode.")
+            add("Initial piping elevation", round(bottom + 0.5 * hb, 2), "ft", BASIS_ASSUME,
+                "Half way up the breach (breach bottom + 0.5 x breach height).")
     trig = p.get("breach_trigger")
     if trig == "time":
         add("Breach initiation trigger", "Set time", "", BASIS_USER,
@@ -363,6 +415,8 @@ def load_run(dam_folder, model_folder=MODEL_FOLDER):
     except breach.BreachInputError as e:
         raise HecRasError(str(e))
     params = dict(report["hydrograph"])
+    if report.get("vertical_datum") is not None:
+        params.setdefault("vertical_datum", report["vertical_datum"])  # NAVD88 record
     hy.method = params.get("method", hy.method)
     hy.params = params
     hy.t_ref_s = float(params.get("breach_initiation_hr") or 0.0) * 3600.0

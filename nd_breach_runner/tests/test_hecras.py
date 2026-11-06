@@ -146,10 +146,11 @@ def hecras_breach_table_matches_hand_computation():
                                         {"rise_time_hr": 0.4, "starting_wse_ft": 1850.0})
     assert _row(rows, "Final bottom elevation")["value"] == 1830.0
     assert _row(rows, "Final bottom elevation")["basis"] == hecras.BASIS_USER
-    assert _row(rows, "Left side slope")["value"] is None
-    assert _row(rows, "Left side slope")["basis"] == hecras.BASIS_NONE
-    assert _row(rows, "Full formation time")["value"] is None
-    assert "0.4" in _row(rows, "Full formation time")["note"]
+    # 3.16.1: no failure mode -> piping, Froehlich (2008) piping fills the TR-60 gaps
+    assert _row(rows, "Left side slope")["value"] == 0.7
+    assert _row(rows, "Full formation time")["value"] is not None
+    assert _row(rows, "Froehlich (2008) piping")["value"] == "auto"
+    assert _row(rows, "Initial piping elevation")["value"] == 1840.0
     rows = hecras.breach_parameter_rows(dam, {
         "breach_bottom_ft": 1825.0, "failure_mode": "piping", "pipe_initial_dia_ft": 0.5,
         "pipe_cd": 0.6, "side_slope_h": 0.7, "bottom_width_ft": 60.0,
