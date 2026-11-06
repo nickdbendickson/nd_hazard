@@ -49,13 +49,14 @@ from . import structures as structmod
 from . import gaps as gapsmod
 from . import terrain
 from . import grid_default as griddef
+from . import crestburn
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.27.13"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.28.0"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -118,6 +119,15 @@ OUTFLOW_WARN_PCT = 5.0     # warn when at least this share of the breach volume 
 GRID_SPREAD_WARN_CELL_M = 10.0     # only when the model cell is coarser than this
 GRID_SPREAD_WARN_MIN_AC = 1000.0   # skip small floods (a finer grid changes little there)
 GRID_SPREAD_WARN_MEDIAN_FT = 1.0   # the wide-shallow signature: median wet depth at or below this
+# 3.28.0: the signature no longer only warns: with RunSettings.grid_refine on (the default) the
+# run is repeated on the same domain at GRID_REFINE_CELL_M, which becomes the record, and at
+# GRID_CHECK_CELL_M as a convergence check (DWR-2801: 10 m is the record cell Nick chose, 5 m
+# the check; ACER TM 11 lives GROW as the grid refines, so the coarse run understates them).
+GRID_REFINE_CELL_M = 10.0
+GRID_CHECK_CELL_M = 0.0           # check run OFF by default (Nick, 2026-11-06): on DWR-2801
+GRID_CHECK_SUGGESTED_M = 5.0      # a 5 m check of a 10.5 M-cell domain took ~14 h; set 5 to opt in
+GRID_CHECK_MAX_CELLS = 40e6        # skip the check run when its grid would be larger than this
+GRID_CHECK_DIFF_PCT = 25.0         # warn when the check's flooded area differs by more than this
 
 
 def grid_spread_flagged(cell_m, flooded_acres, median_depth_ft):
@@ -264,6 +274,24 @@ class RunSettings:
         self.close_upstream_edges = False
         # 3.13.0: road lines (RECEPTOR_ROADS, work CRS) for the culvert candidates of the report
         self.road_lines = []
+        # 3.28.0: crest-burn terrain prep (crestburn.py): each model cell a road or rail line
+        # crosses is raised to the highest 1 m elevation inside it, so the embankment crest the
+        # cell average loses stays in the model. On by default; the lines are the road and
+        # rail layers (work CRS); the 1 m source is crest_burn_dem, else the run's own DEM when
+        # it is 2 m or finer, else the suite data folder's DEM, else USGS 3DEP 1 m downloaded
+        # into the suite's terrain cache (crest_burn_download).
+        self.crest_burn = True
+        self.crest_burn_dem = ""
+        self.crest_burn_lines = []
+        self.crest_burn_data_folder = ""
+        self.crest_burn_download = True
+        self.crest_burn_http = None      # http_get for the 3DEP download (None = urllib)
+        # 3.28.0: when the finished run shows the grid-spread signature (grid_spread_flagged),
+        # run again on the same domain at grid_refine_cell_m and keep THAT as the record, then
+        # a grid_check_cell_m run on the same domain as a convergence check (0 = no check)
+        self.grid_refine = True
+        self.grid_refine_cell_m = GRID_REFINE_CELL_M
+        self.grid_check_cell_m = GRID_CHECK_CELL_M
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -295,8 +323,10 @@ class RunSettings:
                                               "buildings": len(getattr(v, "buildings", [])),
                                               "embankments": len(getattr(v, "embankments", [])),
                                               "crest_raise": len(getattr(v, "crests", []))}
-            elif k in ("road_lines", "crossings"):
+            elif k in ("road_lines", "crossings", "crest_burn_lines"):
                 d[k] = len(v or [])
+            elif k == "crest_burn_http":
+                d[k] = v is not None
             elif k in ("refine_lines", "fixed_plan"):
                 d[k] = len(v) if k == "refine_lines" else (v is not None)
             elif k == "crest_line_xy":
@@ -339,6 +369,15 @@ def key_settings(st):
     if not getattr(st, "crossing_gaps", False):
         d.pop("crossing_gaps", None)
         d.pop("crossings", None)
+    # 3.28.0: the burn changes the terrain only when it is on; the download switch, the http
+    # function and the data folder only say where the same 1 m ground comes from. The grid
+    # refine settings never change one run (the refined runs carry their own cell size).
+    for k in ("crest_burn_http", "crest_burn_download", "crest_burn_data_folder",
+              "grid_refine", "grid_refine_cell_m", "grid_check_cell_m"):
+        d.pop(k, None)
+    if not getattr(st, "crest_burn", False):
+        for k in ("crest_burn", "crest_burn_dem", "crest_burn_lines"):
+            d.pop(k, None)
     ed = d.get("edits")
     if isinstance(ed, dict) and not ed.get("buildings"):
         d["edits"] = {k: v for k, v in ed.items() if k != "buildings"}
@@ -611,7 +650,239 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     return xy, why
 
 
+def _crest_burn_setup(st, terrain_src, writer, report, warnings, log, cancel):
+    """3.28.0: the CrestBurnTerrain wrapper for this run, or None (off, no lines, no 1 m
+    source). Records report["crest_burn"] either way when the burn is on."""
+    if not getattr(st, "crest_burn", False):
+        return None
+    lines = list(getattr(st, "crest_burn_lines", None) or [])
+    entry = {"on": True, "lines": len(lines)}
+    report["crest_burn"] = entry
+    if not lines:
+        entry["applied"] = False
+        entry["why"] = "no road or rail lines were given (Roads / Railways layers)"
+        log("Crest burn: no road or rail lines; the DEM is used as it is.")
+        return None
+    work = getattr(writer, "work_srs", None) or getattr(terrain_src, "work_srs", None)
+    try:
+        fine, note = crestburn.pick_source(
+            getattr(st, "crest_burn_dem", "") or "", terrain_src, work,
+            getattr(st, "crest_burn_data_folder", "") or "",
+            getattr(st, "crest_burn_http", None), cancel, log,
+            allow_download=getattr(st, "crest_burn_download", True))
+    except Exception as e:                                         # noqa - never stop the run
+        fine, note = None, "{}: {}".format(type(e).__name__, e)
+    entry["source"] = note
+    if fine is None:
+        entry["applied"] = False
+        entry["why"] = note
+        warnings.append("Crest burn is on but was not applied: {}. Road and rail embankments "
+                        "keep the cell-averaged DEM, which on flat ground lets the flood "
+                        "spread over them.".format(note))
+        return None
+    entry["applied"] = True
+    log("Crest burn: {} road / rail line(s); 1 m crests from {}".format(len(lines), note))
+    return crestburn.CrestBurnTerrain(terrain_src, lines, fine, log)
+
+
+def _plan_copy(plan):
+    out = dict(plan)
+    out["bounds"] = tuple(plan["bounds"])
+    out["inflow_xy"] = tuple(plan["inflow_xy"])
+    out["path"] = [tuple(q) for q in plan["path"]]
+    return out
+
+
+def _read_report(res):
+    try:
+        with open(res.report_json, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:                                              # noqa
+        return {}
+
+
+def _wet_csi(a, b, thr_m):
+    """CSI of two depth arrays on grids of the same bounds; the finer one is aggregated (a cell
+    of the coarse grid is wet when any finer cell inside it is)."""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if a.shape[0] > b.shape[0]:
+        a, b = b, a
+    k = int(round(b.shape[0] / float(a.shape[0])))
+    if k < 1 or a.shape[0] * k != b.shape[0] or a.shape[1] * k != b.shape[1]:
+        return None
+    wa = np.isfinite(a) & (a >= thr_m)
+    wb = (np.isfinite(b) & (b >= thr_m)).reshape(a.shape[0], k, a.shape[1], k).any(axis=(1, 3))
+    hit = float((wa & wb).sum())
+    den = hit + float((wa & ~wb).sum()) + float((~wa & wb).sum())
+    return round(hit / den, 3) if den else None
+
+
+def grid_refine_wanted(st):
+    """3.28.0: True when this run may be repeated at a finer cell (see GRID_REFINE_CELL_M)."""
+    return (bool(getattr(st, "grid_refine", False)) and st.fixed_plan is None
+            and st.cell_size_m > getattr(st, "grid_refine_cell_m", GRID_REFINE_CELL_M)
+            and st.cell_size_m > GRID_SPREAD_WARN_CELL_M)
+
+
 def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
+            progress=None, log=None, cancel=None):
+    """One breach run (see _run_dam_once). 3.28.0: when the finished run shows the coarse-grid
+    over-spread signature (grid_spread_flagged) and st.grid_refine is on, the dam is run again
+    on the SAME domain, inflow point and clock at st.grid_refine_cell_m (10 m), which replaces
+    the coarse rasters in the dam folder as the record, and then, when set (off by default), at st.grid_check_cell_m (5 m)
+    into a "Grid check <cell> m" subfolder as a convergence check. The coarse run's report is
+    kept as model/coarse_<cell>m_run_report.json. A fixed-plan run (sensitivity, nested,
+    convergence) is never refined."""
+    log = log or (lambda m: None)
+    if not grid_refine_wanted(st):
+        return _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy,
+                             progress, log, cancel)
+    keep = st.keep_arrays
+    st.keep_arrays = True
+    try:
+        res = _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy,
+                            progress, log, cancel)
+    finally:
+        st.keep_arrays = keep
+    rep = _read_report(res)
+    chk = rep.get("grid_spread_check") or {}
+    if not chk.get("flagged") or getattr(res, "plan", None) is None:
+        if not keep:
+            res.final_si = None
+        return res
+    import copy
+    import shutil
+    cs = st.cell_size_m
+    fine = float(getattr(st, "grid_refine_cell_m", GRID_REFINE_CELL_M))
+    model_dir = os.path.join(out_folder, MODEL_FOLDER)
+    coarse_json = os.path.join(model_dir, "coarse_{:g}m_run_report.json".format(cs))
+    try:
+        shutil.copyfile(res.report_json, coarse_json)
+    except Exception:                                              # noqa
+        coarse_json = ""
+    coarse_sum = dict(res.summary or {})
+    log("Grid-spread signature at {:g} m ({:,.0f} ac, median {:.2f} ft): running again on the "
+        "same domain at {:g} m for the record".format(cs, chk.get("flooded_acres", 0),
+                                                      chk.get("median_depth_ft", 0), fine))
+    st2 = copy.copy(st)
+    st2.cell_size_m = fine
+    st2.fixed_plan = _plan_copy(res.plan)
+    st2.grid_refine = False
+    st2.keep_arrays = True
+    st2.resume = False
+    res2 = _run_dam_once(dam, dam_xy, st2, terrain_src, writer, out_folder, inflow_xy,
+                         progress, log, cancel)
+    arrival_m = st.arrival_depth_ft * FT
+    entry = {"trigger": chk, "coarse_cell_m": cs, "record_cell_m": fine,
+             "coarse_report": os.path.basename(coarse_json) if coarse_json else "",
+             "coarse_flooded_acres_over_arrival_depth":
+                 coarse_sum.get("flooded_acres_over_arrival_depth"),
+             "record_flooded_acres_over_arrival_depth":
+                 (res2.summary or {}).get("flooded_acres_over_arrival_depth")}
+    if res.final_si is not None and res2.final_si is not None:
+        entry["csi_coarse_vs_record"] = _wet_csi(res.final_si["depth"], res2.final_si["depth"],
+                                                 arrival_m)
+    res.final_si = None
+    check = float(getattr(st, "grid_check_cell_m", 0.0) or 0.0)
+    notes = []
+    if 0 < check < fine:
+        b = st2.fixed_plan["bounds"]
+        cells = (b[2] - b[0]) * (b[3] - b[1]) / (check * check)
+        if cells > GRID_CHECK_MAX_CELLS:
+            entry["check"] = {"cell_m": check, "skipped": "the {:g} m grid would have {:,.0f} "
+                              "cells (limit {:,.0f})".format(check, cells, GRID_CHECK_MAX_CELLS)}
+        else:
+            log("Grid check: running the same domain at {:g} m".format(check))
+            # The record is final now: note it in its report before the (long) check starts,
+            # so a check that is stopped or crashes still leaves the record explained.
+            _write_refine_entry(res2, dict(entry, check={"cell_m": check, "status": "running"}))
+            st3 = copy.copy(st2)
+            st3.cell_size_m = check
+            st3.products = False
+            st3.animation = False
+            st3.snapshot_frames = 0
+            st3.dam_record = None
+            st3.refine_near = False
+            st3.eap_map = "mapbook"
+            sub = os.path.join(out_folder, "Grid check {:g} m".format(check))
+            try:
+                res3 = _run_dam_once(dam, dam_xy, st3, terrain_src, writer, sub, inflow_xy,
+                                     progress, log, cancel)
+                a2 = (res2.summary or {}).get("flooded_acres_over_arrival_depth") or 0.0
+                a3 = (res3.summary or {}).get("flooded_acres_over_arrival_depth") or 0.0
+                pct = 100.0 * (a3 - a2) / a2 if a2 else None
+                ce = {"cell_m": check, "folder": sub, "flooded_acres_over_arrival_depth": a3,
+                      "area_change_pct": None if pct is None else round(pct, 1),
+                      "csi_record_vs_check": _wet_csi(res2.final_si["depth"],
+                                                      res3.final_si["depth"], arrival_m)
+                      if res3.final_si is not None else None}
+                entry["check"] = ce
+                if pct is not None and abs(pct) > GRID_CHECK_DIFF_PCT:
+                    notes.append(
+                        "Grid check: at {:g} m the flood covers {:,.0f} ac, {:+.0f}% from the "
+                        "{:g} m record ({:,.0f} ac). The extent has not settled at {:g} m; "
+                        "consider {:g} m for the record (folder '{}').".format(
+                            check, a3, pct, fine, a2, fine, check, os.path.basename(sub)))
+                res3.final_si = None
+            except Exception as e:                                 # noqa - the record stands
+                entry["check"] = {"cell_m": check, "error": "{}: {}".format(type(e).__name__, e)}
+                notes.append("Grid check at {:g} m failed: {}: {}".format(
+                    check, type(e).__name__, e))
+    if not keep:
+        res2.final_si = None
+    text = ("Finer grid used automatically: the {:g} m run showed the coarse-grid over-spread "
+            "signature ({:,.0f} ac at a median depth of {:.2f} ft), so the dam was run again on "
+            "the same domain at {:g} m and THAT run is the record ({:,.0f} ac over the arrival "
+            "depth vs {:,.0f} ac at {:g} m). Life-loss estimates (ACER TM 11) tend to GROW as the "
+            "grid refines, so the coarse run would understate them.".format(
+                cs, chk.get("flooded_acres", 0), chk.get("median_depth_ft", 0), fine,
+                entry["record_flooded_acres_over_arrival_depth"] or 0,
+                entry["coarse_flooded_acres_over_arrival_depth"] or 0, cs))
+    _amend_report(res2, entry, [text] + notes)
+    return res2
+
+
+def _write_refine_entry(res, entry):
+    """Put report["grid_refine"] into a finished run's report json (no other change)."""
+    rep = _read_report(res)
+    if not rep:
+        return
+    rep["grid_refine"] = entry
+    try:
+        with open(res.report_json, "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=2, default=_json_default)
+    except OSError:
+        pass
+
+
+def _amend_report(res, entry, texts):
+    """Add report["grid_refine"] and the notes to a finished run's report files."""
+    res.warnings = list(res.warnings or []) + texts
+    if res.summary is not None:
+        res.summary["grid_refine"] = "{:g} m run re-run at {:g} m (record){}".format(
+            entry["coarse_cell_m"], entry["record_cell_m"],
+            "; {:g} m check {}".format(entry["check"]["cell_m"],
+                                       "{:+.0f}% area".format(entry["check"]["area_change_pct"])
+                                       if entry["check"].get("area_change_pct") is not None
+                                       else "not run") if entry.get("check") else "")
+    rep = _read_report(res)
+    if not rep:
+        return
+    rep["grid_refine"] = entry
+    rep["warnings"] = list(rep.get("warnings") or []) + texts
+    if res.summary is not None:
+        rep["summary"] = res.summary
+    try:
+        with open(res.report_json, "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=2, default=_json_default)
+        if getattr(res, "report_md", ""):
+            with open(res.report_md, "w", encoding="utf-8") as f:
+                f.write(render_report(rep))
+    except Exception:                                              # noqa - extras only
+        pass
+
+
+def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
     """dam: breach.DamData; dam_xy / inflow_xy in the working (metric) CRS.
     terrain_src.read(bounds, cell) -> Grid of elevations in metres (NaN = no data)
@@ -663,6 +934,12 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         section of the run report and the dam.json run entry."""
         warnings.append(text)
         report["cut_off"] = {"reason": reason, "detail": text}
+
+    # 3.28.0: crest-burn terrain prep (crestburn.py), under the edits so a channel, notch or
+    # structure the engineer cuts still cuts through a burned road
+    burner = _crest_burn_setup(st, terrain_src, writer, report, warnings, log, cancel)
+    if burner is not None:
+        terrain_src = burner
 
     # DEM edits (channels, ponds, notches, v3.4.0 buildings, v3.7.0 a proposed
     # embankment from dam.json) apply to everything the models read
@@ -968,6 +1245,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 "a closed basin; give the breach inflow point explicitly (just below the "
                 "dam).".format(plen, d_end))
     report["trace"] = {"length_mi": round(plen / MILE, 2), "points": len(path)}
+    if burner is not None:
+        # 3.28.0: from here on the model reads are burned; the traced main channel and the
+        # inventory bridges stay as the DEM has them (crestburn.guard_cells)
+        burner.arm([path], crestburn.bridge_points(getattr(st, "crossings", None)))
     np.savetxt(os.path.join(model_dir, "flow_trace.csv"), np.asarray(path), delimiter=",",
                header="x,y", comments="", fmt="%.2f")
     # 3.13.0: roads crossing the flow path = culvert / bridge CANDIDATES (report only)
@@ -1659,6 +1940,24 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         summary["refine_near_dam"] = report["refine_near_dam"]["summary"]
     if report.get("dem_conditioning"):
         summary["buildings"] = report["dem_conditioning"]["buildings"].split(".")[0]
+    if burner is not None:
+        cb = report.setdefault("crest_burn", {})
+        cb["by_cell_m"] = {"{:g}".format(k): v for k, v in sorted(burner.stats.items())}
+        last = burner.stats.get(round(cs, 3))
+        if last:
+            cb["raised_cells"] = last["raised"]
+            cb["mean_raise_ft"] = round(last["mean_raise_m"] / FT, 2)
+            summary["crest_burn"] = "{} road / rail cells raised {:.1f} ft on average ({})".format(
+                last["raised"], last["mean_raise_m"] / FT, cb.get("source", ""))
+        if burner.errors:
+            cb["errors"] = list(burner.errors)
+            warnings.append("Crest burn: the 1 m terrain could not be read for part of the "
+                            "model ({}); those roads keep the averaged DEM.".format(
+                                burner.errors[0]))
+        fetched = getattr(burner.fine, "fetched", None)
+        if fetched is not None:
+            cb["tiles_downloaded"] = fetched
+            cb["tiles_cached"] = getattr(burner.fine, "cached", 0)
     report["summary"] = summary
     report["warnings"] = warnings
     report["outputs"] = {"final": res.final, "baseline": res.baseline,

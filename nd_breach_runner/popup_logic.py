@@ -112,7 +112,8 @@ DEM_FROM_DAM_FOLDER = WITH_DAM | {"conditiondem"}
 FROM_DAM_FOLDER = "(from dam folder)"
 
 DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file": "",
-                    "grid_m": 10.0, "simh": 0.0, "simmax": 96.0, "force_anuga": False}
+                    "grid_m": 10.0, "simh": 0.0, "simmax": 96.0, "force_anuga": False,
+                    "crest_burn": True, "grid_refine": True}      # 3.28.0
 PLUGIN_KEY = "ndbreach"                 # the suite settings file key (damsuite.versions)
 TAB_ORDER = tuple(t for t, _tools in TABS)
 
@@ -360,6 +361,11 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         if S.get("force_anuga"):
             p["FORCE_ANUGA"] = True
             p["TIER"] = 1
+        # 3.28.0: both are on in the tool itself; the window only passes a switch turned off
+        if not S.get("crest_burn", True):
+            p["CREST_BURN"] = False
+        if not S.get("grid_refine", True):
+            p["GRID_REFINE"] = False
     if alg in HANDOFF_TOOLS and folder:                          # 3.20.0
         p.update(handoff_defaults(alg, folder, S, p)[0])
     return p
