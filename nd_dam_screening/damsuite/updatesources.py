@@ -21,7 +21,7 @@ ADDRESS_POINTS_FIELDS = ("OBJECTID,ADDRESS,Add_Number,St_Name,St_PosTyp,County,L
 # (a branch can be force-pushed under us). To move to a newer commit, review it and update this.
 # NSI_GENERATOR_ZIP_SHA256 is left None: GitHub may recompress archive zips, so the hash is logged
 # on every fetch (visible if it changes) but not enforced; set it to enforce a byte-for-byte match.
-NSI_GENERATOR_COMMIT = "87f768783302e51852e38bb622ebd35fe17eee59"   # USACE-NSI/nsi-generator main @ 2026-10-14  # pragma: allowlist secret
+NSI_GENERATOR_COMMIT = "87f768783302e51852e38bb622ebd35fe17eee59"   # USACE-NSI/nsi-generator main @ 2026-10-14
 NSI_GENERATOR_ZIP_SHA256 = None
 
 # id -> (display name, description, enabled by default); the order is the settings window's
