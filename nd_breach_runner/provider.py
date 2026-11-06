@@ -5,7 +5,7 @@ from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
 from .algorithms import ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ANUGA, SET_LISFLOOD, SET_THREADS, \
-    SET_BUILTIN, SET_ALLOW_UNPATCHED
+    SET_BUILTIN, SET_ALLOW_UNPATCHED, SET_CREST_DEM
 from .algorithms_tools import _ToolBase
 from .core import damjson, nd_data
 from . import popup_logic as pl
@@ -123,6 +123,11 @@ class Provider(QgsProcessingProvider):
                 self.name(), SET_ALLOW_UNPATCHED, "Accept a LISFLOOD-FP build without the "
                 "arrival-depth patch (arrival times then mark the first wetting, ~1 mm, NOT the "
                 "arrival depth, so warning times are unreliable; off by default)", False))
+            # 3.28.0
+            ProcessingConfig.addSetting(Setting(
+                self.name(), SET_CREST_DEM, "Crest burn: 1 m DEM or VRT (e.g. the statewide ND "
+                "1 m VRT; empty = the run's DEM if 2 m or finer, else the suite data folder's "
+                "DEM, else USGS 3DEP 1 m)", "", valuetype=Setting.FILE))
             ProcessingConfig.readSettings()
         except Exception:   # settings are optional; parameters can carry the paths
             pass
@@ -132,7 +137,8 @@ class Provider(QgsProcessingProvider):
     def unload(self):
         try:
             from processing.core.ProcessingConfig import ProcessingConfig
-            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED):
+            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED,
+                      SET_CREST_DEM):
                 ProcessingConfig.removeSetting(k)
         except Exception:
             pass

@@ -48,7 +48,7 @@ GROUPS = (
     ("railroads", ("NARN_rail_lines", "FRA_grade_crossings")),
     ("lifelines", ("lifeline_", "OSM_lifelines")),
     ("hydro", ("3DHP_", "NHD_", "NID_dams")),
-    ("barriers", ("SARP_", "ABI_")),
+    ("barriers", ("SARP_", "ABI_", "USGS_stream_crossings")),
     ("dwr", ("DWR_",)),
     ("hifld", ("HIFLD_",)),
     ("nddeq", ("NDDEQ_",)),

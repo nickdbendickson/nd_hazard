@@ -317,6 +317,7 @@ def run_sensitivity(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=
 
     # the base run: the same domain everywhere else comes from it
     base_st = copy.copy(st)
+    base_st.grid_refine = False          # 3.28.0: every run of this tool keeps its own cell
     base_st.keep_arrays = True
     progress(0, "base run")
     base = workflow.run_dam(dam, dam_xy, base_st, terrain_src, writer, out_folder, inflow_xy,

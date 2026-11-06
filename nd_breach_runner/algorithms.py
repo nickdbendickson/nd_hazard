@@ -43,6 +43,7 @@ SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 SET_BUILTIN = "NDBREACH_USE_BUILTIN"   # 3.11.0
 SET_ALLOW_UNPATCHED = "NDBREACH_ALLOW_UNPATCHED"   # 3.26.0
+SET_CREST_DEM = "NDBREACH_CREST_BURN_DEM"         # 3.28.0: the 1 m DEM (VRT) the crest burn reads
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
@@ -564,6 +565,24 @@ class _Base(QgsProcessingAlgorithm):
                    "Models is set to LISFLOOD-FP only", False)
         self._num("CELL", "Model cell size (m; 10 m = 32.8 ft default; on flat plains use 10 m, or 5 m finer/slower; avoid coarser than 10 m)",
                   10.0, minimum=0.5)
+        # 3.28.0: crest-burn terrain prep and the automatic finer grid (both on by default)
+        self._bool("CREST_BURN", "Crest burn: keep road and rail embankments (on by default)",
+                   True, advanced=True, help=(
+                       "Raise each model cell a road or railway crosses (the Roads / Railways "
+                       "layers) to the highest 1 m ground inside it, so embankments the cell "
+                       "average flattens still hold water back. Never lowers a cell; the traced "
+                       "main channel, bridges and raises over 5 m are left alone."))
+        self._file("CREST_BURN_DEM", "Crest burn: 1 m DEM or VRT (optional)", advanced=True)
+        set_help(self.parameterDefinition("CREST_BURN_DEM"), (
+                "Empty = the provider setting, else the run's DEM when 2 m or finer, else the "
+                "suite data folder's DEM, else USGS 3DEP 1 m downloaded into the terrain cache."))
+        self._bool("GRID_REFINE", "Finer grid automatically on over-spread (on by default)",
+                   True, advanced=True, help=(
+                       "When a run coarser than 10 m floods a wide, shallow area (at least "
+                       "1,000 ac, median depth 1 ft or less), run it again on the same domain "
+                       "at 10 m and keep that as the record."))
+        self._num("GRID_CHECK_CELL", "Finer grid: check run cell (m; 0 = off, 5 = a 5 m check)",
+                  workflow.GRID_CHECK_CELL_M, minimum=0.0, advanced=True)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
                   maximum=1.0)
         self.addParameter(QgsProcessingParameterRasterLayer(
@@ -766,6 +785,19 @@ class _Base(QgsProcessingAlgorithm):
         if self.parameterDefinition("EAP_MAP") is not None:
             st.eap_map = EAP_MAP_CHOICES[min(len(EAP_MAP_CHOICES) - 1, self.parameterAsEnum(
                 parameters, "EAP_MAP", context))][0]
+        if self.parameterDefinition("CREST_BURN") is not None:         # 3.28.0
+            st.crest_burn = self.parameterAsBool(parameters, "CREST_BURN", context)
+            st.crest_burn_dem = (self._fileparam(parameters, "CREST_BURN_DEM", context) or
+                                 str(_setting(SET_CREST_DEM, "") or "")).strip()
+            st.grid_refine = self.parameterAsBool(parameters, "GRID_REFINE", context)
+            st.grid_check_cell_m = g("GRID_CHECK_CELL") or 0.0
+            try:
+                from .damsuite import suitedata as _SD
+                from . import suite_data_tools as _SDT
+                st.crest_burn_data_folder = _SD.data_folder() or ""
+                st.crest_burn_http = _SDT.qgis_http_get
+            except Exception:                                    # noqa - the burn says why
+                pass
         if self.parameterDefinition("RAISE_CREST") is not None:        # v3.11.0
             st.raise_crest = self.parameterAsBool(parameters, "RAISE_CREST", context)
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
@@ -959,6 +991,7 @@ class _Base(QgsProcessingAlgorithm):
             return []
         notes = []
         radius = 0.75 * st.max_extent_mi * MILE
+        st.crest_burn_lines = []            # 3.28.0: this dam's roads + railways (batch reuses st)
         tf = lambda src: (QgsCoordinateTransform(src.sourceCrs(), work, context.transformContext()),
                           QgsCoordinateTransform(work, src.sourceCrs(),
                                                  context.transformContext()))
@@ -981,6 +1014,7 @@ class _Base(QgsProcessingAlgorithm):
             else:
                 ln = qio.lines(src, a, b, center_xy, radius)
                 rec.add_lines([x[0] for x in ln], kind)
+                st.crest_burn_lines = st.crest_burn_lines + [x[0] for x in ln]   # 3.28.0
                 if kind == impmod.KIND_ROAD:                 # 3.13.0: culvert candidates
                     st.road_lines = [x[0] for x in ln]
         for name in ("RECEPTOR_POINTS", "RECEPTOR_ROADS", "RECEPTOR_RAIL", "STRUCTURES",

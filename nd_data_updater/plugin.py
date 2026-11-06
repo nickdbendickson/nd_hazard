@@ -150,6 +150,13 @@ class NdDataUpdaterPlugin:
     # ------------------------------------------------------------------ setup
 
     def initGui(self):  # noqa: N802 - QGIS API
+        # suite 1.18.5: the suite's map services as Browser connections (WMS/WMTS, XYZ Tiles,
+        # ArcGIS REST Servers), each added once (damsuite/connections.py)
+        try:
+            from .damsuite import connections as _conn, versions as _vs
+            _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
+        except Exception:  # noqa: BLE001 - never block the plugin's start-up
+            pass
         icon = QIcon(os.path.join(PLUGIN_DIR, "icon.svg"))
         win = self.iface.mainWindow()
         self.action_check = QAction(icon, "Check for data updates now", win)

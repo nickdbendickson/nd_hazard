@@ -55,6 +55,20 @@ EDGE_LETTERS = ("N", "S", "E", "W")
 SOLVER_ACC = "acceleration"
 SOLVER_FV1 = "fv1"
 SOLVERS = (SOLVER_ACC, SOLVER_FV1)
+# 3.28.1: stable settings for the ACC (local-inertial) solver. With LISFLOOD-FP's defaults (theta
+# 1.0, no numerical diffusion, Bates et al. 2010; cfl 0.7, a time step from the wave celerity
+# only) the scheme can go unstable on a fine grid and MAKE water: the depth is clipped where a
+# cell empties past zero. DWR-2865 at 10 m: the water level checkerboarded +-3 m in a deep
+# pond 2 km below the dam, 0.21 M m3 injected and 1.37 M m3 in the model after 8.3 h (+567%),
+# flood 838 ac instead of 213 ac. DWR-4031 at 10 m: fast shallow flow at the breach, +36%
+# while the hydrograph went in. theta 0.7 (de Almeida et al. 2012, the q-centred scheme's
+# recommended value) cures the first and not the second; theta 0.7 with cfl 0.5 cures both
+# (0.0% / -0.2%). A run whose LISFLOOD-FP volume error is over STABILITY_RETRY_PCT is run
+# again with them (workflow.run_dam); a run that balances is never changed.
+STABLE_THETA = 0.7
+STABLE_CFL = 0.5
+STABILITY_RETRY_PCT = 1.0
+STABILITY_MARKER = "stable_settings.json"
 
 
 # 3.11.0: LISFLOOD-FP without installing it. resolve_exe() turns the executable setting into
@@ -129,11 +143,20 @@ class LisfloodSettings:
                  arrival_depth_m=ARRIVAL_DEPTH_FT * FT, sim_time_s=6 * 3600.0, massint_s=300.0,
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
-                 solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False):
+                 solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
+                 cfl=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
         self.solver = solver                    # v3.4.0: "acceleration" (default) or "fv1"
+        # 3.28.1: ACC theta (1.0 = LISFLOOD-FP's own, nothing written) and cfl (None = LISFLOOD-FP's
+        # own 0.7, nothing written); STABLE_THETA / STABLE_CFL for a run that lost its balance
+        self.theta = float(theta)
+        if not 0.0 < self.theta <= 1.0:
+            raise ModelError("ACC theta must be in (0, 1], got {}".format(self.theta))
+        self.cfl = None if cfl is None else float(cfl)
+        if self.cfl is not None and not 0.0 < self.cfl <= 1.0:
+            raise ModelError("ACC cfl must be in (0, 1], got {}".format(self.cfl))
         # v3.11.0: domain edges written as closed walls ("N", "S", "E", "W") instead of free
         # outflow. The near-dam FV1 run closes the edges that face the reservoir: with FV1 a
         # free edge across ponded water brings water INTO the model (see core/refine.py).
@@ -300,6 +323,13 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
     ]
     if not st.snapshot_s:
         lines.insert(lines.index("elevoff") + 1, "depthoff")
+    if getattr(st, "solver", SOLVER_ACC) == SOLVER_ACC:
+        theta = float(getattr(st, "theta", 1.0) or 1.0)
+        if theta < 1.0:
+            lines.append("theta {:.3f}".format(theta))
+        cfl = getattr(st, "cfl", None)
+        if cfl is not None:
+            lines.append("cfl {:.3f}".format(float(cfl)))
     if st.manning_grid is not None:
         st.manning_grid.write_asc(os.path.join(workdir, name + ".n.asc"), fmt="%.4f")
         lines.append("manningfile {}.n.asc".format(name))
@@ -544,6 +574,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": velocity_written,
+        "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
+        "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
     }
     if st.initial_depth is not None:
         init_d = st.initial_depth.data

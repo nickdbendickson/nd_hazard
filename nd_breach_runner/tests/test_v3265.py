@@ -127,5 +127,5 @@ def v3265_the_tolerance_prints_as_given():
     """A 0.25 ft tolerance printed as '0.2 ft' in the run log and warnings ({:.1f})."""
     from nd_breach_runner.core import workflow as wf
     import inspect
-    src = inspect.getsource(wf.run_dam)
+    src = inspect.getsource(wf._run_dam_once)          # 3.28.0: run_dam wraps it
     assert "deeper than {:.1f} ft" not in src and "below {:.1f} ft" not in src

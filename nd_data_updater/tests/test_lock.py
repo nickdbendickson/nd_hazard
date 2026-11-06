@@ -72,7 +72,11 @@ def test_lock_decision_handles_a_lock_with_no_pid_and_no_lock_at_all():
     assert core.lock_decision({})[0] == "free"
     assert core.lock_decision({"pid": None, "age": 5.0})[0] == "refuse"
     assert core.lock_decision({"pid": None, "age": 7 * 3600.0})[0] == "clear"
-    assert core.lock_decision({"pid": os.getpid(), "age": 5.0})[0] == "clear"
+    # 1.8.0 (shared engine, DamSafety's M23 fix): a FRESH lock of this same process is a live
+    # update (a reloaded plugin, the other updater in the same QGIS) - refused, not stolen; an old
+    # one is left over and cleared
+    assert core.lock_decision({"pid": os.getpid(), "age": 5.0})[0] == "refuse"
+    assert core.lock_decision({"pid": os.getpid(), "age": 7 * 3600.0})[0] == "clear"
 
 
 @test

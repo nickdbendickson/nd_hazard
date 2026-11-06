@@ -4,8 +4,9 @@ One source, "pack": it builds the statewide offline data pack of the ND dam suit
 `ND_Dam_Suite_Pack` of GeoPackages, one per layer, with manifest.json and LAYERS.txt) in the data
 folder, and keeps it up to date. The layers are the ones the three dam plugins read: structures
 (NSI, addresses, USA Structures), roads, rail, lifelines, dams (NID), the USGS 3DHP flowlines and
-waterbodies, the SARP aquatic barrier dams and surveyed road-stream crossings, the DWR and HIFLD
-layers (from files in <data folder>/dwr and /hifld), the NLCD land cover and the counties. The
+waterbodies, the aquatic barrier dams and road-stream crossings (ABI_*), the ND DEQ layers, the
+DWR and HIFLD layers (from files in <data folder>/dwr and /hifld), the NLCD land cover and the
+counties. The
 building is done by ndpack/build_nd_pack.py, a copy of the ND Dam Hazard Helper's pack builder.
 
 Each run reads the pack's manifest: a layer that is missing or incomplete is built, a layer older
@@ -346,7 +347,7 @@ class PackSource(core.Source):
         self.summary = []                      # the last run's plain-words lines
         self.kept_replaced = []                # layers holding the user's own file, left alone
         # pack layers added to the QGIS project by "Add North Dakota layers to the project"
-        self.layer_globs = ("hydro/3DHP_*.gpkg", "barriers/SARP_*.gpkg")
+        self.layer_globs = ("hydro/3DHP_*.gpkg", "barriers/ABI_*.gpkg", "barriers/SARP_*.gpkg")
         self.config_key = f"{self.refresh_days}d|{self.mode_3dhp}|{'full' if self.full else ''}"
 
     # nothing to ask without building: the manifest decides

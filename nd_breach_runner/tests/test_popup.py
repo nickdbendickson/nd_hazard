@@ -430,7 +430,8 @@ def popup_window_shows_the_dam_and_opens_tools():
         assert q.proc.DIALOGS[-1] == ("ndbreach:batch", {"DAMS_FOLDER": dams, "DEM": "dem1"})
         saved = json.loads(q.project.entries[("NDBreachRunner", "state")])
         assert saved == {"dams_folder": dams, "dam_id": "DWR-1", "dem": "dem1", "settings_file": "",
-                         "grid_m": 10.0, "simh": 0.0, "simmax": 96.0, "force_anuga": False}
+                         "grid_m": 10.0, "simh": 0.0, "simmax": 96.0, "force_anuga": False,
+                         "crest_burn": True, "grid_refine": True}         # 3.28.0
         # the dam gets a folder: its contents are listed, the suggestion moves on
         f = make_dam(dams, "DWR-1")
         dlg.refresh()
@@ -482,7 +483,8 @@ def popup_window_shows_the_dam_and_opens_tools():
         assert pl.suite_dams_folder() == dams
         assert q.dialog.NDBreachRunnerDialog().settings() == {
             "dams_folder": dams, "dam_id": "", "dem": "", "settings_file": "",
-            "grid_m": 10.0, "simh": 0.0, "simmax": 96.0, "force_anuga": False}
+            "grid_m": 10.0, "simh": 0.0, "simmax": 96.0, "force_anuga": False,
+            "crest_burn": True, "grid_refine": True}
         # a layer that is gone from the project is kept, shown by its id
         q.project.layers.clear()
         dlg._fill_dem()

@@ -253,6 +253,15 @@ BUILTIN = [
        source="https://aquaticbarriers.org/", confidence="inferred",
        notes="field-surveyed crossings only; unsurveyed (modelled) crossings are not in this "
              "service"),
+    # suite 1.18.5: USGS Database of Stream Crossings (Wieferich 2022, doi:10.5066/P9YX6KTB) -
+    # modelled TIGER 2020 road x NHD HR crossings, the base of SARP's unsurveyed crossings
+    _s("usgs_stream_crossings", "barrier_crossings",
+       "USGS road-stream crossings (Database of Stream Crossings)", "arcgis_feature",
+       "https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/stream_crossings/"
+       "FeatureServer/0", fields=("stream_crossing_id", "nhdhr_gnis_stream_name",
+                                  "tiger2020_feature_names", "crossing_type"),
+       source="https://www.usgs.gov/data/database-stream-crossings-united-states",
+       notes="modelled, not field-checked"),
     _s("ndhub_hydro_wms", "reference", "ND GIS Hub hydrography (WMS)", "wms",
        "https://ndgishub.nd.gov/arcgis/services/All_Hydrography/MapServer/WMSServer",
        source="https://ndgishub.nd.gov/arcgis/rest/services/All_Hydrography/MapServer",

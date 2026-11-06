@@ -46,7 +46,9 @@ def test_updater_downloads_use_the_proxy_set_in_qgis():
         assert [s.split()[1] for s in seen] == ["http://example.invalid/a",
                                                 "http://example.invalid/b",
                                                 "http://example.invalid/c"], seen
-        assert packsource.load_builder().urlopen is NP.urlopen       # the vendored pack builder
+        # the pack builder (suite 1.18.6: the shared damsuite/packengine.py the Updater vendors)
+        from nd_data_updater.damsuite import netproxy as NP2
+        assert packsource.load_builder().urlopen is NP2.urlopen
     finally:
         NP.qgis_settings = real
         srv.shutdown()
