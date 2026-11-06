@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "detect-secrets baselines store hashed_secret values (SHA-1 of already-reviewed false positives), not secrets"
+paths = ['''(^|/)\.secrets\.baseline$''']
