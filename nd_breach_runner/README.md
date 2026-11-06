@@ -129,6 +129,21 @@ pixel from the terrain, interpolated, with the time-of-max fallback, and plans c
 are converted again. Without a terrain raster, its depth still comes from each cell's lowest
 point, so give it the terrain.
 
+## Grid size (CELL) on flat plains (Runner 3.27.9)
+**What it does.** Before a run the Runner looks at a coarse DEM window about 4 km across centred on the dam (`SAMPLE_HALF_M` = 2000 m). The ground counts as a **flat section-road plain** (`flat_section_plain`) when both hold:
+- relief (95th minus 5th percentile elevation) is **25 m or less**, and
+- mean slope is **1% or less**.
+
+**What you see.**
+- The default cell stays **10 m** (it already was).
+- On a flat plain, a cell **coarser than 10 m** gets a **WARNING before the run starts**: coarse cells average road embankments and ditches away and over-predict the flooded area.
+- **5 m** is offered in the Advanced tab hint and the CELL tooltip as the finer, slower choice.
+- The check **never changes your cell**. It only warns. The result is written to `run_report.json["terrain_grid"]`.
+
+**Why.** On DWR-2801 (Absaraka), the flooded area against DSS-WISE (≥0.5 ft) scored CSI 0.36 / 0.43 / 0.57 at 20 / 10 / 5 m. Absaraka measures 21.2 m relief and 0.94% slope, so a 20 or 30 m cell now warns.
+
+**Limits.** No section-road check yet: relief and slope only. Absaraka's slope sits close to the 1% limit.
+
 ## New in 3.20.0
 
 Everything the 2026-10 walk-through and review asked for. **No number in an existing run
