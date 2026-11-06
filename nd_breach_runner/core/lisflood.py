@@ -54,7 +54,43 @@ def patch_missing(logtxt):
 EDGE_LETTERS = ("N", "S", "E", "W")
 SOLVER_ACC = "acceleration"
 SOLVER_FV1 = "fv1"
-SOLVERS = (SOLVER_ACC, SOLVER_FV1)
+# 3.29.0: the main run's solver is a choice (ACC stays the default). FV2 is the second-order
+# finite-volume solver and MWDG2 the adaptive multiwavelet DG2 solver of LISFLOOD-FP 8; both run
+# with the slope limiter ("limitslopes") unless limit_slopes is off. Plain DG2 is left out: it
+# needs slope-coefficient DEMs this plugin does not make. LISFLOOD-FP 8.1 writes no maximum
+# velocity and no arrival time for FV1 (it does for FV2 / MWDG2); workflow.run_dam then takes
+# them from an ACC run of the same domain.
+SOLVER_FV2 = "fv2"
+SOLVER_MWDG2 = "mwdg2"
+SOLVERS = (SOLVER_ACC, SOLVER_FV1, SOLVER_FV2, SOLVER_MWDG2)
+LIMIT_SLOPES_SOLVERS = (SOLVER_FV2, SOLVER_MWDG2)
+SOLVER_LABELS = {SOLVER_ACC: "ACC (local inertial, default)",
+                 SOLVER_FV1: "FV1 (first-order finite volume)",
+                 SOLVER_FV2: "FV2 (second-order finite volume, slope limiter)",
+                 SOLVER_MWDG2: "MWDG2 (adaptive multiwavelet DG2, slope limiter)"}
+SOLVER_SHORT = {SOLVER_ACC: "ACC", SOLVER_FV1: "FV1", SOLVER_FV2: "FV2", SOLVER_MWDG2: "MWDG2"}
+SOLVER_ALIASES = {"acc": SOLVER_ACC, "acceleration": SOLVER_ACC, "inertial": SOLVER_ACC,
+                  "lia": SOLVER_ACC, "fv1": SOLVER_FV1, "fv2": SOLVER_FV2,
+                  "fv2-ll": SOLVER_FV2, "fv2ll": SOLVER_FV2, "mwdg2": SOLVER_MWDG2,
+                  "mwdg2-ll": SOLVER_MWDG2, "mwdg2ll": SOLVER_MWDG2}
+SOLVER_ENV = "NDBREACH_LISFLOOD_SOLVER"
+
+
+def solver_from_text(text, default=SOLVER_ACC):
+    """The solver keyword for a name ("ACC", "fv2", "mwdg2-ll" ...); empty = `default`.
+    An unknown name raises ModelError (never a silent fall-back to another solver)."""
+    t = str(text or "").strip().lower()
+    if not t:
+        return default
+    if t not in SOLVER_ALIASES:
+        raise ModelError("unknown LISFLOOD-FP solver '{}' (one of ACC, FV1, FV2, MWDG2)".format(
+            text))
+    return SOLVER_ALIASES[t]
+
+
+def solver_from_env(default=SOLVER_ACC):
+    """The solver named by the NDBREACH_LISFLOOD_SOLVER environment variable, else `default`."""
+    return solver_from_text(os.environ.get(SOLVER_ENV, ""), default)
 # 3.28.1: stable settings for the ACC (local-inertial) solver. With LISFLOOD-FP's defaults (theta
 # 1.0, no numerical diffusion, Bates et al. 2010; cfl 0.7, a time step from the wave celerity
 # only) the scheme can go unstable on a fine grid and MAKE water: the depth is clipped where a
@@ -144,11 +180,13 @@ class LisfloodSettings:
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
-                 cfl=None):
+                 cfl=None, limit_slopes=True):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
         self.solver = solver                    # v3.4.0: "acceleration" (default) or "fv1"
+        # 3.29.0: "limitslopes" for FV2 / MWDG2 (ignored by the other solvers)
+        self.limit_slopes = bool(limit_slopes)
         # 3.28.1: ACC theta (1.0 = LISFLOOD-FP's own, nothing written) and cfl (None = LISFLOOD-FP's
         # own 0.7, nothing written); STABLE_THETA / STABLE_CFL for a run that lost its balance
         self.theta = float(theta)
@@ -317,6 +355,11 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         "bcifile {}.bci".format(name),
         "bdyfile {}.bdy".format(name),
         getattr(st, "solver", SOLVER_ACC),
+    ]
+    if getattr(st, "solver", SOLVER_ACC) in LIMIT_SLOPES_SOLVERS and \
+            getattr(st, "limit_slopes", True):
+        lines.append("limitslopes")
+    lines += [
         "hazard",
         "elevoff",
         "inittm_depth {:.4f}".format(st.arrival_depth_m),
@@ -574,6 +617,7 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / ACFT, 2),
         "initial_water_acft": 0.0,
         "velocity_written": velocity_written,
+        "solver": SOLVER_SHORT.get(getattr(st, "solver", SOLVER_ACC), getattr(st, "solver", "")),
         "acc_theta": getattr(st, "theta", 1.0) if st.solver == SOLVER_ACC else None,
         "acc_cfl": getattr(st, "cfl", None) if st.solver == SOLVER_ACC else None,
     }
@@ -618,6 +662,91 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     return Envelopes(dem.like(hmax, nodata=np.nan), dem.like(vmax, nodata=np.nan),
                      dem.like(arr, nodata=np.nan), dem.like(wse, nodata=np.nan), stats, notes,
                      read_gauges(workdir, st, name))
+
+
+def needs_acc_fill(env):
+    """3.29.0: True when a run wrote no maximum velocity or no arrival time on its wet cells
+    (LISFLOOD-FP 8.1 FV1 writes neither)."""
+    if not env.stats.get("velocity_written", True):
+        return True
+    wet = np.isfinite(env.depth.data) & (env.depth.data > 0)
+    arr = env.arrival_hr.data
+    return bool(wet.any()) and not bool(np.isfinite(arr[wet]).any())
+
+
+def _near3(a, how=np.nanmax):
+    """3 x 3 neighbourhood maximum (or `how`) ignoring NaN (edges padded with NaN)."""
+    p = np.pad(a, 1, constant_values=np.nan)
+    stack = [p[1 + dy:p.shape[0] - 1 + dy, 1 + dx:p.shape[1] - 1 + dx]
+             for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
+    with np.errstate(all="ignore"):
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore", RuntimeWarning)
+            return how(np.stack(stack), axis=0)
+
+
+def _spread(values, need, passes, how):
+    """Fill `need` cells from the nearest finite `values` (3 x 3 steps, `how` of the
+    neighbours), at most `passes` cells away. Returns (filled array, cells still missing)."""
+    out = np.full(values.shape, np.nan)
+    src = values.copy()
+    need = need.copy()
+    for _ in range(int(passes)):
+        if not need.any():
+            break
+        src = np.where(np.isfinite(src), src, _near3(src, how))
+        got = need & np.isfinite(src)
+        out[got] = src[got]
+        need &= ~got
+    return out, need
+
+
+def fill_from_acc(env, acc_env, st, passes=20):
+    """3.29.0: give a run whose solver wrote no velocity / arrival (FV1) the ACC run's values
+    on the same grid. Velocity: the ACC maximum on the cells wet in BOTH; a cell wet only in this
+    run takes the largest ACC velocity within `passes` cells (never 0 for a wet cell while an
+    ACC velocity is in reach: 0 would read optimistically on the hazard curves). Arrival: the ACC
+    arrival where this run has none; a cell wet only here takes the earliest ACC arrival within
+    `passes` cells. Returns what was filled."""
+    h = np.where(np.isfinite(env.depth.data), env.depth.data, 0.0)
+    wet_v = h >= st.velocity_min_depth_m
+    info = {"velocity": False, "arrival": False, "velocity_cells_reached": 0,
+            "velocity_cells_unfilled": 0}
+    if not env.stats.get("velocity_written", True):
+        av = np.where(np.isfinite(acc_env.velocity.data) & (acc_env.velocity.data > 0),
+                      acc_env.velocity.data, np.nan)
+        v = np.where(wet_v, av, np.nan)
+        need = wet_v & ~np.isfinite(v)
+        near, left = _spread(av, need, passes, np.nanmax)
+        got = need & np.isfinite(near)
+        v[got] = near[got]
+        info["velocity_cells_reached"] = int(got.sum())
+        info["velocity_cells_unfilled"] = int(left.sum())
+        env.velocity.data[:] = np.where(wet_v & np.isfinite(v), v, 0.0)
+        env.stats["max_velocity_fps"] = round(float(np.nanmax(env.velocity.data)) / FT, 2)
+        env.stats["velocity_from"] = SOLVER_SHORT[SOLVER_ACC]
+        info["velocity"] = True
+    wet = h >= st.arrival_depth_m - ARRIVAL_TOL_M
+    arr = env.arrival_hr.data
+    miss = wet & ~np.isfinite(arr)
+    if miss.any():
+        aa = acc_env.arrival_hr.data
+        take = miss & np.isfinite(aa)
+        if take.any():
+            arr[take] = aa[take]
+            env.stats["arrival_from"] = SOLVER_SHORT[SOLVER_ACC]
+            info["arrival"] = True
+        # a cell wet only in this run takes the EARLIEST ACC arrival within reach (warning time
+        # errs short, the conservative side); farther ones keep none
+        miss &= ~np.isfinite(arr)
+        if miss.any():
+            near, left = _spread(np.where(np.isfinite(aa), aa, np.nan), miss, passes, np.nanmin)
+            got = miss & np.isfinite(near)
+            arr[got] = near[got]
+            info["arrival_cells_reached"] = int(got.sum())
+            info["arrival_cells_unfilled"] = int(left.sum())
+    return info
 
 
 def source_volume(src, t_end):

@@ -182,6 +182,9 @@ MODEL_KEYS = {
     "crest_burn_dem": ("crest_burn_dem", ("path",)),
     "grid_refine": ("grid_refine", ("bool",)),
     "grid_check_cell_m": ("grid_check_cell_m", ("num", 0.0, None)),
+    # 3.29.0: ACC (default), FV1, FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
+    "lisflood_solver": ("lisflood_solver", ("str",)),
+    "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
@@ -1018,6 +1021,11 @@ def build_settings(cfg, opts, need_models=True):
                 v = tuple(v)
             if key == "crest_burn_dem":
                 v = v or ""
+            if key == "lisflood_solver":                   # 3.29.0
+                try:
+                    v = workflow.lfmod.solver_from_text(v, st.lisflood_solver)
+                except workflow.lfmod.ModelError as e:
+                    raise CliError(str(e))
             if not hasattr(st, attr):
                 raise CliError("this version of the plugin has no run setting '{}'".format(attr))
             setattr(st, attr, v)
