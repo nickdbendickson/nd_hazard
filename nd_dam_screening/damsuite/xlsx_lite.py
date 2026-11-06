@@ -1,4 +1,4 @@
-"""A small .xlsx writer and reader with no dependency beyond the standard library (1.4.0).
+"""A small .xlsx writer and reader with no dependency beyond the standard library (1.5.0).
 
 QGIS's Python does not always have openpyxl, and GDAL's XLSX driver is not built into every
 QGIS; the suite's settings workbook must open and save everywhere, so this module writes and
@@ -15,6 +15,12 @@ Round-trips with Excel, LibreOffice and openpyxl were checked in the suite's tes
 reads what this writes and this reads what openpyxl writes). Formulas, styles beyond the bold
 header, merged cells, charts and comments are outside the subset: writing never produces them,
 reading ignores them.
+
+Reading is bounded (1.5.0): a sheet may hold at most MAX_ROWS rows and MAX_COLS columns (Excel's
+own limits) and its padded table at most MAX_CELLS cells, and no part of the file may unpack to more
+than MAX_PART_BYTES. A file past a limit raises XlsxTooLarge (a ValueError) with a plain message
+before anything large is allocated: a 704-byte file that names a cell at row 50,000,000 used to make
+read() build a 50-million-row table and freeze QGIS.
 """
 import re
 import zipfile
@@ -27,6 +33,16 @@ NS_PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
 _CTRL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f]")
 MAX_SHEET_NAME = 31
 _BAD_SHEET_CHARS = re.compile(r"[\\/*?:\[\]]")
+
+# read() limits (1.5.0). The suite's settings workbook is a few hundred rows by ~10 columns.
+MAX_ROWS = 1048576            # Excel's row limit
+MAX_COLS = 16384              # Excel's column limit (XFD)
+MAX_CELLS = 2000000           # rows x columns of one padded sheet table
+MAX_PART_BYTES = 64 * 1024 * 1024   # one unpacked XML part (sheet, shared strings, workbook)
+
+
+class XlsxTooLarge(ValueError):
+    """The workbook is past one of read()'s limits (damaged, hostile or not a settings file)."""
 
 
 # ------------------------------------------------------------------ write --
@@ -165,9 +181,19 @@ def _local(tag):
     return tag.split("}", 1)[-1]
 
 
+def _part(z, name):
+    """The bytes of one part of the zip, refused (XlsxTooLarge) when it unpacks to more than
+    MAX_PART_BYTES. KeyError when the part is missing."""
+    info = z.getinfo(name)
+    if info.file_size > MAX_PART_BYTES:
+        raise XlsxTooLarge("{} unpacks to {:,} bytes; the limit is {:,} (the file is damaged or "
+                           "is not a settings workbook)".format(name, info.file_size, MAX_PART_BYTES))
+    return z.read(info)
+
+
 def _strings(z):
     try:
-        root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+        root = ET.fromstring(_part(z, "xl/sharedStrings.xml"))
     except KeyError:
         return []
     out = []
@@ -219,17 +245,28 @@ def _cell_value(c, strings):
 
 def _ref_col(ref):
     m = re.match(r"([A-Za-z]+)", ref or "")
-    return col_index(m.group(1)) if m else None
+    if not m:
+        return None
+    letters = m.group(1)
+    if len(letters) > 3:                          # XFD is the last Excel column
+        return MAX_COLS + len(letters)            # past the limit, without big-number work
+    return col_index(letters)
+
+
+def _too_large(name, what):
+    return XlsxTooLarge("sheet '{}' {}; this reader stops at {:,} rows, {:,} columns and {:,} "
+                        "cells (the file is damaged or is not a settings workbook)".format(
+                            name, what, MAX_ROWS, MAX_COLS, MAX_CELLS))
 
 
 def read(path):
     """{sheet name: rows} of an .xlsx file (see the module text for the cell types)."""
     out = {}
     with zipfile.ZipFile(path) as z:
-        wb = ET.fromstring(z.read("xl/workbook.xml"))
+        wb = ET.fromstring(_part(z, "xl/workbook.xml"))
         rels = {}
         try:
-            for r in ET.fromstring(z.read("xl/_rels/workbook.xml.rels")):
+            for r in ET.fromstring(_part(z, "xl/_rels/workbook.xml.rels")):
                 rels[r.get("Id")] = r.get("Target")
         except KeyError:
             pass
@@ -247,7 +284,7 @@ def read(path):
                 sheets.append((el.get("name"), target))
         for name, target in sheets:
             try:
-                root = ET.fromstring(z.read(target))
+                root = ET.fromstring(_part(z, target))
             except KeyError:
                 out[name] = []
                 continue
@@ -259,6 +296,8 @@ def read(path):
                     r = int(row.get("r")) - 1
                 except (TypeError, ValueError):
                     r = len(rows)
+                if r >= MAX_ROWS:
+                    raise _too_large(name, "has a row numbered {:,}".format(r + 1))
                 cells = rows.setdefault(r, {})
                 nxt = 0
                 for c in row:
@@ -267,6 +306,9 @@ def read(path):
                     ci = _ref_col(c.get("r"))
                     if ci is None:
                         ci = nxt
+                    if ci >= MAX_COLS:
+                        raise _too_large(name, "has a cell past column {} ({})".format(
+                            col_letter(MAX_COLS - 1), str(c.get("r"))[:20]))
                     nxt = ci + 1
                     val = _cell_value(c, strings)
                     if val is not None and val != "":
@@ -276,6 +318,8 @@ def read(path):
                 continue
             width = max((max(cells) + 1 if cells else 0) for cells in rows.values())
             last = max(r for r, cells in rows.items() if cells) if any(rows.values()) else -1
+            if (last + 1) * width > MAX_CELLS:
+                raise _too_large(name, "would be a {:,} x {:,} table".format(last + 1, width))
             table = []
             for r in range(last + 1):
                 cells = rows.get(r, {})

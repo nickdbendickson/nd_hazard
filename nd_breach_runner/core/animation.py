@@ -496,6 +496,24 @@ def write_gif(path, frames, delay_cs=25, optimize=True, palette=PALETTE):
 # ======================================================================================
 # the snapshot file
 # ======================================================================================
+class SnapshotError(ValueError):
+    """The depth snapshot file is damaged, truncated or not one the Runner wrote."""
+
+
+# what numpy, zipfile and zlib raise on a damaged or cut-short .npz (a ValueError for most)
+_SNAPSHOT_FAULTS = (ValueError, EOFError, KeyError, IndexError, TypeError, OverflowError,
+                    MemoryError, struct.error, zlib.error, zipfile.BadZipFile)
+
+
+def _snapshot_error(npz_path, e):
+    if isinstance(e, SnapshotError):
+        return e
+    detail = str(e) or type(e).__name__
+    return SnapshotError(
+        "the depth snapshot file {} is damaged or incomplete ({}). Run the breach model again "
+        "with the animation option on to write it again.".format(npz_path, detail[:300]))
+
+
 def _read_exact(f, n):
     buf = bytearray()
     while len(buf) < n:
@@ -514,10 +532,34 @@ def _npy_header(f):
     return fmt.read_array_header_2_0(f)
 
 
+def _check_depth_header(zf, shape, dtype):
+    """Refuse a depth.npy header that cannot be the Runner's own: not 3-D, a negative size, not
+    a number type, or more data than the zip says it holds (so nothing huge is read or made)."""
+    if len(shape) != 3:
+        raise ValueError("the depth array is not (frames, rows, columns): {}".format(shape))
+    if any(int(v) < 0 for v in shape):
+        raise ValueError("the depth array has a negative size: {}".format(shape))
+    if dtype.hasobject or dtype.kind not in "fiub":
+        raise ValueError("the depth array is not numbers (type {})".format(dtype))
+    need = int(shape[0]) * int(shape[1]) * int(shape[2]) * int(dtype.itemsize)
+    have = zf.getinfo("depth.npy").file_size
+    if need > have:
+        raise ValueError("the depth array says {:,} bytes but the file holds {:,}".format(
+            need, have))
+
+
 def npz_info(npz_path):
     """{'times_s', 'n', 'ny', 'nx', 'meta'} of a snapshot file without reading
     the depth stack. `meta` holds any of x0, y0, dx, crs_wkt, t_ref_hr stored in
-    the .npz or in its '.grid.json' sidecar (see write_grid_sidecar)."""
+    the .npz or in its '.grid.json' sidecar (see write_grid_sidecar). A damaged
+    or truncated file raises SnapshotError (a ValueError) with a plain message."""
+    try:
+        return _npz_info(npz_path)
+    except _SNAPSHOT_FAULTS as e:
+        raise _snapshot_error(npz_path, e) from None
+
+
+def _npz_info(npz_path):
     with np.load(npz_path, allow_pickle=False) as z:
         if "times_s" not in z.files or "depth" not in z.files:
             raise ValueError("{} has no 'times_s' and 'depth' arrays".format(npz_path))
@@ -529,9 +571,8 @@ def npz_info(npz_path):
                 meta[k] = str(v) if k == "crs_wkt" else float(v)
     with zipfile.ZipFile(npz_path) as zf:
         with zf.open("depth.npy") as f:
-            shape, _fortran, _dtype = _npy_header(f)
-    if len(shape) != 3:
-        raise ValueError("the depth array is not (frames, rows, columns): {}".format(shape))
+            shape, _fortran, dtype = _npy_header(f)
+        _check_depth_header(zf, shape, dtype)
     if shape[0] != len(times):
         raise ValueError("{} depth frames but {} times".format(shape[0], len(times)))
     side = read_grid_sidecar(npz_path)
@@ -547,11 +588,20 @@ def npz_info(npz_path):
 
 def iter_depth_frames(npz_path, step=1):
     """(index, depth) for every `step`-th snapshot, depth a float32 (ny, nx)
-    array in metres, read one at a time from the compressed file."""
+    array in metres, read one at a time from the compressed file. A damaged or
+    truncated file raises SnapshotError (a ValueError) with a plain message."""
+    try:
+        yield from _iter_depth_frames(npz_path, step)
+    except _SNAPSHOT_FAULTS as e:
+        raise _snapshot_error(npz_path, e) from None
+
+
+def _iter_depth_frames(npz_path, step=1):
     step = max(1, int(step))
     with zipfile.ZipFile(npz_path) as zf:
         with zf.open("depth.npy") as f:
             shape, fortran, dtype = _npy_header(f)
+            _check_depth_header(zf, shape, dtype)
             if fortran or dtype.hasobject:
                 arr = None
             else:

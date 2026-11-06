@@ -48,7 +48,26 @@ class Cancelled(RuntimeError):
 
 # -- input files ---------------------------------------------------------------------------
 
-def _read_asc(path):
+# what a cut-short or damaged input file raises while it is parsed
+_INPUT_FAULTS = (ValueError, IndexError, KeyError, TypeError, OverflowError, MemoryError)
+
+
+def _load(what, reader, path, *args):
+    """reader(path, *args), with a damaged or truncated file reported as an EngineError that
+    names the file (a raw IndexError or ValueError used to reach the user)."""
+    try:
+        return reader(path, *args)
+    except EngineError:
+        raise
+    except _INPUT_FAULTS as e:
+        detail = str(e) or type(e).__name__
+        if isinstance(e, KeyError):
+            detail = "no {} line".format(e)
+        raise EngineError("the {} {} is truncated or damaged ({}); write the model files "
+                          "again".format(what, os.path.basename(path), detail[:200])) from None
+
+
+def _read_asc(path, shape=None):
     hdr = {}
     with open(path) as f:
         for _ in range(6):
@@ -61,6 +80,15 @@ def _read_asc(path):
         data = np.loadtxt(f, ndmin=2)
     ny, nx = int(hdr["nrows"]), int(hdr["ncols"])
     dx = hdr["cellsize"]
+    if ny <= 0 or nx <= 0 or not (np.isfinite(dx) and dx > 0):
+        raise ValueError("the header gives {} rows, {} columns and cell size {}".format(
+            ny, nx, dx))
+    if data.size != ny * nx:
+        raise ValueError("it holds {:,} values but its header says {:,} x {:,}".format(
+            data.size, ny, nx))
+    if shape is not None and (ny, nx) != tuple(shape):
+        raise ValueError("it is {} x {} cells but the DEM is {} x {}".format(
+            ny, nx, shape[0], shape[1]))
     xll = hdr.get("xllcorner", hdr.get("xllcenter", 0.0) - 0.5 * dx)
     yll = hdr.get("yllcorner", hdr.get("yllcenter", 0.0) - 0.5 * dx)
     return data.reshape(ny, nx), xll, yll, dx, hdr.get("nodata_value", NODATA)
@@ -106,6 +134,8 @@ def read_bdy(path):
             vals.append(float(v))
             ts.append(float(t) * scale)
             i += 1
+        if not vals:
+            raise ValueError("series '{}' has no values".format(name))
         out[name] = (np.asarray(ts), np.asarray(vals))
     return out
 
@@ -315,24 +345,32 @@ def run_par(par_path, progress=None, cancel=None, log=None):
     for key in ("demfile", "sim_time"):
         if key not in par:
             raise EngineError("the .par file has no '{}'".format(key))
-    z, xll, yll, dx, nod = _read_asc(path("demfile"))
+    z, xll, yll, dx, nod = _load("DEM file", _read_asc, path("demfile"))
     z = np.where(z == nod, np.nan, z)
     ny, nx = z.shape
-    sim = float(par["sim_time"])
-    massint = float(par.get("massint", 300.0))
-    saveint = float(par.get("saveint", sim + 10.0))
-    arr_depth = float(par.get("inittm_depth", 0.0))
-    n_def = float(par.get("fpfric", 0.06))
+
+    def num(key, default):
+        v = par.get(key, default)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            raise EngineError("the .par file's '{}' is not a number ({!r})".format(key, v))
+    sim = num("sim_time", None)
+    massint = num("massint", 300.0)
+    saveint = num("saveint", sim + 10.0)
+    arr_depth = num("inittm_depth", 0.0)
+    n_def = num("fpfric", 0.06)
     n = np.full(z.shape, n_def)
     if "manningfile" in par:
-        ng, _, _, _, nn = _read_asc(path("manningfile"))
+        ng, _, _, _, nn = _load("Manning's n file", _read_asc, path("manningfile"), z.shape)
         n = np.where((ng == nn) | ~np.isfinite(ng) | (ng <= 0), n_def, ng)
     h0 = np.zeros(z.shape)
     if "startfile" in par:
-        s, _, _, _, sn = _read_asc(path("startfile"))
+        s, _, _, _, sn = _load("start-depth file", _read_asc, path("startfile"), z.shape)
         h0 = np.where((s == sn) | ~np.isfinite(s), 0.0, s)
-    pts, free = read_bci(path("bcifile")) if "bcifile" in par else ([], set())
-    bdy = read_bdy(path("bdyfile")) if "bdyfile" in par else {}
+    pts, free = _load("boundary (.bci) file", read_bci, path("bcifile")) if "bcifile" in par \
+        else ([], set())
+    bdy = _load("inflow (.bdy) file", read_bdy, path("bdyfile")) if "bdyfile" in par else {}
     ytop = yll + ny * dx
     by_name = {}
     for x, y, name in pts:
@@ -350,7 +388,7 @@ def run_par(par_path, progress=None, cancel=None, log=None):
         rr = np.array([c[0] for c in cells])
         cc = np.array([c[1] for c in cells])
         sources.append((rr, cc, ts, vals * dx))       # QVAR is per unit width
-    gauges = read_gauges(path("gaugefile")) if "gaugefile" in par else []
+    gauges = _load("gauge file", read_gauges, path("gaugefile")) if "gaugefile" in par else []
     solver = "fv1" if "fv1" in par else "acceleration"
     if solver == "fv1":
         say("The built-in engine runs 'fv1' with its local-inertial scheme.")

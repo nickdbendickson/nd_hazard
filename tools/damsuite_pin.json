@@ -1,6 +1,6 @@
 {
  "files": {
-  "__init__.py": "017ef29c3f8e4bb91bb14f9f5493f24926772e58dc0953a4e7e1f3f74e0b9b8e",
+  "__init__.py": "d2f8f33b54435b2435545149619198e01c9ccde3f0014c121affaa2488924687",
   "abi.py": "3dfbb697fc0823f2ac303321e9f39002b0abf921d9cc00bb2b6e6448076bf47e",
   "cascade.py": "c793fd0d12cb6e45e1cae588df34de9bb45616ee8b9ebecc50fa75e0b8aa1f69",
   "chain.py": "439b80486c0136beb77ab73b71bfcd1122e723186f25325780068ab36cddbe9b",
@@ -45,16 +45,16 @@
   "updatecore.py": "563a0b44242abadd066d42cc6cbd3e25b61a413c4c67f61df980ad75c5aafa11",
   "updatesources.py": "da7c279769c8fbf6be0abaae78e04f359397b0ab982328eb3c2587467818a119",
   "vdatum.py": "1d3f7ec9c943abe94e90e125e48324a1e019a547957530024723db640cb45e9e",
-  "versions.py": "536bfd6567436ab0bcdbe5c859190b96d32e415154e364a4eb0022848700d4c4",
+  "versions.py": "ab13c9af786e305e5bc182e9350c440d5567797b0b1c4e5c5b9bc495bf335b9b",
   "vertcon_nd.py": "337cc8512d2ddc31e2edd6986b15f7535ebb53ca791b5e08faf15c716af2c3a8",
-  "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
+  "xlsx_lite.py": "3f47b44e1ccf3d8dfdf8352d216712761dbd1b26386776d32eed6c2fc5b3e614"
  },
  "fork_specific": [
   "__init__.py",
   "suite_home.py",
   "versions.py"
  ],
- "pin": "damsuite-pin-v6",
- "pin_sha256": "c2f939a3b8ade9d5164d78f91a543f9a78a78aa1b5f70f4bca5011b5bd9fe447",
+ "pin": "damsuite-pin-v7",
+ "pin_sha256": "7bfa6a7c60e49978710e26264e49fe6a1b3419848d4b43327eb11219cc87b4f4",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }
