@@ -249,13 +249,27 @@ def default_curves():
 
 
 def _read_csv_rows(path):
+    """Rows of a CSV as {lower-case header: stripped text}. ValueError with a plain message for
+    a row with more values than the header has columns (csv.DictReader keeps the extras as a
+    list under the key None, which used to crash here) and for text the csv module refuses."""
+    name = os.path.basename(path)
     with open(path, newline="", encoding="utf-8-sig") as f:
         rd = csv.DictReader(f)
-        if rd.fieldnames is None:
-            raise ValueError("{} is empty".format(path))
-        rows = []
-        for r in rd:
-            rows.append({(k or "").strip().lower(): (v or "").strip() for k, v in r.items()})
+        try:
+            if rd.fieldnames is None:
+                raise ValueError("{} is empty".format(path))
+            rows = []
+            for r in rd:
+                extra = r.pop(None, None)
+                if extra is not None:
+                    raise ValueError(
+                        "{} line {}: {} values, but the header row has {} columns ({}); remove "
+                        "the extra values or add a header for them".format(
+                            name, rd.line_num, len(rd.fieldnames) + len(extra),
+                            len(rd.fieldnames), ", ".join(str(k) for k in rd.fieldnames)))
+                rows.append({(k or "").strip().lower(): (v or "").strip() for k, v in r.items()})
+        except csv.Error as e:
+            raise ValueError("{} line {} cannot be read as CSV: {}".format(name, rd.line_num, e))
     return rows
 
 

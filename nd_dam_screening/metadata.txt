@@ -5,14 +5,15 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Simple tab, settings grid, preflight check, run one dam, review, statewide priority list) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.33.12
+version=0.33.13
 icon=icon.svg
 author=
 about=Screening-level tool. Output is for prioritization only; official hazard classification is determined by the ND Department of Water Resources.
 tracker=
 repository=
 experimental=True
-changelog=0.33.12: (2026-11-05) shared damsuite 1.18.8: the data updaters' engine and source list are shared (damsuite/updatecore.py, updatesources.py); this plugin does not use them and is unchanged.
+changelog=0.33.13: (2026-11-06) shared damsuite xlsx_lite 1.5.0, pin damsuite-pin-v7 (security audit pass 3, Nick 2026-11-06): the shared .xlsx reader is bounded. A 704-byte damsuite_settings.xlsx naming a cell at row 50,000,000 made read() build a 50-million-row table and freeze QGIS; a sheet past Excel's limits (1,048,576 rows, 16,384 columns), a padded table over 2,000,000 cells or a part that unpacks to more than 64 MB now raises XlsxTooLarge (a ValueError), so the settings file is refused with a plain message (SettingsError) before anything large is allocated. Nothing else in this plugin changes.
+    0.33.12: (2026-11-05) shared damsuite 1.18.8: the data updaters' engine and source list are shared (damsuite/updatecore.py, updatesources.py); this plugin does not use them and is unchanged.
     0.33.11: (2026-11-05) shared damsuite 1.18.7: the pack readers answer to the old barrier names SARP_* with the ABI_* layers of the one shared pack layer list (hydro3dhp.ALIASES); nothing else changed.
     0.33.10: (2026-11-05) shared damsuite 1.18.6: the offline pack builder is one engine for both suites, damsuite/packengine.py; this plugin does not build packs and is unchanged otherwise.
     0.33.9: (2026-11-05) Browser connections: the suite's map services (WMS/WMTS, XYZ Tiles, ArcGIS REST Servers: USGS 3DEP / 3DHP / NHD / topo / imagery, NLCD, ND GIS Hub, DWR MapService, NID, NTAD rail / crossings / NBI, FEMA NFHL and USA Structures, SARP, USGS stream crossings, NAIP and the services added in Suite data and servers) are added to the QGIS Browser as 'ND Dam Suite: ...' connections when QGIS starts, each once (a deleted or edited one is left alone); setting ndsuite/register_connections = false turns it off (shared damsuite pin v3, connections.py). Test: ND_Dam_Hazard_Helper/tests/test_browser_connections.py
