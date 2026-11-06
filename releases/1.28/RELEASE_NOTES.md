@@ -1,9 +1,8 @@
 # ND Dam Suite — release 1.28 (2026-11-06)
 
-Built from current `main` of `nickdbendickson/nd_hazard` at `a8f53ed` (CI green on that head:
-fast-checks, plugin-suites, model-tests). Each zip's archive comment carries the source commit
+Built from current `main` of `nickdbendickson/nd_hazard` at `c1683bb`. Each zip's archive comment carries the source commit
 (`unzip -z <zip>`). Tests are included, no caches. The DamSafety set is built from
-`nickdbendickson/DWR_Plugins` `main` at `792b793` (see the bottom of this page).
+`nickdbendickson/DWR_Plugins` `main` at `d03df4b` (see the bottom of this page).
 
 ## Versions
 
@@ -12,7 +11,7 @@ fast-checks, plugin-suites, model-tests). Each zip's archive comment carries the
 | Plugin | 1.27 | 1.28 |
 |---|---|---|
 | ND Dam Hazard Classification Helper | 2.35.2 | **2.35.16** |
-| ND Breach Runner | 3.27.1 | **3.28.0** |
+| ND Breach Runner | 3.27.1 | **3.28.1** |
 | ND Dam Screening | 0.33.2 | **0.33.12** |
 | ND Data Updater | 1.7.0 | **1.8.0** |
 
@@ -20,6 +19,14 @@ Install: QGIS → Plugins → Manage and Install Plugins → Install from ZIP. K
 DamSafety set in **separate QGIS profiles**; they register the same Processing ids.
 
 ## What's new since 1.27
+
+### Runner: re-run LISFLOOD-FP with stable ACC settings when it makes water (Runner 3.28.1, #67)
+LISFLOOD-FP's ACC defaults (theta 1.0, CFL 0.7) can make water where a cell empties past zero.
+When an ACC run's volume error is over 1 %, the Runner now runs it again in place with theta 0.7
+and CFL 0.5, uses those settings for every later run of that dam, and adds a warning to the
+report. Runs that already balance are unchanged (`NDBREACH_STABILITY_RETRY=0` turns it off).
+DWR-2865 at 10 m went from +567 % volume error (838 ac > 0.1 ft) to 0.0 % (213 ac); DWR-4031
+from +36 % to −0.2 %. DamSafety Runner 3.15.1 (DWR_Plugins #277) has the same fix.
 
 ### Runner: crest burn and an automatic finer grid, on by default (Runner 3.28.0, #59)
 Before the model runs, every grid cell crossed by a road or railway is raised to the highest
@@ -74,20 +81,20 @@ included.
   container's ANUGA venv (known, not a plugin fault, same as 1.26); `nddam:selftest` (LISFLOOD) OK.
 
 ## DamSafety (DWR) set
-Built from `DWR_Plugins` `main` at `792b793` without `tests/`; not committed here. Last bundled in
+Built from `DWR_Plugins` `main` at `d03df4b` without `tests/`; not committed here. Last bundled in
 1.26.
 
 | Plugin | 1.26 | 1.28 |
 |---|---|---|
 | DamSafety Hazard | 2.18.61 | **2.23.8** |
-| DamSafety Runner | 3.10.80 | **3.15.0** |
+| DamSafety Runner | 3.10.80 | **3.15.1** |
 | DamSafety Screening | 0.17.45 | **0.18.11** |
 | DamSafety Data | 1.4.4 | **1.7.0** |
 | DamSafety Setup | 1.0.15 | **1.0.20** |
 | DamSafety Hazard Lite | 0.1.0 | **0.1.4** |
 | ND PMP Tool (prototype) | 0.3.0 | **0.4.1** |
 
-Recent DamSafety work: the same crest burn + finer grid defaults (Runner 3.15.0, #270, also ports
+Recent DamSafety work: the same ACC-stability re-run (Runner 3.15.1, #277), the same crest burn + finer grid defaults (Runner 3.15.0, #270, also ports
 the grid-spread advisory), the shared pack builder / layer list / updater (#271–#275), and
 **DamSafety Data 1.7.0 (#276): the offline pack it built is kept up to date** (on by default, at
 most once a day: missing layers are built and layers older than 30 days fetched again, both pack
