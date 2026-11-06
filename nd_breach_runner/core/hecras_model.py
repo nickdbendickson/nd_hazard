@@ -2665,6 +2665,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "target_cells": 100000, "equation": EQ_SWE, "base_flow_cfs": 0.0,
             "terrain_cell": 0.0, "max_terrain_cells": 150e6, "extent_depth_ft": 0.0,
             "manning_n": None, "courant": None,
+            # 3.29.2: Froehlich (2008) piping replaces the run's breach values ('overwrite');
+            # 'fill_missing' (opt-in) only fills what the run's method lacks
+            "breach_f2008": "overwrite",
             "structures": True,                  # v3.12.0: the run's culverts and bridges
             "breaklines": True,                  # v3.23.0: enforce cell faces along the dam
                                                  #          crest and road embankments
@@ -3012,6 +3015,8 @@ def _build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=N
     notes = list(first_notes)
     progress(2, "reading the run")
     hy, dam, params = hecras.load_run(dam_folder)
+    if o.get("breach_f2008"):                         # 3.29.2: overwrite (default) / fill_missing
+        params = dict(params, breach_f2008=o["breach_f2008"])
     model_dir = os.path.join(dam_folder, hecras.MODEL_FOLDER)
     with open(os.path.join(model_dir, hecras.RUN_REPORT_JSON)) as f:
         report = json.load(f)
