@@ -187,10 +187,12 @@ def builder_lists_3dhp_barriers_files_and_land_cover():
     assert f[4]["url"] == C.NHD_FLOWLINE_URL and f[4]["transform"] is H.normalise_flowlines
     assert w[4]["transform"] is H.normalise_waterbodies and "areasqkm" in w[4]["fields"]
     assert "gnisidlabel" in f[4]["fields"] and "id3dhp" in f[4]["fields"]
-    s = rows["SARP_dams"]
-    assert s[2] == "barriers" and s[4]["url"] == C.SARP_DAMS_URL and "NIDID" in s[4]["fields"]
-    assert rows["SARP_surveyed_crossings"][4]["url"] == C.SARP_CROSSINGS_URL
-    assert "SARP_unsurveyed_crossings" not in rows
+    # 2.35.15 (packbuild 1.1): the barrier layers are the shared ABI_* list (test_pack_crossings.py)
+    s = rows["ABI_dams"]
+    assert s[2] == "barriers" and s[3] == "abi" and s[4] == dict(s[4], mode="api", kind="dams")
+    assert rows["ABI_small_barriers_surveyed"][4]["kind"] == "barriers"
+    assert rows["ABI_road_crossings_unsurveyed"][4]["mode"] == "zip"
+    assert rows["NDDEQ_landfills"][2] == "nddeq"
     for n in PF.NAMES:
         assert rows[n][3] == "file", n
     assert rows["DWR_dams"][4]["fallback"]["url"] == C.DWR_DAMS_URL
@@ -198,6 +200,7 @@ def builder_lists_3dhp_barriers_files_and_land_cover():
     # old group names still select the new layers
     assert B._pick("nhd", list(rows.values())) == {"hydro"}
     assert B._pick("NHD_flowlines,sarp", list(rows.values())) == {"3DHP_flowlines", "barriers"}
+    assert B._pick("SARP_dams", list(rows.values())) == {"ABI_dams"}
     # a data-source file that points the address at the older NHD service gets that service's fields
     spec = B._hydro_spec("https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6", True)
     assert "transform" not in spec and spec["fields"].startswith("gnis_name")
@@ -224,6 +227,10 @@ def builder_transforms_each_batch_before_it_is_stored():
     class W(object):
         def __init__(self):
             self._cur = {"n": 0}
+
+        @property
+        def count(self):                 # suite 1.18.6: the engine reads the public count
+            return self._cur["n"]
 
         def chunks(self):
             return {}
@@ -272,6 +279,10 @@ def a_heavy_layer_is_read_in_tiles_paged_by_offset():
     class W(object):
         def __init__(self):
             self._cur = {"n": 0}
+
+        @property
+        def count(self):                 # suite 1.18.6: the engine reads the public count
+            return self._cur["n"]
 
         def chunks(self):
             return {}

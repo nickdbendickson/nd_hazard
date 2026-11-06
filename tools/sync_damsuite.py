@@ -40,6 +40,9 @@ ND_PLUGINS = ("ND_Dam_Hazard_Helper", "nd_breach_runner", "nd_dam_screening", "n
 ND_NOT_VENDORED = frozenset({
     "health.py", "layout.py", "pack_convert.py", "record.py",
     "servers.py", "structure_flags.py", "suite_config.py", "suite_fill.py",
+    # suite 1.18.6: the DWR GeoPackage reader of the shared pack builder (needs suite_fill); the
+    # nd builder reads the DWR files through packfiles and imports dwrfiles only for --dwr-folder
+    "dwrfiles.py",
 })
 
 

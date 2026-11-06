@@ -5,6 +5,11 @@ Classification Helper. Pure data - no QGIS imports needed here."""
 import os as _os
 
 PLUGIN_NAME = "ND Dam Hazard Classification Helper"
+# 2.34.0: the window's banner (docs/gui-grammar.md) - the wording the plugin already uses (README
+# "WHAT IT DOES", the submittal cover letter, the Runner's banner); no new authority is cited
+DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
+              "USBR ACER TM 11. They are not the classification until the engineer of record "
+              "adopts them; the Department of Water Resources decides the official hazard class.")
 
 
 def _version_from_metadata(fallback, path=None):
@@ -26,7 +31,7 @@ def _version_from_metadata(fallback, path=None):
     return fallback
 
 
-PLUGIN_VERSION = _version_from_metadata("2.28.0")
+PLUGIN_VERSION = _version_from_metadata("2.31.0")
 OUTPUT_FOLDER_NAME = "outputs"
 
 # ------------------------------------------------------------ layer tree ----
@@ -73,14 +78,10 @@ CLASS_JUDGMENT = 2
 CLASS_LOW = 3
 CLASS_NODATA = -9999
 
-BTN_ACTIVE_STYLE = (
-    "background-color: #4CAF50; color: white; "
-    "font-weight: bold; padding: 10px 20px; border-radius: 4px;"
-)
-BTN_INACTIVE_STYLE = (
-    "background-color: #B0BEC5; color: #eceff1; "
-    "font-weight: bold; padding: 10px 20px; border-radius: 4px;"
-)
+# docs/gui-grammar.md: the primary button keeps Qt's own look; bold says it is the main action
+# and Qt greys it when it is disabled (it was painted green / grey before).
+BTN_ACTIVE_STYLE = "font-weight: bold; padding: 10px 20px;"
+BTN_INACTIVE_STYLE = BTN_ACTIVE_STYLE
 
 # How often (in features) the processing loops report progress. The dialog
 # additionally throttles UI refreshes to PROGRESS_MIN_INTERVAL_S seconds.
@@ -291,6 +292,9 @@ ARCGIS_MAX_PAGES = 200
 # v2.6: downloads run side by side - services, ArcGIS pages and NSI tiles.
 # At most this many HTTP requests are in flight at once (Overpass: 2).
 DOWNLOAD_WORKERS = 6
+# suite 1.18.6: the layer list of the shared pack builder (damsuite/packengine.py) - "nd" (this
+# suite: 3DHP hydro, SARP barriers, layer files, land cover, a pack folder) or "dwr" (DamSafety)
+PACK_LAYERS = "nd"
 OVERPASS_WORKERS = 2
 DOWNLOAD_FOLDER_NAME = "_downloads"
 # ND GIS Hub "NDGISHUB SiteStructure Address Points" (NENA NG9-1-1 site /
@@ -450,6 +454,14 @@ SARP_DAMS_URL = ("https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/servi
                  "Aquatic_Barrier_Prioritization_Dams_v360/FeatureServer/0")
 SARP_CROSSINGS_URL = ("https://services.arcgis.com/QVENGdaPbd4LUkLV/ArcGIS/rest/services/"
                       "Aquatic_Barrier_Prioritization_RoadBarriers_v360/FeatureServer/0")
+# 2.35.11: the unsurveyed (modelled) road-stream crossings are not in the SARP services: they come
+# from the inventory's national road-crossings download (CSV in a zip, ~600 MB; the ND rows with
+# Surveyed = 'not likely' are kept). The USGS Database of Stream Crossings in the United States
+# (Wieferich 2022, doi:10.5066/P9YX6KTB; TIGER 2020 roads x NHD HR flowlines) is the base layer
+# the SARP crossings are built on.
+SARP_ROAD_CROSSINGS_ZIP = "https://tool.aquaticbarriers.org/downloads/national/road_crossings.zip"
+USGS_STREAM_CROSSINGS_URL = ("https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/"
+                             "stream_crossings/FeatureServer/0")
 TRAVEL_STATION_MI = 0.5       # travel-time table: a station every ... miles
 TRAVEL_SEARCH_FT = 150.0      # station value: deepest / earliest cell within this
 TRAVEL_MAX_MI = 200.0         # traced channel is cut here
@@ -483,7 +495,8 @@ SOURCE_KEYS = ("NSI_API_URL", "NARN_URL", "CROSSINGS_URL", "USA_STRUCTURES_URL",
                "ND_ADDRESS_POINTS_URL", "NID_URL", "NID_MIRROR_URL", "OVERPASS_URL",
                "ND_ROADS_URL", "HPMS_ND_URLS", "ND_COUNTY_ROADS_URL", "NBI_URL",
                "NDDOT_AADT_URL", "NHD_FLOWLINE_URL", "NHD_WATERBODY_URL",
-               "SARP_DAMS_URL", "SARP_CROSSINGS_URL", "DWR_DAMS_URL",
+               "SARP_DAMS_URL", "SARP_CROSSINGS_URL", "SARP_ROAD_CROSSINGS_ZIP",
+               "USGS_STREAM_CROSSINGS_URL", "DWR_DAMS_URL",
                "AERIAL_IMAGERY_URL", "WEBMAP_URL_TEMPLATE")
 SOURCES_FILE_NAME = "ND_Dam_Hazard_Helper_data_sources.json"
 SOURCE_OVERRIDES = {}          # what the file changed (shown in the run log)
