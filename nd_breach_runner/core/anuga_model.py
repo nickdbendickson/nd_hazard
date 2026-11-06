@@ -205,19 +205,30 @@ def _tail_text(path, chars=2000):
         return ""
 
 
+def _regrid(src, ref):
+    """`src` (a Grid) resampled onto the cell centres of `ref` (a Grid); None stays None.
+    Used so the manning and initial-depth grids share the ANUGA elevation grid, which the
+    worker samples all three on with one origin/cell."""
+    if src is None:
+        return None
+    X, Y = np.meshgrid(ref.x_centers(), ref.y_centers())
+    return ref.like(src.sample_bilinear(X, Y))
+
+
 def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, st,
         progress=None, cancel=None, log=None, structures=None, initial_depth=None,
-        refine_lines=None, reuse=False):
+        refine_lines=None, reuse=False, mesh_elev_dem=None):
     # v3.12.0: the computer is kept awake while ANUGA runs (damsuite.keepawake, beside the
     # worker process, which stays this plugin's own child so Cancel still kills it)
     with keep_awake("ANUGA", log=log):
         return _run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph,
-                    st, progress, cancel, log, structures, initial_depth, refine_lines, reuse)
+                    st, progress, cancel, log, structures, initial_depth, refine_lines, reuse,
+                    mesh_elev_dem)
 
 
 def _run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, st,
          progress=None, cancel=None, log=None, structures=None, initial_depth=None,
-         refine_lines=None, reuse=False):
+         refine_lines=None, reuse=False, mesh_elev_dem=None):
     if not st.python or not os.path.isfile(st.python):
         raise ModelError("ANUGA Python interpreter not found: {}".format(st.python))
     os.makedirs(workdir, exist_ok=True)
@@ -234,7 +245,18 @@ def _run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph,
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
-    write_job(job, dem, outer, fine, inlet, hydrograph, st, dem, initial_depth, culverts,
+    # 3.27.10: an optional finer elevation grid (mesh_elev_dem) sets the mesh terrain, while the
+    # coarse `dem` stays the output grid. The worker samples elevation, manning and initial
+    # depth on one origin/cell, so the manning and initial-depth grids are resampled to match.
+    elev = dem if mesh_elev_dem is None else mesh_elev_dem
+    ship_st = st
+    init_ship = initial_depth
+    if mesh_elev_dem is not None:
+        import copy
+        ship_st = copy.copy(st)
+        ship_st.manning_grid = _regrid(st.manning_grid, elev)
+        init_ship = _regrid(initial_depth, elev)
+    write_job(job, elev, outer, fine, inlet, hydrograph, ship_st, dem, init_ship, culverts,
               breaklines, regions)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
                header="x,y", comments="", fmt="%.3f")

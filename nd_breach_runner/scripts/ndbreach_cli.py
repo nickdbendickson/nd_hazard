@@ -176,6 +176,7 @@ MODEL_KEYS = {
     "anuga_coarse_area_m2": ("anuga_coarse_area_m2", ("num", 1.0, None)),
     "anuga_near_field_mi": ("anuga_near_field_mi", ("num", 0.0, None)),
     "anuga_buffer_m": ("anuga_buffer_m", ("num", 0.0, None)),
+    "anuga_cell_m": ("anuga_cell_m", ("num", 0.0, None)),
     "arrival_contours_hr": ("arrival_contours_hr", ("nums",)),
     # 3.28.0
     "crest_burn": ("crest_burn", ("bool",)),
@@ -422,7 +423,7 @@ TEMPLATE = {
         "expand_step_mi": 3.0, "max_extent_mi": 60.0, "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,
-        "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,
+        "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0, "anuga_cell_m": 0.0,
         "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         "crest_burn": True, "crest_burn_dem": None, "grid_refine": True,
         "grid_check_cell_m": workflow.GRID_CHECK_CELL_M},
