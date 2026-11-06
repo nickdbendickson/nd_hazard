@@ -56,7 +56,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.28.0"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.28.1"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -257,6 +257,12 @@ class RunSettings:
         # v3.4.0: LISFLOOD-FP floodplain solver keyword ("acceleration" everywhere by default;
         # "fv1" is what the near-dam refine uses for its fine run)
         self.lisflood_solver = lfmod.SOLVER_ACC
+        # 3.28.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
+        # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
+        # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
+        # never changed.
+        self.lisflood_stability_retry = os.environ.get(
+            "NDBREACH_STABILITY_RETRY", "1").strip() not in ("0", "false", "no", "off")
         # v3.4.0: near-dam refine (refine.py): when a receptor lies within refine_dist_mi of
         # the breach and the final rasters come from the ACC run, re-run that stretch on a
         # fine FV1 grid (refine_cell_m; 0 = half the main cell) and merge it in. Off by
@@ -364,6 +370,10 @@ def key_settings(st):
         d.pop("close_upstream_edges", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
+    # 3.28.1: the stability re-run never changes a run that balances, so it stays out of the key
+    # while on (a 3.28.0 checkpoint resumes)
+    if getattr(st, "lisflood_stability_retry", True):
+        d.pop("lisflood_stability_retry", None)
     # 3.20.0: the crossings only change the terrain when they are cut, so a run that merely
     # reports them keeps the checkpoint key of a 3.19.x run
     if not getattr(st, "crossing_gaps", False):
@@ -1369,18 +1379,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             return refmod.upstream_edges(direction)
         return ()
 
+    # 3.28.1: stable ACC settings once a run of this dam lost its mass balance (lfmod.STABLE_*).
+    # A resumed run picks them up from the marker its LISFLOOD-FP folder was left with.
+    stability = {"on": False, "events": []}
+    if state.resumed and os.path.exists(os.path.join(model_dir, "lisflood",
+                                                     lfmod.STABILITY_MARKER)):
+        stability["on"] = True
+
+    def stable_kw():
+        if stability["on"] and getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == \
+                lfmod.SOLVER_ACC:
+            return {"theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
+        return {}
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
         init = terrain_src.initial_depth(bnds, cs) if has_ponds else None
         gl = gauge_list(bnds, gauges)
-        lst = lfmod.LisfloodSettings(st.lisflood_exe, st.threads, st.manning_n, man, arrival_m,
-                                     sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
-                                     initial_depth=init, gauges=gl, snapshot_s=snap,
-                                     extra_sources=extra_sources(sim_s),
-                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
-                                     closed_edges=closed_edges(),
-                                     allow_unpatched=getattr(st, "allow_unpatched", False))
+
+        def settings():
+            return lfmod.LisfloodSettings(
+                st.lisflood_exe, st.threads, st.manning_n, man, arrival_m,
+                sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
+                initial_depth=init, gauges=gl, snapshot_s=snap,
+                extra_sources=extra_sources(sim_s),
+                solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                closed_edges=closed_edges(),
+                allow_unpatched=getattr(st, "allow_unpatched", False), **stable_kw())
+        lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
             for _i, fp in lfmod.snapshot_files(wd):
@@ -1389,6 +1416,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         os.remove(fp[:-3] + ext)
                     except OSError:
                         pass
+        marker = os.path.join(wd, lfmod.STABILITY_MARKER)
+        if not stability["on"] and os.path.exists(marker):
+            os.remove(marker)
         par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
         runtime = lfmod.run(wd, par, lst, prog, cancel, log)
         if getattr(lst, "unpatched_used", False):
@@ -1396,6 +1426,40 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 warnings.append(lfmod.PATCH_MISSING_WARNING)
             report["lisflood_unpatched"] = True
         env = lfmod.read_results(wd, dem, lst, hyd)
+        err = env.stats.get("max_volume_error_pct")
+        if (not stability["on"] and getattr(st, "lisflood_stability_retry", True)
+                and lst.solver == lfmod.SOLVER_ACC and err is not None
+                and err > lfmod.STABILITY_RETRY_PCT):
+            stability["on"] = True
+            log("LISFLOOD-FP lost its mass balance ({:.1f}% of the injected volume); running "
+                "it again with theta {:g} and CFL {:g}.".format(err, lfmod.STABLE_THETA,
+                                                                lfmod.STABLE_CFL))
+            lst = settings()
+            par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
+            runtime += lfmod.run(wd, par, lst, prog, cancel, log)
+            env = lfmod.read_results(wd, dem, lst, hyd)
+            err2 = env.stats.get("max_volume_error_pct")
+            ev = {"run": "lisflood" + tag, "error_pct": err, "stable_error_pct": err2,
+                  "theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
+            stability["events"].append(ev)
+            report["lisflood_stability"] = {"stable_settings": True,
+                                            "theta": lfmod.STABLE_THETA,
+                                            "cfl": lfmod.STABLE_CFL,
+                                            "events": stability["events"]}
+            warnings.append(
+                "LISFLOOD-FP lost its mass balance with its default settings (volume error "
+                "{:.1f}% of the injected volume: the solver made water). The run was repeated "
+                "with theta {:g} and CFL {:g} (volume error now {}%), and every later run of "
+                "this dam uses them. The results come from the repeated run.".format(
+                    err, lfmod.STABLE_THETA, lfmod.STABLE_CFL,
+                    "?" if err2 is None else "{:.2f}".format(err2)))
+        if stability["on"] and lst.solver == lfmod.SOLVER_ACC:
+            with open(marker, "w") as f:
+                json.dump({"theta": lst.theta, "cfl": lst.cfl}, f)
+            report.setdefault("lisflood_stability", {"stable_settings": True,
+                                                     "theta": lfmod.STABLE_THETA,
+                                                     "cfl": lfmod.STABLE_CFL,
+                                                     "events": stability["events"]})
         return env, dem, init, runtime, wd, lst
 
     def load_lisflood(tag, hyd, bnds, sim_s):
@@ -1409,7 +1473,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      initial_depth=init, gauges=gl,
                                      extra_sources=extra_sources(sim_s),
                                      solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
-                                     closed_edges=closed_edges())
+                                     closed_edges=closed_edges(), **stable_kw())
         return lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd), \
             dem, init
 
