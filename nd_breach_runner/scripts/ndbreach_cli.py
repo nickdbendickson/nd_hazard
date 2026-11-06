@@ -182,7 +182,7 @@ MODEL_KEYS = {
     "crest_burn_dem": ("crest_burn_dem", ("path",)),
     "grid_refine": ("grid_refine", ("bool",)),
     "grid_check_cell_m": ("grid_check_cell_m", ("num", 0.0, None)),
-    # 3.29.0: ACC (default), FV1, FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
+    # 3.29.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
 }

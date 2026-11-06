@@ -108,9 +108,9 @@ class Provider(QgsProcessingProvider):
                 self.name(), SET_LISFLOOD, "LISFLOOD-FP executable (built with the "
                 "arrival-depth patch; empty = the one bundled with the plugin on Windows and "
                 "Linux, else the built-in engine)", lf, valuetype=Setting.FILE))
-            # 3.29.0: the default LISFLOOD-FP solver (ACC, FV1, FV2 or MWDG2; empty = ACC)
+            # 3.29.0: the default LISFLOOD-FP solver (ACC, FV2 or MWDG2; empty = ACC)
             ProcessingConfig.addSetting(Setting(
-                self.name(), SET_SOLVER, "Default LISFLOOD-FP solver: ACC, FV1, FV2 or MWDG2 "
+                self.name(), SET_SOLVER, "Default LISFLOOD-FP solver: ACC, FV2 or MWDG2 "
                 "(empty = ACC; the NDBREACH_LISFLOOD_SOLVER environment variable wins)", ""))
             # 3.11.0
             ProcessingConfig.addSetting(Setting(

@@ -31,7 +31,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
                    outlets as outmod, damjson, stoprule, products as prodmod,
                    batchqueue, gaps as gapsmod)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
-from .core.lisflood import SOLVERS as lfmod_order, SOLVER_LABELS as lfmod_labels  # 3.29.0
+from .core.lisflood import MAIN_SOLVERS as lfmod_order, SOLVER_LABELS as lfmod_labels  # 3.29.0
 from .core.anuga_model import check_anuga
 from .core.units import ARRIVAL_DEPTH_FT, FT, MILE
 from .damsuite import solvegate as SG
@@ -625,11 +625,12 @@ class _Base(QgsProcessingAlgorithm):
             "SOLVER", "LISFLOOD-FP solver (Default = the NDBREACH_LISFLOOD_SOLVER environment "
             "variable, else the provider setting, else ACC)",
             ["Default"] + [lfmod_labels[k] for k in lfmod_order], defaultValue=0, optional=True)
-        set_help(p, "ACC (local inertial) is the default and the fastest. FV1, FV2 and MWDG2 "
-                 "solve the full shallow-water equations and are much slower (FV2 / MWDG2 about "
-                 "100 times ACC); FV2 and MWDG2 use the slope limiter. FV1 writes no maximum "
-                 "velocity or arrival time, so those come from an ACC run of the same domain. "
-                 "The ACC stability re-run and the near-dam refine apply to ACC runs only.")
+        set_help(p, "ACC (local inertial) is the default and the fastest. FV2 and MWDG2 solve "
+                 "the full shallow-water equations with the slope limiter and are much slower "
+                 "(about 100 times ACC). Only solvers that write the maximum velocity and honour "
+                 "the arrival-depth patch are offered (FV1 and DG2 are not); before an FV2 / "
+                 "MWDG2 run the tool checks that the LISFLOOD-FP build does both, and stops if "
+                 "not. The ACC stability re-run and the near-dam refine apply to ACC runs only.")
         self.addParameter(set_advanced(p))
         self._bool("STOP_RULE", "Class-stop rule: accept an edge where the flood's depth (or "
                    "its rise over the no-breach baseline) stays below the threshold along the "
@@ -813,7 +814,7 @@ class _Base(QgsProcessingAlgorithm):
             from .core import lisflood as _lf
             i = self.parameterAsEnum(parameters, "SOLVER", context) or 0
             if i > 0:
-                st.lisflood_solver = _lf.SOLVERS[i - 1]
+                st.lisflood_solver = _lf.MAIN_SOLVERS[i - 1]
             elif not os.environ.get(_lf.SOLVER_ENV, "").strip():
                 st.lisflood_solver = _lf.solver_from_text(_setting(SET_SOLVER, ""))
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
