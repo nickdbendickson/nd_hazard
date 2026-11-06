@@ -1452,8 +1452,23 @@ def breach_values(dam, params, units, crest_length_u):
         tf = p.get("rise_time_hr") or 1.0
         notes.append("The breach method gives no formation time; {:.2f} h (the plugin's "
                      "hydrograph rise) was used.".format(tf))
-    mode = str(p.get("failure_mode") or "").lower()
+    # 3.29.1 (Nick, 2026-11-06): piping unless the run says overtopping (TR-60, a user
+    # hydrograph and older runs give no failure mode); Froehlich (2008) values fill the gaps
+    mode = str(p.get("failure_mode") or "piping").lower()
     piping = mode == "piping"
+    if not p.get("failure_mode"):
+        notes.append("Breach: the run gives no failure mode; HEC-RAS Piping is the default.")
+    if hecras.F08_AUTO in str(rows.get("Froehlich (2008) piping", {}).get("note", "")):
+        notes.append("Breach: " + rows["Froehlich (2008) piping"]["note"])
+    vd = p.get("vertical_datum")
+    if isinstance(vd, dict):
+        if vd.get("applied"):
+            notes.append("Breach elevations are NAVD88: the given (DWR) values {:+.4f} ft "
+                         "({}).".format(float(vd.get("shift_ft") or 0.0),
+                                        vd.get("method") or "VERTCON"))
+        elif str(vd.get("source_datum") or "").upper() not in ("", "NAVD88"):
+            notes.append("WARNING: the run's elevations were not shifted to NAVD88 ({}); "
+                         "check the breach elevations.".format(vd.get("method") or "?"))
     trig = p.get("breach_trigger")
     if trig in ("peak", "wse", "time"):
         trig_ft = p.get("pool_at_breach_ft")
@@ -1467,7 +1482,7 @@ def breach_values(dam, params, units, crest_length_u):
     wse0_ft = p.get("starting_wse_ft") or brmod.starting_wse_ft(dam)[0]
     b = {"bottom_elev": units.from_ft(bottom_ft), "bottom_width": units.from_ft(width_ft),
          "left_slope": float(z), "right_slope": float(z), "formation_hr": float(tf),
-         "piping": piping, "piping_coef": float(p.get("pipe_cd") or 0.5),
+         "piping": piping, "piping_coef": float(p.get("pipe_cd") or hecras.PIPING_COEF),
          "piping_elev": None, "weir_coef": units.weir_coef(hecras.BREACH_WEIR_COEF),
          "trigger_wse": None}
     if piping:
