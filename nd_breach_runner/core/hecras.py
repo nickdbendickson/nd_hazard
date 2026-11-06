@@ -196,6 +196,8 @@ def _num(v):
 
 PIPING_COEF = 0.5                     # HEC-RAS piping coefficient default
 F08_AUTO = "Froehlich (2008) piping, auto"
+F08_OVERWRITE, F08_FILL = "overwrite", "fill_missing"
+F08_POLICIES = (F08_OVERWRITE, F08_FILL)
 VW_CURVE_TOL = 0.05                   # curve vs maximum storage: warn above 5 %
 
 
@@ -258,18 +260,31 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     mode_given = bool(p.get("failure_mode"))
     mode = str(p.get("failure_mode") or "piping").lower()
     f08 = None
-    if mode == "piping" and (b_bottom is None or z is None or tf is None):
+    # 3.29.2 (Nick, 2026-11-06 1:17 PM): Froehlich (2008) piping always overwrites the run's
+    # width / side slopes / formation time (also MLM or Froehlich 1995 values);
+    # breach_f2008 = 'fill_missing' (opt-in) only fills what the run lacks
+    policy = str(p.get("breach_f2008") or F08_OVERWRITE).strip().lower()
+    if policy not in F08_POLICIES:
+        raise HecRasError("breach_f2008 must be one of {} (got {!r})".format(
+            ", ".join(F08_POLICIES), policy))
+    overwrite = policy == F08_OVERWRITE
+    if mode == "piping" and (overwrite or b_bottom is None or z is None or tf is None):
         f08 = froehlich_2008_piping_ft(dam, p, bottom)
         if f08 is not None:
-            if z is None:
-                z = f08["z"]
-            if avg is None:
-                avg = f08["avg_width_ft"]
-            if b_bottom is None:
+            if overwrite:
+                z, avg, tf = f08["z"], f08["avg_width_ft"], f08["tf_hr"]
                 b_bottom = max(0.0, avg - z * hb)
-            if tf is None:
-                tf = f08["tf_hr"]
-            src = (src + "; " if src else "") + F08_AUTO
+                src = F08_AUTO
+            else:
+                if z is None:
+                    z = f08["z"]
+                if avg is None:
+                    avg = f08["avg_width_ft"]
+                if b_bottom is None:
+                    b_bottom = max(0.0, avg - z * hb)
+                if tf is None:
+                    tf = f08["tf_hr"]
+                src = (src + "; " if src else "") + F08_AUTO
 
     add("Breach center station", None, "station", BASIS_BLANK,
         "Where the breach sits along the embankment; depends on your HEC-RAS geometry.")
@@ -310,9 +325,10 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     if f08 is not None:
         add("Froehlich (2008) piping", "auto", "", BASIS_ASSUME,
             "{}: Vw {} ac-ft, hb {:.2f} ft, K0 1.0, side slope 0.7, average width {} ft, "
-            "formation time {} h; filled where the run's method gives none.".format(
+            "formation time {} h; {}.".format(
                 F08_AUTO, _num(f08["vw_acft"]), hb, _num(f08["avg_width_ft"]),
-                _num(f08["tf_hr"])) + (" " + f08["curve_warning"] if f08["curve_warning"]
+                _num(f08["tf_hr"]), "replaces the run's values" if overwrite else
+                "filled where the run's method gives none") + (" " + f08["curve_warning"] if f08["curve_warning"]
                                        else ""))
     if mode == "piping":
         cd = p.get("pipe_cd")

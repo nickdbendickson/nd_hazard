@@ -70,7 +70,8 @@ def hecras_breach_froehlich_2008_piping_2801_numbers():
 @test
 def hecras_breach_rows_keep_the_runs_own_values_and_pipe():
     p = {"failure_mode": "piping", "side_slope_h": 0.9, "avg_breach_width_ft": 120.0,
-         "formation_time_hr": 1.5, "pipe_initial_dia_ft": 2.0, "pipe_cd": 0.6}
+         "formation_time_hr": 1.5, "pipe_initial_dia_ft": 2.0, "pipe_cd": 0.6,
+         "breach_f2008": "fill_missing"}   # the opt-in; the default overwrites since then
     r = _rows(p)
     assert r["Left side slope"]["value"] == 0.9 and r["Full formation time"]["value"] == 1.5
     assert "Froehlich (2008) piping" not in r

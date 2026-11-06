@@ -57,6 +57,7 @@ WEIR_C_BOTTOM_SI = 3.1 * FT ** 0.5          # ~1.711
 WEIR_C_SIDE_SI = 2.45 * FT ** 0.5           # ~1.353
 
 # Froehlich (2008) coefficients by failure mode.
+VW_CURVE_TOL = 0.05     # 3.29.2: curve vs maximum storage, warn above 5 %
 FROEHLICH_2008 = {
     "piping": {"ko": 1.0, "z": 0.7},
     "overtopping": {"ko": 1.3, "z": 1.0},
@@ -442,9 +443,18 @@ def _common(dam, wse0_m=None, wse0_rule=None):
         raise BreachInputError("{}: the starting water surface is not above the breach bottom"
                                .format(dam.dam_id))
     c.vs = float(c.res.volume(c.wse0_m))                   # storage at failure
+    # 3.29.2 (Nick, 2026-11-06): the breach equations use Vw = the dam's maximum storage as
+    # given (DWR MAX_STORAGE, storage_top_acft); the elevation-volume curve's storage at the
+    # starting pool (c.vs) is a check only (warning over VW_CURVE_TOL) and the routing state
+    c.vw = float(dam.storage_top_acft) * ACFT
     c.v_dead = float(c.res.volume(c.bottom_m))             # below the breach bottom
     c.v_release = c.vs - c.v_dead
     c.notes = list(c.res.notes)
+    if c.vw > 0 and abs(c.vs - c.vw) > VW_CURVE_TOL * c.vw:
+        c.notes.append("Check: the elevation-volume curve gives {:,.0f} acre-ft at the starting "
+                       "pool, {:+.0f} % from the maximum storage {:,.0f} acre-ft used as Vw in "
+                       "the breach equations.".format(c.vs / ACFT, 100.0 * (c.vs / c.vw - 1.0),
+                                                       c.vw / ACFT))
     if bottom_ft * FT < res_bottom_m - 1e-6:
         c.notes.append("The breach bottom is below the reservoir bottom (top of dam minus dam "
                        "height); it was raised to the reservoir bottom.")
@@ -454,6 +464,7 @@ def _common(dam, wse0_m=None, wse0_rule=None):
         "hw_ft": round((c.wse0_m - c.bottom_m) / FT, 2),
         "hb_ft": round((c.top_m - c.bottom_m) / FT, 2),
         "storage_at_failure_acft": round(c.vs / ACFT, 2),
+        "vw_acft": round(c.vw / ACFT, 2),
         "dead_storage_acft": round(c.v_dead / ACFT, 2),
         "releasable_acft": round(c.v_release / ACFT, 2),
         "storage_exponent_m": round(c.res.m, 3),
@@ -476,18 +487,18 @@ def breach_parameters(method, c, dam, ov):
     notes = []
     mode = "piping"
     if method in (METHOD_PIPING, METHOD_PIPING_ORIFICE):
-        b, tf, z = froehlich_2008(c.vs, hb, "piping")
+        b, tf, z = froehlich_2008(c.vw, hb, "piping")
         src = "Froehlich (2008), piping"
     elif method == METHOD_OVERTOPPING:
         mode = "overtopping"
-        b, tf, z = froehlich_2008(c.vs, hb, "overtopping")
+        b, tf, z = froehlich_2008(c.vw, hb, "overtopping")
         src = "Froehlich (2008), overtopping"
     elif method == METHOD_F95_PIPING:
-        b, tf, z = froehlich_1995(c.vs, hb, "piping")
+        b, tf, z = froehlich_1995(c.vw, hb, "piping")
         src = "Froehlich (1995), piping"
     elif method == METHOD_F95_OVERTOPPING:
         mode = "overtopping"
-        b, tf, z = froehlich_1995(c.vs, hb, "overtopping")
+        b, tf, z = froehlich_1995(c.vw, hb, "overtopping")
         src = "Froehlich (1995), overtopping"
     elif method == METHOD_MLM:
         a_ft2 = _embankment_area(dam)
@@ -496,12 +507,12 @@ def breach_parameters(method, c, dam, ov):
             notes.append("MacDonald & Langridge-Monopolis needs the embankment cross-section "
                          "(crest width and slopes); none given, so a 12 ft crest with 3H:1V "
                          "slopes was assumed. Enter the real geometry.")
-        b, tf, z = mlm_1984(c.vs, hw, a_ft2 * FT * FT)
+        b, tf, z = mlm_1984(c.vw, hw, a_ft2 * FT * FT)
         src = "MacDonald & Langridge-Monopolis (1984), earthfill"
         notes.append("MacDonald & Langridge-Monopolis side slope taken as 1H:1V; override it "
                      "if the embankment differs.")
     elif method == METHOD_VTG:
-        b, tf, z = vtg_1990(c.vs, hw, ov.vtg_erodible)
+        b, tf, z = vtg_1990(c.vw, hw, ov.vtg_erodible)
         src = "Von Thun & Gillette (1990), {}".format("easily erodible" if ov.vtg_erodible
                                                        else "erosion resistant")
         notes.append("Von Thun & Gillette side slope taken as 0.5H:1V; override it if needed.")
@@ -679,7 +690,7 @@ def routed_hydrograph(dam, method=METHOD_PIPING, overrides=None, dt_s=None, max_
     params.update(p)
     params.update({
         "released_acft": round((c.vs - v) / ACFT, 2),
-        "froehlich_1995_peak_cfs": round(froehlich_1995_peak(vs, wse0_m - c.bottom_m) / CFS, 0),
+        "froehlich_1995_peak_cfs": round(froehlich_1995_peak(c.vw, wse0_m - c.bottom_m) / CFS, 0),
     })
     hy = Hydrograph(np.asarray(ts), np.asarray(qs), method, params, notes)
     _add_tr60_check(dam, hy)
@@ -720,7 +731,7 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
     c = _common(dam, wse0_m, wse0_rule)
     top_m, bottom_m, wse0_m, vs, params = c.top_m, c.bottom_m, c.wse0_m, c.vs, c.params
     a = _embankment_area(dam)
-    q_cfs, rule, br = tr60_peak_cfs(vs / ACFT, (wse0_m - bottom_m) / FT, a, dam.valley_width_ft)
+    q_cfs, rule, br = tr60_peak_cfs(c.vw / ACFT, (wse0_m - bottom_m) / FT, a, dam.valley_width_ft)
     if q_cfs is None:
         raise BreachInputError("{}: TR-60 needs the crest width and the upstream and "
                                "downstream slopes to compute the embankment area"
@@ -729,7 +740,7 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
     if ov.tr60_rise_hr:
         tr = ov.tr60_rise_hr * 3600.0
     else:
-        _, tr, _ = froehlich_2008(vs, top_m - bottom_m, "piping")
+        _, tr, _ = froehlich_2008(c.vw, top_m - bottom_m, "piping")
     tb = 2.0 * c.v_release / qp
     notes = list(c.notes)
     if tr >= tb:
@@ -764,7 +775,7 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
 def _add_tr60_check(dam, hy):
     """Report the TR-60 peak next to the routed peak, when it can be computed."""
     try:
-        vs = hy.params["storage_at_failure_acft"]
+        vs = hy.params.get("vw_acft", hy.params["storage_at_failure_acft"])
         hw = hy.params["hw_ft"]
         q, rule, _ = tr60_peak_cfs(vs, hw, _embankment_area(dam), dam.valley_width_ft)
         if q is not None:
