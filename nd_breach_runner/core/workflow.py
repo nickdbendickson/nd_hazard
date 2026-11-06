@@ -124,7 +124,8 @@ GRID_SPREAD_WARN_MEDIAN_FT = 1.0   # the wide-shallow signature: median wet dept
 # GRID_CHECK_CELL_M as a convergence check (DWR-2801: 10 m is the record cell Nick chose, 5 m
 # the check; ACER TM 11 lives GROW as the grid refines, so the coarse run understates them).
 GRID_REFINE_CELL_M = 10.0
-GRID_CHECK_CELL_M = 5.0
+GRID_CHECK_CELL_M = 0.0           # check run OFF by default (Nick, 2026-11-06): on DWR-2801
+GRID_CHECK_SUGGESTED_M = 5.0      # a 5 m check of a 10.5 M-cell domain took ~14 h; set 5 to opt in
 GRID_CHECK_MAX_CELLS = 40e6        # skip the check run when its grid would be larger than this
 GRID_CHECK_DIFF_PCT = 25.0         # warn when the check's flooded area differs by more than this
 
@@ -728,7 +729,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     """One breach run (see _run_dam_once). 3.28.0: when the finished run shows the coarse-grid
     over-spread signature (grid_spread_flagged) and st.grid_refine is on, the dam is run again
     on the SAME domain, inflow point and clock at st.grid_refine_cell_m (10 m), which replaces
-    the coarse rasters in the dam folder as the record, and then at st.grid_check_cell_m (5 m)
+    the coarse rasters in the dam folder as the record, and then, when set (off by default), at st.grid_check_cell_m (5 m)
     into a "Grid check <cell> m" subfolder as a convergence check. The coarse run's report is
     kept as model/coarse_<cell>m_run_report.json. A fixed-plan run (sensitivity, nested,
     convergence) is never refined."""

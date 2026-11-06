@@ -581,7 +581,7 @@ class _Base(QgsProcessingAlgorithm):
                        "When a run coarser than 10 m floods a wide, shallow area (at least "
                        "1,000 ac, median depth 1 ft or less), run it again on the same domain "
                        "at 10 m and keep that as the record."))
-        self._num("GRID_CHECK_CELL", "Finer grid: check run cell (m; 0 = no check)",
+        self._num("GRID_CHECK_CELL", "Finer grid: check run cell (m; 0 = off, 5 = a 5 m check)",
                   workflow.GRID_CHECK_CELL_M, minimum=0.0, advanced=True)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
                   maximum=1.0)

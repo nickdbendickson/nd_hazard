@@ -142,7 +142,7 @@ def crest_burn_chunked_read_matches_a_direct_read():
 def crest_burn_settings_default_on_and_in_the_checkpoint_key():
     st = wf.RunSettings()
     assert st.crest_burn is True and st.grid_refine is True
-    assert st.grid_refine_cell_m == 10.0 and st.grid_check_cell_m == 5.0
+    assert st.grid_refine_cell_m == 10.0 and st.grid_check_cell_m == 0.0   # 5 m check opt-in
     k = wf.key_settings(st)
     assert k["crest_burn"] is True and "crest_burn_http" not in k and "grid_refine" not in k
     off = wf.key_settings(wf.RunSettings(crest_burn=False))
@@ -256,7 +256,8 @@ def grid_refine_reruns_at_10_m_for_the_record_and_checks_at_5_m():
     real = wf._run_dam_once
     wf._run_dam_once = once
     try:
-        st = wf.RunSettings(cell_size_m=20.0)
+        assert wf.RunSettings().grid_check_cell_m == 0.0       # the 5 m check is opt-in
+        st = wf.RunSettings(cell_size_m=20.0, grid_check_cell_m=5.0)
         st.dam_record = {"point": {}}
         res = wf.run_dam(None, (0, 0), st, None, None, out)
     finally:
@@ -321,7 +322,8 @@ def grid_refine_notes_the_record_before_the_check_runs():
     real = wf._run_dam_once
     wf._run_dam_once = spy
     try:
-        res = wf.run_dam(None, (0, 0), wf.RunSettings(cell_size_m=20.0), None, None, out)
+        res = wf.run_dam(None, (0, 0), wf.RunSettings(cell_size_m=20.0, grid_check_cell_m=5.0),
+                         None, None, out)
     finally:
         wf._run_dam_once = real
     assert seen["entry"]["record_cell_m"] == 10.0

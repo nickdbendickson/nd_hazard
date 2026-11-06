@@ -285,7 +285,8 @@ class NDBreachRunnerDialog(QDialog):
         self.grid_refine = QCheckBox("Finer grid automatically when the flood over-spreads")
         self.grid_refine.setToolTip("When a run coarser than 10 m floods a wide, shallow area, "
                                     "run it again on the same domain at 10 m and keep that as "
-                                    "the record, with a 5 m check run beside it.")
+                                    "the record. A 5 m check run is optional (Processing tool, "
+                                    "check run cell = 5; off by default, it can take hours).")
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
         for cb in (self.force_anuga, self.crest_burn, self.grid_refine):
