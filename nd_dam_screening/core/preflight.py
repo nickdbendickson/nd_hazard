@@ -380,7 +380,7 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
         if missing:
             out.append(check(WARN, "DWR export fields", "no field found for: {}".format(", ".join(missing)),
                              "Tool 1's field pickers can take other names."))
-    wb = layer("waterbodies", "Water bodies", any(k in steps for k in ("3", "16")), "polygon")
+    layer("waterbodies", "Water bodies", any(k in steps for k in ("3", "16")), "polygon")
     lines = layer("dam_lines", "DWR dam lines", "4" in steps, "line", any_of=(("structure_id", "structure_"),))
     if dwr is not None and lines is not None and dwr_kind != inv.KIND_DAM:
         out.append(check(OK, "Dams without a dam line", "{}s are not joined to DWR dam lines by number (a "

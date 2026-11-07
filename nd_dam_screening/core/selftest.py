@@ -72,7 +72,6 @@ def layer_specs():
     S, D, I = "string", "double", "int"
     M3_PER_ACFT, M2_PER_AC, FT = 1233.48, 4046.86, 0.3048
     # the pool: cells below the pool level above the dam
-    yy = np.arange(NY)
     pool_rows = [r for r in range(0, DAM_ROW - 1) if (zd[r] <= pool + 1e-6).any()]
     r_top = min(pool_rows) if pool_rows else DAM_ROW - 20
     half_w = 0
