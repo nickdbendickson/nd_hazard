@@ -927,7 +927,7 @@ def v3200_the_release_version_is_consistent_everywhere_it_is_written():
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
     md = cp["general"]["version"].strip()
-    assert md == "3.29.4" == wf.VERSION == wf.VERSION_FALLBACK
+    assert md == "3.29.5" == wf.VERSION == wf.VERSION_FALLBACK
     assert versions.RELEASE["ndbreach"] == md
     changelog = cp["general"]["changelog"]
     assert changelog.strip().startswith("3.29.4 ") and "3.26.9 - " in changelog
