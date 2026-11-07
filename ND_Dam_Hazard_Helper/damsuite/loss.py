@@ -36,6 +36,12 @@ WARNING_BANDS = ("under15", "15to60", "over60")
 WARNING_LABELS = {"under15": "under 15 minutes", "15to60": "15 to 60 minutes",
                   "over60": "over 60 minutes"}
 WARNING_MINUTES = {"under15": (0.0, 15.0), "15to60": (15.0, 60.0), "over60": (60.0, None)}
+# A structure with no known arrival time is counted as having NO warning, not the best band.
+# This mirrors the Runner's consequences.warning_class (an unknown/NaN arrival maps to class 0,
+# "no warning"), so the two engines no longer give one dam two contradictory answers. "under15"
+# is loss.py's three-band image of that class. The count is reported separately (arrival_unknown
+# / par_arrival_unknown) so this assumption is always visible and never silently inflates safety.
+UNKNOWN_WARNING_BAND = "under15"
 # severity thresholds (feet, feet per second)
 DV_HIGH, DV_MEDIUM = 160.0, 40.0
 DEPTH_HIGH_FT = 13.0
@@ -76,7 +82,7 @@ def warning_band(arrival_minutes):
     time zero and nobody is warned before it. A real EAP with gauges and a siren gives more; a
     caller that knows the warning time can pass it instead of the arrival time."""
     m = _f(arrival_minutes)
-    if m is None:
+    if m is None or m != m:          # None or NaN: no arrival time known
         return ""
     if m < 15.0:
         return "under15"
@@ -162,10 +168,14 @@ def estimate(rows, when="night", rates=None):
          "rates_text", "when", "worst"}
 
     `cells` is {(severity, band): {"par", "structures", "rate", "fatalities"}}. "fatalities" is
-    None for the whole estimate until a rate table is signed off."""
+    None for the whole estimate until a rate table is signed off.
+
+    Structures with no known arrival time are counted as having no warning (UNKNOWN_WARNING_BAND)
+    and tallied in "arrival_unknown" / "par_arrival_unknown" so the assumption can be reported."""
     cells, by_sev, by_band = {}, {sev: 0.0 for sev in SEVERITIES}, \
         {b: 0.0 for b in WARNING_BANDS}
     par, wet, worst = 0.0, 0, ""
+    unknown_wet, unknown_par = 0, 0.0
     for r in rows or []:
         got = row_risk(r, when)
         if not got["severity"]:
@@ -173,7 +183,12 @@ def estimate(rows, when="night", rates=None):
         wet += 1
         par += got["par"]
         by_sev[got["severity"]] = by_sev.get(got["severity"], 0.0) + got["par"]
-        band = got["warning"] or "over60"
+        if got["warning"]:
+            band = got["warning"]
+        else:
+            band = UNKNOWN_WARNING_BAND
+            unknown_wet += 1
+            unknown_par += got["par"]
         by_band[band] = by_band.get(band, 0.0) + got["par"]
         cell = cells.setdefault((got["severity"], band),
                                 {"par": 0.0, "structures": 0, "rate": None, "fatalities": None})
@@ -197,7 +212,7 @@ def estimate(rows, when="night", rates=None):
                 total += cell["fatalities"]
     return {"par": par, "wet": wet, "by_severity": by_sev, "by_band": by_band, "cells": cells,
             "fatalities": total, "rates_ok": ok, "rates_text": text, "when": when,
-            "worst": worst}
+            "worst": worst, "arrival_unknown": unknown_wet, "par_arrival_unknown": unknown_par}
 
 
 def estimate_text(est):
@@ -210,6 +225,10 @@ def estimate_text(est):
     band = est.get("by_band") or {}
     lines.append("  by warning time: " + ", ".join(
         "{} {:.0f}".format(WARNING_LABELS[b], band.get(b) or 0.0) for b in WARNING_BANDS))
+    if est.get("arrival_unknown"):
+        lines.append("  warning time unknown for {} structure(s) ({:.0f} people): counted as "
+                     "no warning (under 15 minutes)".format(
+                         est.get("arrival_unknown") or 0, est.get("par_arrival_unknown") or 0.0))
     if est.get("fatalities") is None:
         lines.append("  loss of life: not estimated. " + (est.get("rates_text") or ""))
     else:
