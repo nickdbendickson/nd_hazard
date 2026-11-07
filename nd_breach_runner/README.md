@@ -5,16 +5,18 @@ with **LISFLOOD-FP** and, optionally, **ANUGA**, following the North Dakota Dam 
 Standards Policy (REG_05.2026). It writes the rasters the ND hazard classification plugin
 reads:
 
-## Breach volume and the HEC-RAS breach (3.29.2)
+## Breach volume and the HEC-RAS breach (3.29.2, 3.29.4)
 
-- The breach equations use **Vw = the dam's maximum storage** (DWR MAX_STORAGE), not the storage
-  at the starting pool. The elevation-volume curve is only a check (a warning when it is more
-  than 5 % off) and still sets the routed reservoir. **Hydrograph peaks and breach widths change
-  for runs that start below the crest** (PMF maximum level lower than the top of dam); runs that
-  start at the crest are unchanged.
+- **Sunny-day breach:** the breach equations use **Vw = the dam's maximum storage** (DWR
+  MAX_STORAGE, or the storage you give), not the storage at the starting pool. The
+  elevation-volume curve still sets the routed reservoir; when the pool starts below the crest
+  (PMF maximum level lower than the top of dam) the report notes both volumes.
+- **PMF / flood-inflow breach (3.29.4):** as the ND Dam Safety Standards state it, Vw is the
+  storage at the pool when the breach starts (the elevation-volume curve). Report hydrograph
+  `vw_source` says which one a run used.
 - The HEC-RAS plan always uses Froehlich (2008) piping for the bottom width, side slopes and
-  formation time, even over the run's MLM or Froehlich (1995) values. HEC-RAS option
-  `breach_f2008 = 'fill_missing'` (opt-in) only fills what the run lacks.
+  formation time, even over the run's MLM or Froehlich (1995) values, with the run's Vw.
+  HEC-RAS option `breach_f2008 = 'fill_missing'` (opt-in) only fills what the run lacks.
 
 ## New in 3.26.1: HEC-RAS results imported before 3.26.1 are too deep and too wide, so re-export them
 

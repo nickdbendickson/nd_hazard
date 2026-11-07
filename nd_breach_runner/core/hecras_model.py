@@ -1466,6 +1466,10 @@ def breach_values(dam, params, units, crest_length_u):
             notes.append("Breach elevations are NAVD88: the given (DWR) values {:+.4f} ft "
                          "({}).".format(float(vd.get("shift_ft") or 0.0),
                                         vd.get("method") or "VERTCON"))
+        elif vd.get("local"):
+            # 3.29.4: a local-datum dam is tied to the DEM (NAVD88) instead of shifted
+            notes.append("Breach elevations: the dam's local datum was tied to the NAVD88 DEM "
+                         "({}).".format(vd.get("method") or "DEM tie"))
         elif str(vd.get("source_datum") or "").upper() not in ("", "NAVD88"):
             notes.append("WARNING: the run's elevations were not shifted to NAVD88 ({}); "
                          "check the breach elevations.".format(vd.get("method") or "?"))
