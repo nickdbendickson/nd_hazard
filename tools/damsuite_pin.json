@@ -14,7 +14,7 @@
   "hydro3dhp.py": "91194121fb4eb7b2521aaf382208ea3105ad527d4cb2e2794dae0d48a4d662a6",
   "keepawake.py": "f52be4fcdbb1543de1301e496c1d07a5ad64567441e5031090309076cd9cc49b",
   "layout.py": "0b7302c2cf025edf54ca70b2e667a7bb57a9bbc49b0f40d17d9b14d0497a263f",
-  "loss.py": "3a8b411c2fe6ca1841c19c2c52e36074a4af58d7ab77ecb9491bf096681cbded",
+  "loss.py": "40b2fa87604863b944ec9cfc70ec2dc41683dbd7bedb286b56e164f1fb0cb070",
   "midcrest.py": "22249c4ed8e41d986526f4977c60892459b3646d638173a505127a5b1a43fd14",
   "netproxy.py": "ba09fe4098331bb7c2bda889793ff9d7d82f5fad274b1cfbaa53d16eb6435128",
   "nsi_merge.py": "13818a559ea282d1c63be2aef7b45e6e96c39e95a9127a59b41c3a0dcc19974d",
@@ -54,7 +54,7 @@
   "suite_home.py",
   "versions.py"
  ],
- "pin": "damsuite-pin-v7",
- "pin_sha256": "7bfa6a7c60e49978710e26264e49fe6a1b3419848d4b43327eb11219cc87b4f4",
+ "pin": "damsuite-pin-v8",
+ "pin_sha256": "18851fa5124fb1e5a71483bfeae6f77c48caf6d7b856142d0569b45509984fcf",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }
