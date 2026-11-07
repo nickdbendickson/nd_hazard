@@ -56,8 +56,13 @@ TR60_METHODS = (METHOD_TR60, METHOD_TR60_CURVE)
 WEIR_C_BOTTOM_SI = 3.1 * FT ** 0.5          # ~1.711
 WEIR_C_SIDE_SI = 2.45 * FT ** 0.5           # ~1.353
 
+VW_CURVE_TOL = 0.05     # 3.29.2: curve vs maximum storage, note above 5 %
+# 3.29.4: where Vw (breach equations) comes from: sunny day = maximum storage, PMF = the pool
+VW_MAX_STORAGE, VW_POOL = "max_storage", "pool"
+VW_SOURCES = (VW_MAX_STORAGE, VW_POOL)
+VW_SOURCE_TEXT = {VW_MAX_STORAGE: "maximum storage (DWR), sunny day",
+                  VW_POOL: "storage at the pool when the breach starts (PMF, ND standards)"}
 # Froehlich (2008) coefficients by failure mode.
-VW_CURVE_TOL = 0.05     # 3.29.2: curve vs maximum storage, warn above 5 %
 FROEHLICH_2008 = {
     "piping": {"ko": 1.0, "z": 0.7},
     "overtopping": {"ko": 1.3, "z": 1.0},
@@ -419,7 +424,7 @@ class _Ctx:
     """Shared set-up for the hydrograph methods (SI units)."""
 
 
-def _common(dam, wse0_m=None, wse0_rule=None):
+def _common(dam, wse0_m=None, wse0_rule=None, vw_source=None):
     """The reservoir bottom is the top of dam minus the dam height. The breach
     bottom defaults to it but may be higher; storage below the breach bottom
     (dead storage) stays behind the dam. wse0_m is the pool level at breach
@@ -443,18 +448,29 @@ def _common(dam, wse0_m=None, wse0_rule=None):
         raise BreachInputError("{}: the starting water surface is not above the breach bottom"
                                .format(dam.dam_id))
     c.vs = float(c.res.volume(c.wse0_m))                   # storage at failure
-    # 3.29.2 (Nick, 2026-11-06): the breach equations use Vw = the dam's maximum storage as
-    # given (DWR MAX_STORAGE, storage_top_acft); the elevation-volume curve's storage at the
-    # starting pool (c.vs) is a check only (warning over VW_CURVE_TOL) and the routing state
-    c.vw = float(dam.storage_top_acft) * ACFT
+    # 3.29.4 (Nick, 2026-11-06 8:41 PM CST): Vw in the breach equations depends on the
+    # scenario. Sunny day (the default): the dam's maximum storage as given (DWR MAX_STORAGE,
+    # storage_top_acft), unless the user states another. PMF / flood inflow (core/flood.py
+    # passes VW_POOL): as the ND Dam Safety Standards state it, the storage at the pool when
+    # the breach starts (the elevation-volume curve, c.vs). The curve's storage at the
+    # starting pool always sets the routed reservoir.
+    vw_source = vw_source or VW_MAX_STORAGE
+    if vw_source not in VW_SOURCES:
+        raise BreachInputError("vw_source must be one of {} (got {!r})".format(
+            ", ".join(VW_SOURCES), vw_source))
+    c.vw_source = vw_source
+    c.vw = c.vs if vw_source == VW_POOL else float(dam.storage_top_acft) * ACFT
     c.v_dead = float(c.res.volume(c.bottom_m))             # below the breach bottom
     c.v_release = c.vs - c.v_dead
     c.notes = list(c.res.notes)
-    if c.vw > 0 and abs(c.vs - c.vw) > VW_CURVE_TOL * c.vw:
-        c.notes.append("Check: the elevation-volume curve gives {:,.0f} acre-ft at the starting "
-                       "pool, {:+.0f} % from the maximum storage {:,.0f} acre-ft used as Vw in "
-                       "the breach equations.".format(c.vs / ACFT, 100.0 * (c.vs / c.vw - 1.0),
-                                                       c.vw / ACFT))
+    if vw_source == VW_MAX_STORAGE and c.vw > 0 and abs(c.vs - c.vw) > VW_CURVE_TOL * c.vw:
+        # the curve is anchored at the maximum storage at the top of dam, so this only says
+        # the pool starts away from the crest; it is not a check of the curve
+        c.notes.append("Sunny day: the breach equations use Vw = the maximum storage "
+                       "{:,.0f} acre-ft (DWR); the routed reservoir starts at {:.1f} ft, "
+                       "which holds {:,.0f} acre-ft on the elevation-volume curve "
+                       "({:+.0f} %).".format(c.vw / ACFT, c.wse0_m / FT, c.vs / ACFT,
+                                             100.0 * (c.vs / c.vw - 1.0)))
     if bottom_ft * FT < res_bottom_m - 1e-6:
         c.notes.append("The breach bottom is below the reservoir bottom (top of dam minus dam "
                        "height); it was raised to the reservoir bottom.")
@@ -465,6 +481,7 @@ def _common(dam, wse0_m=None, wse0_rule=None):
         "hb_ft": round((c.top_m - c.bottom_m) / FT, 2),
         "storage_at_failure_acft": round(c.vs / ACFT, 2),
         "vw_acft": round(c.vw / ACFT, 2),
+        "vw_source": VW_SOURCE_TEXT[vw_source],
         "dead_storage_acft": round(c.v_dead / ACFT, 2),
         "releasable_acft": round(c.v_release / ACFT, 2),
         "storage_exponent_m": round(c.res.m, 3),
@@ -721,14 +738,15 @@ def curvilinear_shape(qp, tr, volume, n=200):
     return t, q
 
 
-def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_rule=None):
+def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_rule=None,
+                    vw_source=None):
     """TR-60 peak with a hydrograph whose volume equals the releasable storage
     (the storage above the breach bottom). Triangular, or curvilinear (sin^2
     rise, exponential recession). The rise time is the Froehlich (2008) piping
     formation time unless given."""
     ov = overrides or BreachOverrides()
     dam = apply_partial(dam, ov)
-    c = _common(dam, wse0_m, wse0_rule)
+    c = _common(dam, wse0_m, wse0_rule, vw_source)
     top_m, bottom_m, wse0_m, vs, params = c.top_m, c.bottom_m, c.wse0_m, c.vs, c.params
     a = _embankment_area(dam)
     q_cfs, rule, br = tr60_peak_cfs(c.vw / ACFT, (wse0_m - bottom_m) / FT, a, dam.valley_width_ft)

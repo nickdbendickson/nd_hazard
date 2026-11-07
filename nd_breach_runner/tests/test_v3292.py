@@ -54,7 +54,7 @@ def v3162_breach_equations_use_max_storage_and_curve_only_warns():
     assert h.params["vw_acft"] == 2000.0 and h.params["storage_at_failure_acft"] < 1900.0
     b_m, _, _ = br.froehlich_2008(2000.0 * br.ACFT, 30.0 * br.FT, "piping")
     assert abs(h.params["avg_breach_width_ft"] - b_m / br.FT) < 0.06, h.params
-    assert any(n.startswith("Check: the elevation-volume curve") for n in h.notes), h.notes
-    top = br.routed_hydrograph(_dam())                   # at the crest: curve == Vw, no warning
-    assert not any(n.startswith("Check: the elevation-volume curve") for n in top.notes)
+    assert any(n.startswith("Sunny day: the breach equations use Vw") for n in h.notes), h.notes
+    top = br.routed_hydrograph(_dam())                   # at the crest: curve == Vw, no note
+    assert not any(n.startswith("Sunny day: the breach equations use Vw") for n in top.notes)
     assert top.params["vw_acft"] == top.params["storage_at_failure_acft"] == 2000.0

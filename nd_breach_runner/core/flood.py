@@ -183,7 +183,7 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
         raise br.BreachInputError("{}: the normal pool elevation ({:.1f} ft) is not below the "
                                   "top of dam ({:.1f} ft)".format(dam.dam_id, pool_ft,
                                                                  dam.top_of_dam_ft))
-    c0 = br._common(dam, pool_ft * FT, "normal pool")
+    c0 = br._common(dam, pool_ft * FT, "normal pool", br.VW_POOL)
     res, top_m = c0.res, c0.top_m
     notes = list(c0.notes)
     crest_ft = fi.crest_length_ft or dam.crest_length_ft
@@ -279,7 +279,7 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
     # -- 3. with breach ----------------------------------------------------------------------
     rule = "pool at breach initiation ({})".format(
         {"peak": "peak pool of the flood", "time": "user time", "wse": "trigger elevation"}[trig])
-    c = br._common(dam, wse_b, rule)
+    c = br._common(dam, wse_b, rule, br.VW_POOL)   # 3.29.4: PMF Vw per the ND standards
     v_release0 = c.v_release
     tw, qw, qb, sw, vw = [t_b], [], [], [wse_b], [v_b]
     params = c.params
@@ -321,7 +321,7 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
         tw, qw, qb = np.asarray(tw), np.asarray(qw), np.asarray(qb)
     else:      # TR-60: peak and volume from TR-60, added to the no-breach flow
         shape = "curvilinear" if method == br.METHOD_TR60_CURVE else "triangular"
-        tri = br.tr60_hydrograph(dam, ov, shape, wse_b, rule)
+        tri = br.tr60_hydrograph(dam, ov, shape, wse_b, rule, br.VW_POOL)
         notes += tri.notes
         params.update(tri.params)
         tt = t_b + tri.t_s
