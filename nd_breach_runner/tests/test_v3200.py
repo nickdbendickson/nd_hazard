@@ -930,7 +930,7 @@ def v3200_the_release_version_is_consistent_everywhere_it_is_written():
     assert md == "3.29.5" == wf.VERSION == wf.VERSION_FALLBACK
     assert versions.RELEASE["ndbreach"] == md
     changelog = cp["general"]["changelog"]
-    assert changelog.strip().startswith("3.29.4 ") and "3.26.9 - " in changelog
+    assert changelog.strip().startswith("3.29.5 ") and "3.26.9 - " in changelog
     for word in ("crossing", "cascade", "queue", "population at risk"):
         assert word in changelog.lower().split("3.19.0")[0], word
 
