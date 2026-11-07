@@ -88,9 +88,7 @@ def hecras_breach_vw_is_max_storage_and_curve_only_warns():
     a = hecras.froehlich_2008_piping_ft(dam, {}, 980.0)
     b = hecras.froehlich_2008_piping_ft(dam, {"storage_at_failure_acft": 300.0}, 980.0)
     assert a["vw_acft"] == b["vw_acft"] == 400.0 and a["avg_width_ft"] == b["avg_width_ft"]
-    assert a["curve_warning"] == "" and "-25 %" in b["curve_warning"], b
-    c = hecras.froehlich_2008_piping_ft(dam, {"storage_at_failure_acft": 390.0}, 980.0)
-    assert c["curve_warning"] == ""
+    assert a["curve_warning"] == b["curve_warning"] == ""   # 3.29.4: breach.py notes it
 
 
 @test

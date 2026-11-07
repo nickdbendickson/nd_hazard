@@ -201,30 +201,37 @@ F08_POLICIES = (F08_OVERWRITE, F08_FILL)
 VW_CURVE_TOL = 0.05                   # curve vs maximum storage: warn above 5 %
 
 
+def _run_vw_acft(dam, params):
+    """Vw of the run (3.29.4): the run report's vw_acft when it has one (sunny day: the
+    maximum storage; PMF / flood inflow: the storage at the pool when the breach started),
+    else for a flood-inflow run its storage at failure, else the dam's maximum storage."""
+    p = params or {}
+    if p.get("vw_acft"):
+        return float(p["vw_acft"])
+    if str(p.get("scenario") or "").startswith("flood inflow") and \
+            p.get("storage_at_failure_acft"):
+        return float(p["storage_at_failure_acft"])
+    return float(dam.storage_top_acft)
+
+
 def froehlich_2008_piping_ft(dam, params, bottom_ft):
-    """Froehlich (2008) piping breach (K0 1.0, z 0.7). Vw is the dam's maximum storage as
-    given (DWR's max storage: DamData.storage_top_acft) and hb = top - bottom, both from the
-    run's dam (NAVD88: the DWR value plus the run's VERTCON shift, core/vdatum_run.apply).
-    The elevation-volume curve is only a check: a storage at failure that differs from Vw by
-    more than VW_CURVE_TOL gives a warning ('curve_warning'). Returns {'avg_width_ft',
-    'tf_hr', 'z', 'vw_acft', 'curve_warning'} or None when it cannot be computed."""
+    """Froehlich (2008) piping breach (K0 1.0, z 0.7). Vw is the run's Vw (3.29.4,
+    _run_vw_acft): for a sunny-day run the dam's maximum storage as given (DWR's max storage:
+    DamData.storage_top_acft), for a PMF / flood-inflow run the storage at the pool when the
+    breach started (ND standards); hb = top - bottom, from the run's dam (NAVD88: the DWR value
+    plus the run's VERTCON shift, core/vdatum_run.apply). Returns {'avg_width_ft', 'tf_hr',
+    'z', 'vw_acft', 'curve_warning'} ('curve_warning' is always '' since 3.29.4: the curve is
+    anchored at the maximum storage, so a difference only means the pool started below the
+    crest; breach.py notes that) or None when it cannot be computed."""
     from . import breach
-    p = dict(params or {})
     hb_ft = dam.top_of_dam_ft - bottom_ft
-    vw_acft = dam.storage_top_acft
     try:
+        vw_acft = _run_vw_acft(dam, params)
         b_m, tf_s, z = breach.froehlich_2008(float(vw_acft) * ACFT, hb_ft * FT, "piping")
     except (TypeError, ValueError):
         return None
-    warn = ""
-    curve = p.get("storage_at_failure_acft")
-    if curve is not None and vw_acft and \
-            abs(float(curve) - float(vw_acft)) > VW_CURVE_TOL * float(vw_acft):
-        warn = ("Check: the elevation-volume curve gives {} ac-ft at the starting pool, "
-                "{:+.0f} % from the maximum storage {} ac-ft used as Vw.".format(
-                    _num(curve), 100.0 * (float(curve) / float(vw_acft) - 1.0), _num(vw_acft)))
     return {"avg_width_ft": b_m / FT, "tf_hr": tf_s / 3600.0, "z": z,
-            "vw_acft": round(float(vw_acft), 2), "curve_warning": warn}
+            "vw_acft": round(float(vw_acft), 2), "curve_warning": ""}
 
 
 def breach_parameter_rows(dam, params, peak_cfs=None):
