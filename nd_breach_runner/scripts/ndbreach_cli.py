@@ -1641,10 +1641,8 @@ def cmd_batch(args):
         out = dict.fromkeys(BATCH_FIELDS, "")
         out.update({"Dam": dam_id, "Folder": folder})
         pr = Progress(100.0 * i / n, 100.0 * (i + 1) / n)
-        depth_names = (workflow.FINAL_NAMES["depth"],
-                       os.path.splitext(workflow.FINAL_NAMES["depth"])[0] + ".asc")
-        if skip_done and any(os.path.exists(os.path.join(folder, nm)) for nm in depth_names):
-            out.update({"Status": "skipped", "Message": "already has Depth (Max)"})
+        if skip_done and workflow.run_finished(folder):
+            out.update({"Status": "skipped", "Message": "already run (finished)"})
             results.append(out)
             continue
         say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))

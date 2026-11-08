@@ -56,7 +56,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.29.6"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.29.7"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -162,6 +162,23 @@ STATE_FILE = "state.json"
 RUN_REPORT_REL = os.path.join(MODEL_FOLDER, "run_report.json")
 
 
+def _write_json(path, obj):
+    """Replace `path` only after the whole document is on disk.
+
+    A plain open/write leaves a truncated file if the process is killed mid-dump.
+    run_finished() does not treat a truncated run_report.json as a finished run, so
+    a kill during the write must not replace a good report with a half file."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, default=_json_default)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def run_finished(folder):
     """3.21.0: True only when the dam folder holds a FINISHED run, not merely a pass.
 
@@ -181,8 +198,8 @@ def run_finished(folder):
     try:                                   # a report without run_finished is an interrupted run
         with open(rep, encoding="utf-8") as fh:
             return bool(json.load(fh).get("run_finished"))
-    except Exception:                      # unreadable report: the rasters are there, treat as done
-        return True
+    except Exception:                      # truncated or damaged: not finished, re-run
+        return False
 
 
 class RunSettings:
@@ -945,8 +962,7 @@ def _write_refine_entry(res, entry):
         return
     rep["grid_refine"] = entry
     try:
-        with open(res.report_json, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2, default=_json_default)
+        _write_json(res.report_json, rep)
     except OSError:
         pass
 
@@ -969,8 +985,7 @@ def _amend_report(res, entry, texts):
     if res.summary is not None:
         rep["summary"] = res.summary
     try:
-        with open(res.report_json, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2, default=_json_default)
+        _write_json(res.report_json, rep)
         if getattr(res, "report_md", ""):
             with open(res.report_md, "w", encoding="utf-8") as f:
                 f.write(render_report(rep))
@@ -2163,8 +2178,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     with open(res.report_md, "w", encoding="utf-8") as f:
         f.write(render_report(report))
@@ -2324,8 +2338,7 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     if hy_nb is not None:
         hy_nb.to_csv(os.path.join(model_dir, "no_breach_hydrograph.csv"))
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     from . import damjson
     with open(res.report_md, "w", encoding="utf-8") as f:
