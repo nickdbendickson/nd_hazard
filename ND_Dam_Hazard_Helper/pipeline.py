@@ -1027,7 +1027,20 @@ def _evaluate(run, cfg, scenarios, breaches):
     if cfg.get("input_overviews"):
         _input_overviews(run, scenarios)
     primary = breaches[0]
-    if layers[primary.name].get("vel") is None and not cfg.get("one_d"):
+    _vel_missing = [s for s in breaches if layers[s.name].get("vel") is None]
+    if _vel_missing and len(_vel_missing) < len(breaches) and not cfg.get("one_d"):
+        # H19: some breach scenarios have a Vmax raster and others do not. Classifying
+        # the ones without it at velocity 0 reads the ACER zone off the curves at v=0
+        # (not conservative); forcing the whole run to the depth-only (1D) criterion is
+        # not conservative for the scenarios that DO have velocity in shallow fast flow.
+        # Neither stand-in is defensible, so refuse the run (cf. checks.py "no velocity
+        # raster", scenarios.raster_reuse_problems).
+        raise RuntimeError(
+            "breach scenario(s) {} have no velocity raster while others do: ACER zones use "
+            "max depth with max velocity (Dmax / Vmax) - give the Vmax raster for every "
+            "breach scenario, or choose the 1D (depth-only) criterion".format(
+                ", ".join(repr(s.name) for s in _vel_missing)))
+    if all(layers[s.name].get("vel") is None for s in breaches) and not cfg.get("one_d"):
         # v2.5.1: ACER zones come from Dmax / Vmax only - without a velocity
         # raster the depth-only (1D) criterion is used rather than velocity 0
         run.forced_1d = True
@@ -1434,7 +1447,17 @@ def _classify_and_write(run, cfg, state):
     dlyr = layers[breaches[0].name]["depth"]
     clip = ExtentClip(dlyr, cfg["extent_buffer_ft"], run.ctx, rect=state["clip_rect"])
     # no velocity raster: the depth-only criterion, whatever the setting says
-    run.forced_1d = layers[breaches[0].name].get("vel") is None and not cfg.get("one_d")
+    _vel_missing = [s for s in breaches if layers[s.name].get("vel") is None]
+    if _vel_missing and len(_vel_missing) < len(breaches) and not cfg.get("one_d"):
+        # H19: mixed breach scenarios (some with a Vmax raster, some without). Refuse
+        # rather than classify the missing ones at velocity 0 (not conservative); the
+        # reuse path reaches stage B without stage A, so the guard must repeat here.
+        raise RuntimeError(
+            "breach scenario(s) {} have no velocity raster while others do: ACER zones use "
+            "max depth with max velocity (Dmax / Vmax) - give the Vmax raster for every "
+            "breach scenario, or choose the 1D (depth-only) criterion".format(
+                ", ".join(repr(s.name) for s in _vel_missing)))
+    run.forced_1d = all(layers[s.name].get("vel") is None for s in breaches) and not cfg.get("one_d")
     forced_line = ("No velocity raster: depth-only (1D) criterion used (ACER zones need "
                    "Dmax / Vmax)")
     run.sources = [x for x in run.sources if x != forced_line]
