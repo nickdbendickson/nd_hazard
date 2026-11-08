@@ -182,7 +182,7 @@ class Triage(QgsProcessingAlgorithm):
                                    flag=feat[f_hab] if f_hab else None, uninhabited=uninhabited)
 
         def points_of(kind, parts):
-            """Points tested against the envelope: the points; a polygon's centroid and vertices;
+            """Points tested against the envelope: the points; a polygon's vertex mean and vertices;
             a line's vertices (lines are densified before)."""
             if kind == "point":
                 return parts
@@ -232,6 +232,23 @@ class Triage(QgsProcessingAlgorithm):
                     def inside(x, y):
                         r, c = gu.xy_to_rc(gt, x, y)
                         return gu.inside(mask.shape, r, c) and mask[r, c]
+
+                    def receptor_hit(feat, tr):
+                        # H23: sample a polygon receptor the way tool 8 does, so the triage
+                        # shortcut is not less conservative than the 2D tool it stands in for.
+                        # The point test (vertices + their mean) covers sub-cell footprints; for
+                        # a polygon also apply tool 8's rule - any wet cell centre inside a ring
+                        # (hz.nh.sample_footprint over the wet depth, centroid-cell fallback and
+                        # all). Vertex-only sampling missed wet cells in a footprint's interior
+                        # or along its edges, reading a flooded structure/lifeline as clear.
+                        kind_geom, parts = cm.albers_parts(feat, tr)
+                        if any(inside(x, y) for x, y in points_of(kind_geom, parts)):
+                            return True
+                        if kind_geom == "polygon":
+                            return any((hz.nh.sample_footprint(env["depth"], None, gt[0], gt[3],
+                                                               abs(gt[1]), ring)[0] or 0) > 0
+                                       for ring in parts)
+                        return False
                     found = []
                     for src, kind in ((bld, "structure"), (life, "lifeline")):
                         if src is None:
@@ -240,7 +257,7 @@ class Triage(QgsProcessingAlgorithm):
                         for b in src.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
                             if kind == "structure" and not habitable(b):
                                 continue
-                            if any(inside(x, y) for x, y in points_of(*cm.albers_parts(b, ta))):
+                            if receptor_hit(b, ta):
                                 found.append(kind)
                     for oid, (x, y) in dam_pts:
                         if oid != dam_id and inside(x, y):
