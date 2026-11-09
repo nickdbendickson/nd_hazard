@@ -659,6 +659,12 @@ class _Base(QgsProcessingAlgorithm):
                   "up to this while the flood is still moving", 96.0, minimum=1.0)
         self.addParameter(set_advanced(QgsProcessingParameterCrs(
             "WORK_CRS", "Model CRS (metric; empty = NAD83 UTM zone of the dam)", optional=True)))
+        self._bool("ANUGA_KEEP_FINE_MAXIMA", "ANUGA: keep native triangle maxima and fine GeoTIFFs", False,
+                   help="Keep mesh + triangle max depth, speed and WSE in NPZ and depth/speed GeoTIFFs "
+                        "at the fine elevation cell size. Skipped if estimated free space falls below 18 GiB.")
+        self._bool("ANUGA_KEEP_FINE_SUPPORT", "ANUGA: also keep fine elevation and checkpoints", False,
+                   help="Only with Keep native triangle maxima. Retain existing fine elevation, "
+                        "checkpoints and partial results on success; does not enable checkpointing.")
         self._num("ANUGA_FINE", "ANUGA: largest triangle near the dam (m²; 100 m² = 1,076 ft²)",
                   100.0, minimum=1.0, advanced=True)
         self._num("ANUGA_COARSE", "ANUGA: largest triangle elsewhere (m²; 1,000 m² = 10,764 "
@@ -759,6 +765,8 @@ class _Base(QgsProcessingAlgorithm):
             sim_max_hr=sim_max if sim_max > 0 else None, lisflood_exe=exe, anuga_python=py,
             threads=threads, anuga_fine_area_m2=g("ANUGA_FINE"),
             anuga_coarse_area_m2=g("ANUGA_COARSE"), anuga_near_field_mi=g("ANUGA_NEAR_MI"),
+            anuga_keep_fine_maxima=self.parameterAsBool(parameters, "ANUGA_KEEP_FINE_MAXIMA", context),
+            anuga_keep_fine_support=self.parameterAsBool(parameters, "ANUGA_KEEP_FINE_SUPPORT", context),
             anuga_buffer_m=g("ANUGA_BUFFER"), anuga_cell_m=g("ANUGA_CELL"), scenario=scen,
             keep_model_files=self.parameterAsBool(parameters, "KEEP_FILES", context),
             products=self.parameterAsBool(parameters, "PRODUCTS", context),
