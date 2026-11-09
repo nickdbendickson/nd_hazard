@@ -30,6 +30,12 @@ import time
 import numpy as np
 
 
+try:
+    from . import anuga_fine_maxima
+except ImportError:
+    import anuga_fine_maxima
+
+
 def bilinear(dem, x0, y0, dx, x, y):
     a = dem
     ny, nx = a.shape
@@ -335,6 +341,12 @@ def main(job_path, out_path):
              "culverts": len(culverts) - len(culvert_errors), "culvert_errors": culvert_errors,
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
              "algorithm": str(job["algorithm"])}
+    fine_record = anuga_fine_maxima.retain(os.path.dirname(os.path.abspath(out_path)),
+                                           job, domain, env, x_ref, y_ref)
+    if fine_record.get("enabled"):
+        stats["fine_maxima"] = fine_record
+    if fine_record.get("warning"):
+        print("WARNING: " + fine_record["warning"], flush=True)
     np.savez_compressed(out_path, depth=depth, velocity=vel, arrival_hr=arr, wse=wse,
                         stats=json.dumps(stats))
     print("PROGRESS 100 done", flush=True)

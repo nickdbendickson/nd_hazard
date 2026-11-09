@@ -42,6 +42,8 @@ class AnugaSettings:
         self.buffer_m = buffer_m
         self.algorithm = algorithm
         self.velocity_min_depth_m = velocity_min_depth_m
+        self.keep_fine_maxima = False
+        self.keep_fine_support = False
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -132,6 +134,10 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["breaklines_json"] = json.dumps([np.asarray(b).tolist() for b in breaklines])
     if regions:
         job["regions_json"] = json.dumps(regions)
+    if getattr(st, "keep_fine_maxima", False):
+        job.update(keep_fine_maxima=True,
+                   keep_fine_support=bool(getattr(st, "keep_fine_support", False)),
+                   fine_maxima_crs=str(getattr(dem, "crs_wkt", "") or ""))
     np.savez(path, **job)
 
 
@@ -283,6 +289,8 @@ def _run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph,
     with np.load(result) as r:
         stats = json.loads(str(r["stats"]))
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
+    from . import anuga_fine_maxima
+    anuga_fine_maxima.export_geotiffs(workdir, stats.get("fine_maxima", {}), log=log)
     stats.update({
         "max_depth_ft": round(float(np.nanmax(depth)) / 0.3048, 2),
         "max_velocity_fps": round(float(np.nanmax(vel)) / 0.3048, 2),
