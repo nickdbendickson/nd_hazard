@@ -20,6 +20,26 @@ NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
        ("tri_audit", FT_STRING), ("tri_tif", FT_STRING)]
 
 
+def _road_name(r):
+    """The road's name and ND NG9-1-1 SHIELD code (as tool 8's _rname), so a US / State
+    highway named only there ('HIGHWAY 23', 'US 2', SHIELD USHY / STHY) counts at least
+    Medium under 5.2.1.2(b) instead of being dropped as Low on a sub-500 AADT."""
+    try:
+        low = {n.lower(): n for n in r.fields().names()}
+    except Exception:                                    # noqa  (never fails the tool)
+        return ""
+    got = ""
+    for n in ("name", "fullname", "full_name", "road_name", "rte_name", "route_name"):
+        v = r[low[n]] if n in low else None
+        if v is not None and str(v) not in ("", "NULL"):
+            got = str(v)
+            break
+    sh = r[low["shield"]] if "shield" in low else None
+    if sh is not None and str(sh).strip().upper() in ("USHY", "STHY"):
+        got = (got + " " + str(sh).strip()).strip()
+    return got
+
+
 class _NoFlood(Exception):
     """A pond marked no_flood = YES by tool 16."""
 
@@ -162,7 +182,7 @@ class Triage(QgsProcessingAlgorithm):
                                    flag=feat[f_hab] if f_hab else None, uninhabited=uninhabited)
 
         def points_of(kind, parts):
-            """Points tested against the envelope: the points; a polygon's centroid and vertices;
+            """Points tested against the envelope: the points; a polygon's vertex mean and vertices;
             a line's vertices (lines are densified before)."""
             if kind == "point":
                 return parts
@@ -212,6 +232,23 @@ class Triage(QgsProcessingAlgorithm):
                     def inside(x, y):
                         r, c = gu.xy_to_rc(gt, x, y)
                         return gu.inside(mask.shape, r, c) and mask[r, c]
+
+                    def receptor_hit(feat, tr):
+                        # H23: sample a polygon receptor the way tool 8 does, so the triage
+                        # shortcut is not less conservative than the 2D tool it stands in for.
+                        # The point test (vertices + their mean) covers sub-cell footprints; for
+                        # a polygon also apply tool 8's rule - any wet cell centre inside a ring
+                        # (hz.nh.sample_footprint over the wet depth, centroid-cell fallback and
+                        # all). Vertex-only sampling missed wet cells in a footprint's interior
+                        # or along its edges, reading a flooded structure/lifeline as clear.
+                        kind_geom, parts = cm.albers_parts(feat, tr)
+                        if any(inside(x, y) for x, y in points_of(kind_geom, parts)):
+                            return True
+                        if kind_geom == "polygon":
+                            return any((hz.nh.sample_footprint(env["depth"], None, gt[0], gt[3],
+                                                               abs(gt[1]), ring)[0] or 0) > 0
+                                       for ring in parts)
+                        return False
                     found = []
                     for src, kind in ((bld, "structure"), (life, "lifeline")):
                         if src is None:
@@ -220,7 +257,7 @@ class Triage(QgsProcessingAlgorithm):
                         for b in src.getFeatures(QgsFeatureRequest().setFilterRect(fa.transformBoundingBox(ext))):
                             if kind == "structure" and not habitable(b):
                                 continue
-                            if any(inside(x, y) for x, y in points_of(*cm.albers_parts(b, ta))):
+                            if receptor_hit(b, ta):
                                 found.append(kind)
                     for oid, (x, y) in dam_pts:
                         if oid != dam_id and inside(x, y):
@@ -236,7 +273,8 @@ class Triage(QgsProcessingAlgorithm):
                                 # low (AADT < 500, not interstate, not US / State) cannot raise the class; an
                                 # unknown AADT is assumed Medium there, so it counts here too
                                 rd = hz.nd_road("r", 1.0, aadt, str(r[f_rcls]) if f_rcls and r[f_rcls] else "",
-                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False)
+                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False,
+                                                name=_road_name(r))
                                 lvl = hz.nh.road_class(rd, hz.nh.Settings())[0]
                                 if lvl == "Low":
                                     continue            # cannot raise the class above Low

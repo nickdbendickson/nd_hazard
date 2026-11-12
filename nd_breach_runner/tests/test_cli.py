@@ -525,10 +525,15 @@ def cli_batch_plumbing():
             assert xy2 == (500.0, 100.0)
             assert folder2.endswith(os.path.join("out", "A2"))
             assert "NIDID" in out and "F_HEIGHT" in out         # the column mapping is shown
-            # a second pass skips the dams that already have results
+            # a second pass skips the dams whose run FINISHED (H06: not a cancelled pass that
+            # left only Depth (Max).tif - the CLI now uses workflow.run_finished)
             for a in ("A1", "A2", "A5"):
-                os.makedirs(os.path.join(d, "out", a), exist_ok=True)
-                open(os.path.join(d, "out", a, "Depth (Max).tif"), "w").write("x")
+                folder = os.path.join(d, "out", a)
+                os.makedirs(os.path.join(folder, c.workflow.MODEL_FOLDER), exist_ok=True)
+                for k in ("depth", "velocity", "arrival"):
+                    open(os.path.join(folder, c.workflow.FINAL_NAMES[k]), "w").write("x")
+                with open(os.path.join(folder, c.workflow.RUN_REPORT_REL), "w") as fh:
+                    json.dump({"run_finished": "2026-11-08T00:00:00"}, fh)
             del calls[:]
             code, out, err = run_cli("batch", table, p, "--lisflood", fake_exe)
             assert code == 3 and calls == [], (code, [x[0].dam_id for x in calls])

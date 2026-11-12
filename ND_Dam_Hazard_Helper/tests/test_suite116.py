@@ -26,7 +26,7 @@ from ND_Dam_Hazard_Helper.damsuite import suitecheck as SC  # noqa: E402
 from ND_Dam_Hazard_Helper.damsuite import suitedata as SD  # noqa: E402
 from ND_Dam_Hazard_Helper.damsuite import versions as VS  # noqa: E402
 
-RELEASE = {"ndhazard": "2.35.17", "ndbreach": "3.29.4", "ndscreen": "0.33.13",
+RELEASE = {"ndhazard": "2.35.19", "ndbreach": "3.29.7", "ndscreen": "0.33.16",
            "ndupdater": "1.8.1"}
 
 
@@ -167,7 +167,7 @@ def suite116_an_old_plugin_is_a_warning_that_names_this_release():
         items = SC.check(iso.folder, versions={"ndhazard": "2.20.0"}, charts=False)
         row = SC.by_key(items)["plugin_ndhazard"]
         assert row["level"] == "warn", row
-        assert "2.35.17" in row["text"]
+        assert "2.35.19" in row["text"]
 
 
 @test
@@ -396,6 +396,24 @@ def suite116_warning_time_bands_and_population_day_and_night():
     assert LO.people(r, "night") == 3.0 and LO.people(r, "day") == 1.0
     assert LO.people({"habitable": True}) == LO.DEFAULT_PEOPLE
     assert LO.people({"habitable": False}) == 0.0
+
+
+@test
+def suite116_unknown_arrival_time_counts_as_no_warning_not_the_best_band():
+    # A structure with no known arrival time must NOT be scored as >60 min of warning (the
+    # smallest fatality rate). It is counted as no warning (under15), matching the Runner's
+    # consequences.warning_class, and the count is reported so the assumption is visible.
+    assert LO.warning_band(float("nan")) == ""     # NaN is "unknown", not the best band
+    assert LO.UNKNOWN_WARNING_BAND == "under15"
+    rows = [{"depth_ft": 14, "velocity_fts": 8, "pop2amu65": 3} for _ in range(10)]  # no arrival
+    est = LO.estimate(rows)
+    assert est["by_band"]["under15"] == 30.0 and est["by_band"]["over60"] == 0.0
+    assert est["arrival_unknown"] == 10 and est["par_arrival_unknown"] == 30.0
+    assert "warning time unknown" in "\n".join(LO.estimate_text(est))
+    signed = {"signed_off_by": "eng", "rates": {("high", "under15"): 0.9,
+              ("high", "15to60"): 0.5, ("high", "over60"): 0.2}}
+    # unknown arrival -> under15 rate (27.0), the conservative value, not the over60 rate (6.0)
+    assert LO.estimate(rows, rates=signed)["fatalities"] == 27.0
 
 
 @test

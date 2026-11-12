@@ -148,6 +148,29 @@ v = ds.GetRasterBand(1).ReadAsArray()
 ds = None
 assert abs(float(v[5, 5]) - 609.6) < 1e-3                 # 2000 ft once, not 0.3048 twice
 
+# ----------------------------------------- 3b. H10: build_vrts mosaics tiles that span CRSs (ND
+# LiDAR State Plane N / S for ASCII feet), instead of a bare BuildVRT that keeps the first tile's
+# CRS and silently drops the rest -> a reservoir straddling a CRS boundary read understated storage.
+_mixd = os.path.join(work, "h10", "ASCII_Grids_ft")
+os.makedirs(_mixd)
+_tA = write(os.path.join(_mixd, "gftA.tif"), 2266, 1900000.0, 600000.0, 10.0, np.full((20, 20), 2000.0, "float32"))
+_tB = write(os.path.join(_mixd, "gftB.tif"), 2265, 1900000.0, 600000.0, 10.0, np.full((20, 20), 3000.0, "float32"))
+_bare = gdal.BuildVRT(os.path.join(work, "h10_bare.vrt"), [_tA, _tB])
+_nbare = len(_bare.GetFileList())                          # a bare BuildVRT drops the minority-CRS tile
+_bare = None
+_mout = os.path.join(work, "h10_out")
+os.makedirs(_mout)
+dd.build_vrts([_tA, _tB], _mout)
+_ftv = gdal.Open(os.path.join(_mout, "nd_lidar_ascii_ft.vrt"))
+assert _ftv is not None and len(_ftv.GetFileList()) > _nbare, "H10: a CRS-mismatched tile was dropped"
+_ftv = None
+assert os.path.isdir(os.path.join(_mout, "nd_lidar_ascii_ft_tiles")), "H10: the minority tile was not warped"
+_sout = os.path.join(work, "h10_one")
+os.makedirs(_sout)
+_tc = write(os.path.join(_sout, "gftC.tif"), 2266, 1900000.0, 600000.0, 10.0, np.full((20, 20), 1000.0, "float32"))
+dd.build_vrts([_tc], _sout)
+assert not os.path.isdir(os.path.join(_sout, "nd_lidar_ascii_ft_tiles")), "H10: single-CRS must not warp"
+
 # ---------------------------------------------------------------- 4. DEMs written are tagged metres
 w = dd.warp_to(a, os.path.join(work, "dem_2266.tif"), 2266)
 ds = gdal.Open(w)

@@ -550,7 +550,10 @@ def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0):
             vmax = None
             if vel is not None:
                 v = np.asarray(vel[r0:r1 + 1, c0:c1 + 1], float)[m]
-                wet = np.isfinite(d) & (d * to_ft >= wet_ft) & np.isfinite(v)
+                # option C: the classifying velocity is the peak over ALL wet (d > 0) cells,
+                # matching DamSafety_Hazard structures.peak_pair; the wet_ft floor is not applied
+                # here so Runner/Screening agree with Hazard on the same rasters (H07).
+                wet = np.isfinite(d) & (d > 0) & np.isfinite(v)
                 if wet.any():
                     vmax = float(v[wet].max())
                 elif dmax is not None and np.isfinite(v[k]):

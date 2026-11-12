@@ -209,7 +209,7 @@ class Sampler:
         vk = float(vv[k]) if math.isfinite(vv[k]) else None
         # TM 11 practice (option C, 2026-11-01): a multipoint classifies on the peak velocity
         # over its wet points; vel_at_max_fts (the deepest point's) is information only
-        wet = (d >= self.wet) & np.isfinite(vv)
+        wet = (d > 0) & np.isfinite(vv)   # option C: velocity over all wet cells (matches Hazard), not wet_ft
         v = float(vv[wet].max()) if wet.any() else vk
         return {"depth_ft": float(d[k]), "vel_fts": v, "vel_at_max_fts": vk,
                 "x": float(pts[k, 0]), "y": float(pts[k, 1]), "cells": 1, "how": "point"}
@@ -251,7 +251,7 @@ class Sampler:
         d = self.d[r, c]
         v = self.v[r, c]
         k = int(np.argmax(d))
-        wet = (d >= self.wet) & np.isfinite(v)
+        wet = (d > 0) & np.isfinite(v)   # option C: velocity over all wet cells (matches Hazard), not wet_ft
         vk = float(v[k]) if np.isfinite(v[k]) else None
         vmax = float(v[wet].max()) if wet.any() else vk
         if d[k] > 0:

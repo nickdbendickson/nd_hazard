@@ -299,15 +299,18 @@ def nd_hazard_sampling_matches_the_runner_tool():
     d2 = np.zeros((3, 3)); v2 = np.zeros((3, 3))
     d2[1, 0], v2[1, 0] = 3.0, 1.0          # deepest cell, slow
     d2[1, 2], v2[1, 2] = 0.5, 8.0          # shallower wet cell, fast
-    d2[0, 1], v2[0, 1] = 0.05, 12.0        # below the wet depth: not counted
+    d2[0, 1], v2[0, 1] = 0.05, 12.0        # trace-depth wet cell (d > 0), still fast
     g2 = Grid(np.zeros((3, 3)), 0.0, 30.0, 10.0)
     ring2 = [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)]
+    # H07: the classifying velocity is the peak over ALL wet (d > 0) cells, matching Hazard's
+    # structures.peak_pair - the trace-depth 0.05 ft cell at 12 ft/s now counts, so vel is 12.0
+    # (was 8.0 under the old wet_ft=0.1 floor). Peak depth (3.0) and vel_at_max (1.0) unchanged.
     s2 = an.Sampler(g2, d2, v2, wet_ft=0.1)
     a2 = s2.polygon([np.array(ring2)], (15.0, 15.0))
-    assert (a2["depth_ft"], a2["vel_fts"], a2["vel_at_max_fts"]) == (3.0, 8.0, 1.0), a2
-    assert nh.sample_footprint(d2, v2, 0.0, 30.0, 10.0, ring2, 0.1)[:2] == (3.0, 8.0)
+    assert (a2["depth_ft"], a2["vel_fts"], a2["vel_at_max_fts"]) == (3.0, 12.0, 1.0), a2
+    assert nh.sample_footprint(d2, v2, 0.0, 30.0, 10.0, ring2, 0.1)[:2] == (3.0, 12.0)
     m2 = s2.points([(5.0, 15.0), (25.0, 15.0), (15.0, 25.0)])     # multipoint
-    assert (m2["depth_ft"], m2["vel_fts"], m2["vel_at_max_fts"]) == (3.0, 8.0, 1.0), m2
+    assert (m2["depth_ft"], m2["vel_fts"], m2["vel_at_max_fts"]) == (3.0, 12.0, 1.0), m2
     line = [(105.0, 695.0), (390.0, 430.0), (480.0, 600.0)]
     a = s.lines([np.array(line)])
     assert abs(a["depth_ft"] - nh.sample_line_max(d, 100.0, 700.0, 10.0, line)) < 1e-9
