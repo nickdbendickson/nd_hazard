@@ -223,7 +223,7 @@ def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False
     rws, cls = np.nonzero(water)
     centre = (float(rws.mean()), float(cls.mean()))
     prof = _profile(dem, water, other, cell, centre, p)
-    Z, bw, nb = prof["Z"], prof["bw"], prof["nb"]
+    Z, bw = prof["Z"], prof["bw"]
     near_k = max(1, int(math.ceil(p.crest_m / bw)))
 
     sec = []                                    # per sector: dict or None
