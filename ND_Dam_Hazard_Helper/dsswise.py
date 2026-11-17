@@ -90,15 +90,59 @@ def _zip_key(path):
     return h.hexdigest()[:10]
 
 
-def open_package(path, work_folder):
+# v2.x: refuse a decompression bomb while leaving a real DSS-WISE package (large GeoTIFF rasters,
+# shapefiles, KMZ, PDF, CSVs) importing unchanged. Raise these if a legitimate package is rejected.
+MAX_ZIP_ENTRIES = 10000               # files per package (all nested levels)
+MAX_ENTRY_BYTES = 4 * 1024 ** 3       # 4 GiB uncompressed per file
+MAX_TOTAL_BYTES = 20 * 1024 ** 3      # 20 GiB uncompressed per package
+MAX_ZIP_DEPTH = 3                     # nested "zip inside the zip" levels
+
+
+def _is_symlink_member(member):
+    """True for a symlink entry (Unix S_IFLNK in the external attributes). A symlink is never part
+    of a DSS-WISE package and is refused rather than extracted."""
+    return (member.external_attr >> 16) & 0o170000 == 0o120000
+
+
+def _extract_member_capped(zf, member, target, per_entry_cap, remaining_total):
+    """Stream one member to `target`, counting the REAL bytes written (never trusting the zip's
+    declared size). Returns bytes written; raises ValueError when the member goes past the per-entry
+    cap or what remains of the package budget - so a lying central directory cannot slip a bomb by."""
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    written = 0
+    with zf.open(member) as src, open(target, "wb") as dst:
+        while True:
+            chunk = src.read(1 << 20)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > per_entry_cap or written > remaining_total:
+                dst.close()
+                try:
+                    os.remove(target)
+                except OSError:
+                    pass
+                raise ValueError(
+                    "DSS-WISE package member {} is too large (possible zip bomb)".format(member.filename))
+            dst.write(chunk)
+    return written
+
+
+def open_package(path, work_folder, _budget=None, _depth=0):
     """Folder holding the package contents. A zip is extracted safely into
     work_folder/package_<fingerprint>: a fresh folder for every different
     zip, so files of an earlier package imported under the same name can
-    never be mixed in."""
+    never be mixed in. Members that escape the folder, symlink members, and any
+    package past the size / count / nesting caps are refused."""
     if os.path.isdir(path):
         return path
     if not zipfile.is_zipfile(path):
         raise ValueError("{} is neither a folder nor a zip file".format(path))
+    if _budget is None:
+        _budget = {"bytes": 0, "entries": 0}
+    if _depth > MAX_ZIP_DEPTH:
+        raise ValueError("DSS-WISE package nests zip files more than {} deep "
+                         "(possible zip bomb)".format(MAX_ZIP_DEPTH))
     dest = os.path.join(work_folder, "package_" + _zip_key(path))
     os.makedirs(dest, exist_ok=True)
     root = os.path.realpath(dest)
@@ -106,12 +150,24 @@ def open_package(path, work_folder):
         for member in zf.infolist():
             if is_junk_path(member.filename):
                 continue        # v2.4.1: __MACOSX / ._* / .DS_Store not extracted
+            if _is_symlink_member(member):
+                log_message("DSS-WISE: skipped symlink entry in zip: {}".format(member.filename),
+                            MSG_WARNING)
+                continue
             target = os.path.realpath(os.path.join(dest, member.filename))
             if target != root and not target.startswith(root + os.sep):
                 log_message("DSS-WISE: skipped unsafe path in zip: {}".format(member.filename),
                             MSG_WARNING)
                 continue
-            zf.extract(member, dest)
+            if member.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            _budget["entries"] += 1
+            if _budget["entries"] > MAX_ZIP_ENTRIES:
+                raise ValueError("DSS-WISE package has more than {} files "
+                                 "(possible zip bomb)".format(MAX_ZIP_ENTRIES))
+            _budget["bytes"] += _extract_member_capped(
+                zf, member, target, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES - _budget["bytes"])
     # a zip inside the zip (package of packages)
     for dirpath, _dirs, files in os.walk(dest):
         for f in files:
@@ -119,7 +175,7 @@ def open_package(path, work_folder):
                 inner = os.path.join(dirpath, f)
                 sub = os.path.join(dirpath, os.path.splitext(f)[0])
                 try:
-                    open_package(inner, sub)
+                    open_package(inner, sub, _budget, _depth + 1)
                 except Exception as e:
                     log_message("DSS-WISE: inner zip {} not extracted: {}".format(f, e),
                                 MSG_WARNING)
