@@ -15,13 +15,19 @@ for reference and for anyone who still has the ND set installed.
 
 | Plugin (last version) | Successor in dAmIt_Plugins |
 |---|---|
-| ND Dam Hazard Classification Helper 2.35.18 | DamSafety Hazard |
-| ND Dam Breach Runner 3.29.6 | DamSafety Runner |
-| ND Dam Breach Screening 0.33.15 | DamSafety Screening |
+| ND Dam Hazard Classification Helper 2.35.19 | DamSafety Hazard |
+| ND Dam Breach Runner 3.29.7 | DamSafety Runner |
+| ND Dam Breach Screening 0.33.16 | DamSafety Screening |
 | ND Data Updater 1.8.1 | DamSafety Data (+ DamSafety Setup) |
 
 The final state of `main` is tagged **`archive/nd-plugins-2026-11-07`**. The last built zips are in
 `releases/1.30/` (see `releases/1.30/RELEASE_NOTES.md`).
+
+**Changes on `main` after the 2026-11-07 archive** (no new releases built; note: the `archive/nd-plugins-2026-11-07` tag named above is not on GitHub as of 2026-11-18): audit batch 2 (#80, 2026-11-08: Runner 3.29.7,
+Helper 2.35.19, Screening 0.33.16), and a security fix without a version bump (#82, 2026-11-17): the Helper's
+DSS-WISE package import (`ND_Dam_Hazard_Helper/dsswise.py`) now caps extraction (4 GiB per entry, 20 GiB per
+package, 10,000 entries, nested zips at most 3 deep, one budget for the whole tree, counted on the bytes actually
+written) and skips symlink members, on top of the existing path-traversal guard. Real packages import as before.
 
 ## If you still run the ND set
 
