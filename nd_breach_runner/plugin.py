@@ -181,7 +181,7 @@ class NDBreachRunnerPlugin:
         # 3.5: the shared Plugins > ND Dam Suite menu (one menu for the three plugins)
         try:
             from . import suite_home
-            for label, name, slot in (("ND Dam Breach Runner...", "NDSuiteRunnerWindow", self.run_plugin),
+            for label, name, slot in (("ND Dam Breach Runner…", "NDSuiteRunnerWindow", self.run_plugin),
                                       ("Dam suite home…", "NDSuiteHome", self.run_home),
                                       ("Suite settings…", "NDSuiteSettings", self.run_settings),
                                       ("Suite data and servers…", "NDSuiteData",

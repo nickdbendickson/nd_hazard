@@ -109,7 +109,7 @@ class NDdamHazardHelperPlugin(QObject):
         self.suite_actions = []
         try:
             from . import suite_home
-            for label, name, slot in ((PLUGIN_NAME + "...", "NDSuiteHazardWindow", self.run_plugin),
+            for label, name, slot in ((PLUGIN_NAME + "…", "NDSuiteHazardWindow", self.run_plugin),
                                       ("Dam suite home…", "NDSuiteHome", self.run_home),
                                       ("Suite data and servers…", "NDSuiteData",
                                        self.run_suite_data),
