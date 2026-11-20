@@ -264,11 +264,6 @@ class Grid:
     def point(self, x, y):
         return nh.sample_point(self.depth, self.vel, self.x0, self.y_top, self.cell, x, y)
 
-    def _dv_point(self, x, y):
-        if self.dv is None:
-            return None
-        return nh.sample_point(self.dv, None, self.x0, self.y_top, self.cell, x, y)[0]
-
     def sample(self, kind, parts, wet_ft=0.1):
         """{depth_m, vel_ms, dv_m2s, x, y, how} for a feature's parts, or None when it is off
         the grid. kind: 'point' (parts = [(x, y)...]: the deepest point, the largest velocity of
