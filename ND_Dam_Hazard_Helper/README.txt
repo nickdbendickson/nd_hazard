@@ -1202,4 +1202,4 @@ Messages panel. Expected known tests: found 2, found 2, mobile 1, vehicle 2.
 The "Run Self-Test" button below runs the whole pipeline on a small
 synthetic data set in a temporary folder (your project is not touched).
 
-License: GNU GPL v3
+License: GNU GPL v3 or later (GPL-3.0-or-later)
