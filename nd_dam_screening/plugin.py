@@ -110,7 +110,7 @@ class NDDamScreeningPlugin:
         window to it; 'Dam suite home', 'Suite settings' and 'Suite data and servers' once)."""
         try:
             from . import suite_home
-            for label, name, slot in (("ND Dam Breach Screening...", "NDSuiteScreeningWindow", self.run_plugin),
+            for label, name, slot in (("ND Dam Breach Screening…", "NDSuiteScreeningWindow", self.run_plugin),
                                       ("Dam suite home…", "NDSuiteHome", self.run_home),
                                       ("Suite settings…", "NDSuiteSettings", self.run_settings),
                                       # 0.16.0: the suite data folder, servers and "Get data for this dam"

@@ -48,9 +48,9 @@ def the_suite_menu_holds_each_shared_entry_once():
 
     iface = Iface()
     added = []
-    for plugin_label, own in (("ND Dam Hazard Classification Helper...", "NDSuiteHazardWindow"),
-                              ("ND Dam Breach Runner...", "NDSuiteRunnerWindow"),
-                              ("ND Dam Breach Screening...", "NDSuiteScreeningWindow")):
+    for plugin_label, own in (("ND Dam Hazard Classification Helper…", "NDSuiteHazardWindow"),
+                              ("ND Dam Breach Runner…", "NDSuiteRunnerWindow"),
+                              ("ND Dam Breach Screening…", "NDSuiteScreeningWindow")):
         for label, name in ((plugin_label, own),
                             ("Dam suite home…", "NDSuiteHome"),
                             ("Suite settings…", "NDSuiteSettings"),
