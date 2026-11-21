@@ -1212,3 +1212,32 @@ Still to review against DamSafety:
 ## Ported from DamSafety (2026-10-28)
 - volume_note / structures_net / operator_share (anuga_model.py): volume gain notes
 - suite_offline / probe_error_text / probe_key / label_checks (basemap.py): probe helpers
+
+
+### Keep ANUGA fine-resolution maxima (optional)
+
+`ANUGA_KEEP_FINE_MAXIMA` / `Settings.anuga_keep_fine_maxima` defaults to **false**.
+The Settings grid and Processing dialog expose it alongside the ANUGA mesh options.
+After a successful run, `anuga/anuga_fine_maxima.npz` contains model-CRS `vertices`
+(float64 Nx2), `triangles` (int64 Tx3), `max_depth_m`, `max_velocity_mps`,
+`max_wse_m` (one value per triangle; dry WSE = NaN), and JSON `metadata` with CRS,
+units and grid transform. These are the every-internal-step envelope, not SWW time
+series and not interpolated coarse output. `anuga_max_depth_fine.tif` and
+`anuga_max_velocity_fine.tif` are tiled float32 GeoTIFFs (metres, metres/second;
+-9999 nodata outside mesh), sampled at cell centres at the fine elevation grid's
+cell size and extent. If no fine elevation was used, they use the model grid.
+GeoTIFFs are exported by the QGIS host;
+the worker preserves the NPZ without needing GDAL in the ANUGA environment.
+
+`ANUGA_KEEP_FINE_SUPPORT` / `Settings.anuga_keep_fine_support` also defaults to
+**false** and only takes effect with maxima retention. It saves the fine terrain from the job as `anuga_elevation_fine.npy`. This fork
+has no checkpoint facility, so there are no checkpoint/partial files to retain.
+Normal success cleanup and no SWW remain unchanged when retention is disabled.
+
+Before saving, reserve uncompressed mesh + three float64 maxima + two float32
+rasters, optionally the support-file sizes, plus 25% and 16 MiB overhead. Skip
+retention with a warning if free disk minus that estimate is below **18 GiB**
+(or free space cannot be read). The host rechecks before raster export and each
+256x256 tile. Raster failures warn and retain the native NPZ and coarse results;
+no hydraulic model is rerun. Retention decisions/warnings appear in the run report.
+These options do not retroactively recover maxima from completed coarse-only runs.

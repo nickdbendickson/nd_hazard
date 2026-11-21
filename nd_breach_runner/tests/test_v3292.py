@@ -24,7 +24,7 @@ MLM = {"method": "mlm1984", "failure_mode": "piping", "side_slope_h": 1.0,
 
 
 @test
-def v3162_f2008_overwrites_the_runs_breach_values_by_default():
+def v3292_f2008_overwrites_the_runs_breach_values_by_default():
     dam = _dam()
     f = hecras.froehlich_2008_piping_ft(dam, {}, 1070.0)
     r = _rows(dam, MLM)
@@ -35,7 +35,7 @@ def v3162_f2008_overwrites_the_runs_breach_values_by_default():
 
 
 @test
-def v3162_fill_missing_is_opt_in():
+def v3292_fill_missing_is_opt_in():
     r = _rows(_dam(), dict(MLM, breach_f2008="fill_missing"))
     assert r["Left side slope"]["value"] == 1.0 and r["Full formation time"]["value"] == 2.0
     assert "Froehlich (2008) piping" not in r
@@ -48,7 +48,7 @@ def v3162_fill_missing_is_opt_in():
 
 
 @test
-def v3162_breach_equations_use_max_storage_and_curve_only_warns():
+def v3292_breach_equations_use_max_storage_and_curve_only_warns():
     low = _dam(pmf_max_wse_ft=1095.0)                    # pool starts 5 ft below the crest
     h = br.routed_hydrograph(low)
     assert h.params["vw_acft"] == 2000.0 and h.params["storage_at_failure_acft"] < 1900.0

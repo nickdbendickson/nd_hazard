@@ -56,7 +56,7 @@ from . import stoprule
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.29.7"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.29.8"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
@@ -241,6 +241,8 @@ class RunSettings:
         # stay at cell_size_m. The fine terrain is read only over the flooded footprint, so a
         # whole-domain 1 m array is never held in memory.
         self.anuga_cell_m = 0.0
+        self.anuga_keep_fine_maxima = False
+        self.anuga_keep_fine_support = False
         self.keep_model_files = True
         # scenario
         self.scenario = SCENARIO_SUNNY
@@ -1923,6 +1925,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                   arrival_m, sim_time, 300.0, st.anuga_near_field_mi * MILE,
                                   st.anuga_fine_area_m2, st.anuga_coarse_area_m2,
                                   st.anuga_buffer_m, st.anuga_algorithm)
+        ast.keep_fine_maxima = bool(getattr(st, "anuga_keep_fine_maxima", False))
+        ast.keep_fine_support = bool(getattr(st, "anuga_keep_fine_support", False))
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
         a_runs = []
