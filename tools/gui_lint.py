@@ -38,8 +38,7 @@ _app = QgsApplication([], True)
 _app.setPrefixPath(os.environ.get("QGIS_PREFIX_PATH", sys.prefix), True)
 _app.initQgis()
 
-from qgis.PyQt.QtWidgets import (QAbstractButton, QDialog, QTabBar, QWidget,  # noqa: E402
-                                 QWizard)
+from qgis.PyQt.QtWidgets import QAbstractButton, QTabBar, QWidget  # noqa: E402
 
 from ND_Dam_Hazard_Helper.tokens import TOKENS  # noqa: E402
 
@@ -180,30 +179,28 @@ def rule_no_sideways(label, win):
         for i in range(tabs.count()):
             tabs.setCurrentIndex(i)
             pump(2)
-            for sa in [tabs.widget(i)]:
-                if isinstance(sa, QScrollArea) and sa.widget() is not None and \
-                        sa.widget().width() > sa.viewport().width() + 2:
-                    bad.add("{} ({} px in {})".format(tabs.tabText(i), sa.widget().width(),
-                                                       sa.viewport().width()))
+            sa = tabs.widget(i)
+            if isinstance(sa, QScrollArea) and sa.widget() is not None and \
+                    sa.widget().width() > sa.viewport().width() + 2:
+                bad.add("{} ({} px in {})".format(tabs.tabText(i), sa.widget().width(),
+                                                   sa.viewport().width()))
     if bad:
         fail(label, "pages scroll sideways: {}".format(sorted(bad)))
 
 
 def _table_fits(label, win, t):
-    from qgis.PyQt.QtWidgets import QTableWidget
-    for t in [t]:
-        if not t.isVisibleTo(win) or t.rowCount() == 0:
-            continue
-        heads = [t.horizontalHeaderItem(i).text() if t.horizontalHeaderItem(i) else ""
-                 for i in range(t.columnCount())]
-        if "Value" not in heads:
-            continue
-        c = heads.index("Value")
-        right = t.horizontalHeader().sectionPosition(c) + t.columnWidth(c)
-        if right > t.viewport().width() + 2:
-            fail(label, "the {} table's Value column ends at {} px, past its {} px width: it "
-                 "needs a sideways scroll".format(" / ".join(h for h in heads if h), right,
-                                                   t.viewport().width()))
+    if not t.isVisibleTo(win) or t.rowCount() == 0:
+        return
+    heads = [t.horizontalHeaderItem(i).text() if t.horizontalHeaderItem(i) else ""
+             for i in range(t.columnCount())]
+    if "Value" not in heads:
+        return
+    c = heads.index("Value")
+    right = t.horizontalHeader().sectionPosition(c) + t.columnWidth(c)
+    if right > t.viewport().width() + 2:
+        fail(label, "the {} table's Value column ends at {} px, past its {} px width: it "
+             "needs a sideways scroll".format(" / ".join(h for h in heads if h), right,
+                                               t.viewport().width()))
 
 
 def check(label, win, top=True, close=True):
