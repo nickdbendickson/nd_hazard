@@ -175,7 +175,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         dam_layout = QHBoxLayout()
         self.dam_folder_edit = QLineEdit()
         self.dam_folder_edit.setPlaceholderText("Browse or paste the dam project folder")
-        self.dam_browse_btn = QPushButton("Browse Dam Folder...")
+        self.dam_browse_btn = QPushButton("Browse Dam Folder\u2026")
         self.dam_browse_btn.clicked.connect(self.browse_dam_folder)
         self.find_rasters_btn = QPushButton("Find rasters")
         self.find_rasters_btn.setToolTip(
@@ -192,17 +192,17 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         raster_group = QGroupBox("2. Raster Files (Required)")
         raster_layout = QFormLayout()
         self.depth_edit = QLineEdit()
-        self.depth_browse_btn = QPushButton("Browse...")
+        self.depth_browse_btn = QPushButton("Browse\u2026")
         self.depth_browse_btn.clicked.connect(self.browse_depth)
         raster_layout.addRow("Depth (Hmax):",
                              self._inline_row(self.depth_edit, self.depth_browse_btn))
         self.vel_edit = QLineEdit()
-        self.vel_browse_btn = QPushButton("Browse...")
+        self.vel_browse_btn = QPushButton("Browse\u2026")
         self.vel_browse_btn.clicked.connect(self.browse_velocity)
         raster_layout.addRow("Velocity (Vmax):",
                              self._inline_row(self.vel_edit, self.vel_browse_btn))
         self.arr_edit = QLineEdit()
-        self.arr_browse_btn = QPushButton("Browse...")
+        self.arr_browse_btn = QPushButton("Browse\u2026")
         self.arr_browse_btn.clicked.connect(self.browse_arrival)
         raster_layout.addRow("Arrival Time:",
                              self._inline_row(self.arr_edit, self.arr_browse_btn))
@@ -210,7 +210,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.dv_edit.setPlaceholderText("optional - RAS Mapper 'Depth x Velocity' (Max), "
                                         "DSS-WISE DV; flood severity for the loss-of-life "
                                         "estimate (ACER zones use Dmax / Vmax)")
-        self.dv_browse_btn = QPushButton("Browse...")
+        self.dv_browse_btn = QPushButton("Browse\u2026")
         self.dv_browse_btn.clicked.connect(
             lambda: self._browse_raster(self.dv_edit, "Select Depth x Velocity (max) raster"))
         raster_layout.addRow("Depth x Velocity (ft\u00b2/s):",
@@ -268,7 +268,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                                      "temporary folder. Your project is not changed.")
         self.selftest_btn.clicked.connect(self._on_run_selftest)
         selftest_row.addWidget(self.selftest_btn)
-        self.sources_btn = QPushButton("Edit data sources...")
+        self.sources_btn = QPushButton("Edit data sources\u2026")
         self.sources_btn.setToolTip("Opens the file with every download address (NSI, ND GIS "
                                     "Hub, NID, HIFLD, NBI ...). Change an address there when "
                                     "a service moves, then restart QGIS.")

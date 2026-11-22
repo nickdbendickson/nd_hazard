@@ -46,14 +46,14 @@ class RasImportTabMixin(object):
         form = QFormLayout()
         self.ras_plan_edit = QLineEdit()
         self.ras_plan_edit.setPlaceholderText("<project>.p##.hdf (run with 2D output)")
-        b1 = QPushButton("Browse...")
+        b1 = QPushButton("Browse\u2026")
         b1.clicked.connect(self._ras_browse_plan)
         form.addRow("Plan results (.hdf):", self._ras_row(self.ras_plan_edit, b1))
         self.ras_dem_edit = QLineEdit()
         self.ras_dem_edit.setPlaceholderText("optional but recommended - the RAS terrain "
                                              "(GeoTIFF), same coordinate system and "
                                              "vertical units as the model")
-        b2 = QPushButton("Browse...")
+        b2 = QPushButton("Browse\u2026")
         b2.clicked.connect(self._ras_browse_dem)
         form.addRow("Terrain raster:", self._ras_row(self.ras_dem_edit, b2))
         self.ras_breach_spin = QDoubleSpinBox()

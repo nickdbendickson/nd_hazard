@@ -235,7 +235,7 @@ class ClassificationTabMixin(object):
             "The plugin has no curves for non-residential structures (which curves to use is "
             "your choice: Hazus, USACE ...). Without a file only their value exposed is "
             "reported. 'Template' writes a file showing the format.")
-        b_browse = QPushButton("Browse...")
+        b_browse = QPushButton("Browse\u2026")
         b_browse.clicked.connect(self._damage_curves_browse)
         b_tmpl = QPushButton("Template")
         b_tmpl.clicked.connect(self._damage_curves_template)
@@ -253,7 +253,7 @@ class ClassificationTabMixin(object):
             "Compares the population at risk with DSS-WISE's own human-consequence table "
             "(day and night population by census block). A big difference is a reason to look "
             "at the structure data; it does not change the classification.")
-        b_hcom = QPushButton("Browse...")
+        b_hcom = QPushButton("Browse\u2026")
         b_hcom.clicked.connect(self._hcom_browse)
         wrow2 = QWidget()
         hrow2 = QHBoxLayout(wrow2)
@@ -361,7 +361,7 @@ class ClassificationTabMixin(object):
         # 2.33.0: the five tools that open their own window sit on a second row, so the
         # page fits a 1080p screen without a sideways scroll (docs/gui-grammar.md)
         row2 = QHBoxLayout()
-        self.watch_btn = QPushButton("Creep watch...")
+        self.watch_btn = QPushButton("Creep watch\u2026")
         self.watch_btn.setToolTip(
             "Re-classifies every dam in a folder with fresh data and lists the dams whose "
             "class changed or that gained flooded structures since their last run. Runs in "
@@ -369,7 +369,7 @@ class ClassificationTabMixin(object):
             "Processing algorithm 'Hazard creep watch' with qgis_process).")
         self.watch_btn.clicked.connect(self._run_watch)
         row2.addWidget(self.watch_btn)
-        self.series_btn = QPushButton("Dams in series...")
+        self.series_btn = QPushButton("Dams in series\u2026")
         self.series_btn.setToolTip(
             "Screens a folder of studied dams: which dam's breach flood reaches which other "
             "dam (depth, arrival time), cascade candidates and class-order flags. A screening "
@@ -378,7 +378,7 @@ class ClassificationTabMixin(object):
         self.series_btn.clicked.connect(self._run_series)
         row2.addWidget(self.series_btn)
         # 2.30.0: the one-page EAP map, the owner / county letter drafts and the class history
-        self.eap_map_btn = QPushButton("EAP map (1 page)...")
+        self.eap_map_btn = QPushButton("EAP map (1 page)\u2026")
         self.eap_map_btn.setToolTip(
             "Fills a print layout from this dam folder in one click - title block, the "
             "inundation shaded by arrival time, structures, roads, legend and the data "
@@ -386,7 +386,7 @@ class ClassificationTabMixin(object):
             "project's Layout Manager for editing.")
         self.eap_map_btn.clicked.connect(self._build_eap_map)
         row2.addWidget(self.eap_map_btn)
-        self.letters_btn = QPushButton("Owner / county letters...")
+        self.letters_btn = QPushButton("Owner / county letters\u2026")
         self.letters_btn.setToolTip(
             "Drafts the dam-owner letter and the county notification from the last run "
             "(class, the reason, what is downstream, what changed since the last "
@@ -394,7 +394,7 @@ class ClassificationTabMixin(object):
             "language is written for you.")
         self.letters_btn.clicked.connect(self._open_letters)
         row2.addWidget(self.letters_btn)
-        self.history_btn = QPushButton("Class history...")
+        self.history_btn = QPushButton("Class history\u2026")
         self.history_btn.setToolTip(
             "Every classification run recorded for this dam: the class over time with the "
             "data vintage and the plugin version that produced it "
@@ -528,7 +528,7 @@ class ClassificationTabMixin(object):
         self.scn_add_btn = QPushButton("Add scenario")
         self.scn_add_btn.clicked.connect(lambda *a: self._scn_add_row())
         row.addWidget(self.scn_add_btn)
-        self.scn_folder_btn = QPushButton("Add from a folder...")
+        self.scn_folder_btn = QPushButton("Add from a folder\u2026")
         self.scn_folder_btn.setToolTip("Look through a folder of one model run for its "
                                        "depth, velocity, arrival and D x V rasters")
         self.scn_folder_btn.clicked.connect(self._scn_add_from_folder)
