@@ -54,6 +54,10 @@ jobs:
           environment-name: qgis
           create-args: >-
             python=3.12 qgis numpy<2 scipy gdal
+      - name: PyQGIS imports (tests must not fall back to fake_qgis)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import qgis.core; print('PyQGIS', qgis.core.Qgis.version())"
       - name: Plugin suites
         env:
           QT_QPA_PLATFORM: offscreen
@@ -96,6 +100,10 @@ jobs:
           environment-name: qgis
           create-args: >-
             python=3.12 qgis numpy<2 scipy gdal
+      - name: PyQGIS imports (tests must not fall back to fake_qgis)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import qgis.core; print('PyQGIS', qgis.core.Qgis.version())"
       - name: ANUGA environment (conda-forge)
         run: |
           micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy
