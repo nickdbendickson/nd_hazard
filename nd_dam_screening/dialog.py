@@ -288,7 +288,7 @@ class NDDamScreeningDialog(QDialog):
             "1_dams.gpkg, 2_terrain, ...). The window reads it to show which steps are done. "
             "Use a folder per county / per run.")
         self.work_edit.editingFinished.connect(self._changed)
-        self.work_browse = QPushButton("Browse...")
+        self.work_browse = QPushButton("Browse\u2026")
         self.work_browse.clicked.connect(lambda _c=False: self._browse_folder(self.work_edit))
         self.work_open = QPushButton("Open folder")
         self.work_open.clicked.connect(self._open_work_folder)
@@ -483,7 +483,7 @@ class NDDamScreeningDialog(QDialog):
             "Optional: the GeoPackage ND Dam Hazard's 'Export for Screening' writes, or your own "
             "package from step 0. Every input left empty on the Inputs tab is taken from it.")
         self.package_edit.editingFinished.connect(self._changed)
-        b = QPushButton("File...")
+        b = QPushButton("File\u2026")
         b.clicked.connect(lambda _c=False: self._browse_file(self.package_edit, "GeoPackage (*.gpkg)"))
         grid.addWidget(self.package_edit, r, 1)
         grid.addWidget(b, r, 2)
@@ -523,9 +523,9 @@ class NDDamScreeningDialog(QDialog):
             "the tools, shared by the three plugins. Edit it on the Settings tab or in Excel; the tools open "
             "with its values. Empty = the tools' own starting values.")
         self.settings_file_edit.editingFinished.connect(lambda: self._settings_file_edited())
-        b = QPushButton("File...")
+        b = QPushButton("File\u2026")
         b.clicked.connect(lambda _c=False: self._pick_settings_file())
-        self.new_settings_btn = QPushButton("New...")
+        self.new_settings_btn = QPushButton("New\u2026")
         self.new_settings_btn.setToolTip("Write a new settings file with the current values (then edit it on the "
                                          "Settings tab).")
         self.new_settings_btn.clicked.connect(lambda _c=False: self._new_settings_file())
@@ -602,14 +602,14 @@ class NDDamScreeningDialog(QDialog):
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(lambda _c=False: self._stop_chain())
-        self.one_dam_btn = QPushButton("Run one dam...")
+        self.one_dam_btn = QPushButton("Run one dam\u2026")
         self.one_dam_btn.setToolTip("Pick one dam or pond - by ID, or the row selected in the Results tab's dam "
                                     "table - and run the whole chain for it alone (a minute with the built-in "
                                     "engine) into <work folder>/one_dam/<ID>; its report opens at the end. "
                                     "0.28.0: a one-dam run models both loading cases.")
         self.one_dam_btn.clicked.connect(lambda _c=False: self._run_one_dam())
         # 0.26.0: several dams at once, like Run one dam (their own folder, the batch untouched)
-        self.sel_dams_btn = QPushButton("Run selected dams...")
+        self.sel_dams_btn = QPushButton("Run selected dams\u2026")
         self.sel_dams_btn.setToolTip("Tick several dams or ponds and run the whole chain for them alone into "
                                      "<work folder>/one_dam/<IDs> (the step 1 filter is set to their IDs; the "
                                      "window's own settings are not changed).")
@@ -649,7 +649,7 @@ class NDDamScreeningDialog(QDialog):
         grid = QGridLayout()
         for i, key in enumerate(wf.KEYS):
             state = QLabel("")
-            btn = QPushButton("{} - {}...".format(key, wf.TITLE[key]))
+            btn = QPushButton("{} - {}\u2026".format(key, wf.TITLE[key]))
             btn.setToolTip("{}\n(Processing: {})".format(wf.HINT[key], wf.algorithm_id(key)))
             btn.clicked.connect(lambda _c=False, k=key: self._open_step(k))
             note = QLabel("")
@@ -687,7 +687,7 @@ class NDDamScreeningDialog(QDialog):
         self.chain_stop_btn = QPushButton("Stop")
         self.chain_stop_btn.setEnabled(False)
         self.chain_stop_btn.clicked.connect(lambda _c=False: self._stop_chain())
-        self.export_btn = QPushButton("Export settings (JSON)...")
+        self.export_btn = QPushButton("Export settings (JSON)\u2026")
         self.export_btn.setToolTip("Writes this window's choices as the JSON the headless tool (15) also "
                                    "reads; the suite settings file (.xlsx) is the usual way now.")
         self.export_btn.clicked.connect(lambda _c=False: self._export_settings())
@@ -735,7 +735,7 @@ class NDDamScreeningDialog(QDialog):
         for i, (slot, label, _pkg) in enumerate(slots):
             combo = QComboBox()
             combo.currentIndexChanged.connect(self._changed)
-            btn = QPushButton("File...")
+            btn = QPushButton("File\u2026")
             btn.clicked.connect(lambda _c=False, s=slot: self._browse_layer(s))
             self.layer_combo[slot] = combo
             grid.addWidget(QLabel(label), i, 0)
@@ -935,7 +935,7 @@ class NDDamScreeningDialog(QDialog):
             grid.addWidget(QLabel(label), i, 0)
             grid.addWidget(widget, i, 1)
             if kind:
-                b = QPushButton("Browse...")
+                b = QPushButton("Browse\u2026")
                 b.clicked.connect(lambda _c=False, e=widget, k=kind: self._browse_for(e, k))
                 grid.addWidget(b, i, 2)
         lay.addLayout(grid)
@@ -987,11 +987,11 @@ class NDDamScreeningDialog(QDialog):
                                    "dam.json, and an empty dam point is taken from dam.json.")
         self.dem_out = QLineEdit()
         self.dem_out.setPlaceholderText("folder for the tiles and the VRT")
-        browse = QPushButton("Browse...")
+        browse = QPushButton("Browse\u2026")
         browse.clicked.connect(lambda _c=False: self._browse_for(self.dem_out, "dir"))
         counties = QPushButton("Counties on the map")
         counties.clicked.connect(self._show_counties)
-        go = QPushButton("Download DEM...")
+        go = QPushButton("Download DEM\u2026")
         go.clicked.connect(self._open_dem_download)
         grid.addWidget(QLabel("Source"), 0, 0)
         grid.addWidget(self.dem_source, 0, 1)
@@ -1242,11 +1242,11 @@ class NDDamScreeningDialog(QDialog):
             self.type_combo.addItem(t, t)
         self.set_type_btn = QPushButton("Set pond type")
         self.set_type_btn.clicked.connect(lambda _c=False: self._decide("set_type", self.type_combo.currentData()))
-        self.move_btn = QPushButton("Move breach point...")
+        self.move_btn = QPushButton("Move breach point\u2026")
         self.move_btn.setToolTip("Give the new point as 'x, y' in EPSG:5070 metres (the map canvas centre is "
                                  "offered when a map is open); dir_conf becomes 'reviewed'.")
         self.move_btn.clicked.connect(lambda _c=False: self._move_breach())
-        self.note_btn = QPushButton("Add note...")
+        self.note_btn = QPushButton("Add note\u2026")
         self.note_btn.clicked.connect(lambda _c=False: self._add_note())
         for b in (self.review_refresh_btn, self.zoom_btn, self.accept_btn, self.exclude_btn):
             row.addWidget(b)
@@ -1280,12 +1280,12 @@ class NDDamScreeningDialog(QDialog):
                                 "the flood extents, the breach points and arrows, and the review queue; "
                                 "every layer styled.")
         self.add_btn.clicked.connect(lambda _c=False: self._add_results())
-        self.runner_btn = QPushButton("Open Runner...")
+        self.runner_btn = QPushButton("Open Runner\u2026")
         self.runner_btn.setToolTip(
             "Open ND Dam Breach Runner with the dams folder pre-filled — send priority dams to the full "
             "detail model. The Runner reads the same dam.json records Screening wrote.")
         self.runner_btn.clicked.connect(self._open_runner)
-        self.hazard_btn = QPushButton("Open Hazard Helper...")
+        self.hazard_btn = QPushButton("Open Hazard Helper\u2026")
         self.hazard_btn.setToolTip("The classification authority: take the dams that matter there "
                                    "(its 'Dam suite' group reads the same dam.json records).")
         self.hazard_btn.clicked.connect(self._open_hazard)
@@ -1361,11 +1361,11 @@ class NDDamScreeningDialog(QDialog):
         self.priority_edit.setToolTip(
             "The folder of dam folders (one per dam, each with its dam.json) that the suite shares. "
             "Empty = the Dams folder of this work folder.")
-        b = QPushButton("Browse...")
+        b = QPushButton("Browse\u2026")
         b.clicked.connect(lambda _c=False: self._browse_folder(self.priority_edit))
         self.priority_refresh_btn = QPushButton("Refresh the list")
         self.priority_refresh_btn.clicked.connect(lambda _c=False: self.refresh_priority())
-        self.priority_export_btn = QPushButton("Export to Excel...")
+        self.priority_export_btn = QPushButton("Export to Excel\u2026")
         self.priority_export_btn.setToolTip("The whole list on one sheet and the review list (the dams "
                                             "that screen higher, and the incomplete runs) on another.")
         self.priority_export_btn.clicked.connect(lambda _c=False: self._export_priority())

@@ -158,7 +158,7 @@ DS.set_current_path("", remember=True)
 dlg = DLG.NDDamScreeningDialog()
 dlg.work_edit.setText(W)
 dlg._changed()
-assert dlg.sel_dams_btn._text == "Run selected dams..." and dlg.one_dam_btn._text == "Run one dam..."
+assert dlg.sel_dams_btn._text == "Run selected dams\u2026" and dlg.one_dam_btn._text == "Run one dam\u2026"
 DF = [("dam_id", "TEXT"), ("name", "TEXT")]
 _gpkg.write(wf.path(W, "1", "OUT"), {"dams": ("Point", DF, [
     (("Point", (-100.1, 47.1)), {"dam_id": "DWR-5289", "name": "Alpha"}),
