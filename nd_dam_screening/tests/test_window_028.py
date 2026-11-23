@@ -50,7 +50,7 @@ dlg.refresh()
 # "Run all" read like "run all the tools" and sat on its own: the two buttons an engineer uses are
 # now the same row of the Simple tab, named after what they screen.
 assert dlg.run_all_btn._text == "Run county"
-assert dlg.one_dam_btn._text == "Run one dam..." and dlg.sel_dams_btn._text == "Run selected dams..."
+assert dlg.one_dam_btn._text == "Run one dam\u2026" and dlg.sel_dams_btn._text == "Run selected dams\u2026"
 assert "one_dam" in dlg.one_dam_btn.toolTip() and "both loading cases" in dlg.one_dam_btn.toolTip()
 assert "county" in dlg.run_all_btn.toolTip().lower()
 print("OK (5: Run county and Run one dam, side by side)")
