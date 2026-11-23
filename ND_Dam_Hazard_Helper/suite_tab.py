@@ -121,7 +121,7 @@ class SuiteTabMixin(object):
             setattr(self, attr, btn)
             grid.addWidget(btn, i // 4, i % 4)
         # 2.17.0: the Suite data and servers window (suite_data.py) on this dam folder
-        self.suite_data_btn = QPushButton("Data and servers...")
+        self.suite_data_btn = QPushButton("Data and servers\u2026")
         self.suite_data_btn.setToolTip(
             "Plugins > ND Dam Suite > Suite data and servers, on this dam folder: the suite "
             "data folder (offline pack, terrain cache), the server of each kind of data and "
@@ -133,7 +133,7 @@ class SuiteTabMixin(object):
         row = QHBoxLayout()
         self.suite_record_label = QLabel("dam.json: -")
         self.suite_record_label.setWordWrap(True)
-        self.suite_record_btn = QPushButton("dam.json...")
+        self.suite_record_btn = QPushButton("dam.json\u2026")
         self.suite_record_btn.setToolTip(
             "The dam's record shared by the three plugins: values, which tool set them, the "
             "status (screened / modelled / classified / reviewed), values the tools did not "

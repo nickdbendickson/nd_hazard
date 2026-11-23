@@ -266,12 +266,12 @@ class ReviewTabMixin(object):
         self.review_rerun_btn = QPushButton("Save and re-run classification")
         self.review_rerun_btn.clicked.connect(self._review_save_and_rerun)
         # v2.8: two engineers review the same dam separately and merge their decisions
-        self.review_export_btn = QPushButton("Export decisions...")
+        self.review_export_btn = QPushButton("Export decisions\u2026")
         self.review_export_btn.setToolTip(
             "Writes the saved decisions as a portable CSV (with a small header file) to send "
             "to another engineer. Save the decisions first.")
         self.review_export_btn.clicked.connect(self._review_export)
-        self.review_merge_btn = QPushButton("Merge from other engineer...")
+        self.review_merge_btn = QPushButton("Merge from other engineer\u2026")
         self.review_merge_btn.setToolTip(
             "Compares another engineer's exported decisions with yours, lists the differences "
             "and - after you choose how to settle conflicts - merges them (a backup copy of "
@@ -279,13 +279,13 @@ class ReviewTabMixin(object):
         self.review_merge_btn.clicked.connect(self._review_merge)
         # 2.30.0: the field-check sheet for the site visit after a screening High, and the
         # marked-up sheet back into the engineer's review decisions (fieldcheck.py)
-        self.field_sheet_btn = QPushButton("Field-check sheet...")
+        self.field_sheet_btn = QPushButton("Field-check sheet\u2026")
         self.field_sheet_btn.setToolTip(
             "Writes a one-page-per-structure sheet for the site visit (address, what the data "
             "says, depth, velocity, a photo slot and a habitable yes / no box) plus the CSV "
             "to fill in and import again.")
         self.field_sheet_btn.clicked.connect(self._field_sheet_write)
-        self.field_import_btn = QPushButton("Import field-check sheet...")
+        self.field_import_btn = QPushButton("Import field-check sheet\u2026")
         self.field_import_btn.setToolTip(
             "Reads the marked-up Field_Check_Sheet.csv back in: the answers become engineer "
             "review decisions (the same file the Review tab saves) and apply on the next "

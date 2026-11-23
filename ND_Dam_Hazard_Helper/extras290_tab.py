@@ -421,7 +421,7 @@ class Extras290TabMixin(object):
         lay.addLayout(form)
 
         # -- tools
-        self.estimate_btn = QPushButton("Estimate run...")
+        self.estimate_btn = QPushButton("Estimate run\u2026")
         self.estimate_btn.setToolTip(
             "Looks at the rasters and the download choices and tells what this run would "
             "read, download and write - study area, raster cells, data tiles (already in the "
@@ -429,36 +429,36 @@ class Extras290TabMixin(object):
             "written; takes about a second. The times and sizes are ROUGH (assumed costs, "
             "not measurements).")
         self.estimate_btn.clicked.connect(self._on_estimate290)
-        self.profile_save_btn = QPushButton("Save settings profile...")
+        self.profile_save_btn = QPushButton("Save settings profile\u2026")
         self.profile_save_btn.setToolTip(
             "Saves the classification options of this dialog as a small file to share (a "
             "firm's standard settings). Left out: everything of ONE dam or ONE project - "
             "folders, rasters, scenarios, layer choices, paths.")
         self.profile_save_btn.clicked.connect(self._on_profile_save290)
-        self.profile_load_btn = QPushButton("Load settings profile...")
+        self.profile_load_btn = QPushButton("Load settings profile\u2026")
         self.profile_load_btn.setToolTip(
             "Applies a settings profile. Dam- or project-specific entries found in the file "
             "are ignored. The run log records the profile's name and hash, and whether you "
             "changed anything afterwards.")
         self.profile_load_btn.clicked.connect(self._on_profile_load290)
-        self.profile_compare_btn = QPushButton("Compare profiles...")
+        self.profile_compare_btn = QPushButton("Compare profiles\u2026")
         self.profile_compare_btn.setToolTip(
             "Lists the settings that differ between two profile files.")
         self.profile_compare_btn.clicked.connect(self._on_profile_compare290)
-        self.reproduce_btn = QPushButton("Reproduce a package...")
+        self.reproduce_btn = QPushButton("Reproduce a package\u2026")
         self.reproduce_btn.setToolTip(
             "Re-runs a classification from its submittal package (folder or .zip) in an "
             "EMPTY work folder - with the settings, rasters and data of that run, nothing "
             "downloaded, nothing added to this project - and checks that the same result "
             "comes out. Takes as long as the original run.")
         self.reproduce_btn.clicked.connect(self._on_reproduce290)
-        self.portfolio_btn = QPushButton("Portfolio dashboard...")
+        self.portfolio_btn = QPushButton("Portfolio dashboard\u2026")
         self.portfolio_btn.setToolTip(
             "One web page with a row per dam of a folder of dams: class, last run, oldest "
             "data, open review items, creep alert. Read from the files the runs left; "
             "nothing is re-run. The classes are screening results as last run.")
         self.portfolio_btn.clicked.connect(self._on_portfolio290)
-        self.formfill_btn = QPushButton("Fill form template...")
+        self.formfill_btn = QPushButton("Fill form template\u2026")
         self.formfill_btn.setToolTip(
             "Fills YOUR form template (.docx, .txt, .md, .html or .csv) where it has "
             "{{KEY}} placeholders, with values from the last run. No form field is guessed: "

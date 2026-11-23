@@ -122,7 +122,7 @@ class DataTabMixin(object):
         self.output_folder_edit.setReadOnly(True)
         self.output_folder_edit.setPlaceholderText("<dam folder>/outputs - pick the dam folder "
                                                    "on the Setup tab")
-        self.output_browse_btn = QPushButton("Browse...")
+        self.output_browse_btn = QPushButton("Browse\u2026")
         self.output_browse_btn.clicked.connect(self.browse_output)
         form.addRow("Output folder:", self._inline_row(self.output_folder_edit,
                                                        self.output_browse_btn))
@@ -325,11 +325,11 @@ class DataTabMixin(object):
         self.pack_path_edit.setPlaceholderText("ND_Dam_Suite_Pack folder (or an older "
                                                "nd_offline_pack.zip)")
         self.pack_path_edit.editingFinished.connect(self._pack_changed)
-        self.pack_browse_btn = QPushButton("Folder...")
+        self.pack_browse_btn = QPushButton("Folder\u2026")
         self.pack_browse_btn.setToolTip("Pick the pack folder (the one holding manifest.json "
                                         "and LAYERS.txt).")
         self.pack_browse_btn.clicked.connect(self._browse_pack)
-        self.pack_zip_btn = QPushButton("Zip...")
+        self.pack_zip_btn = QPushButton("Zip\u2026")
         self.pack_zip_btn.setToolTip("Pick an older pack zip (nd_offline_pack.zip).")
         self.pack_zip_btn.clicked.connect(self._browse_pack_zip)
         self.pack_clear_btn = QPushButton("Clear")
@@ -354,7 +354,7 @@ class DataTabMixin(object):
         self.pack_status_label = QLabel("")
         self.pack_status_label.setWordWrap(True)
         oform.addRow("Status:", self.pack_status_label)
-        self.pack_build_btn = QPushButton("Build offline pack...")
+        self.pack_build_btn = QPushButton("Build offline pack\u2026")
         self.pack_build_btn.setToolTip(
             "Downloads every data set for all of North Dakota into a pack folder, one "
             "GeoPackage per layer (needs internet; an hour or more; a large folder). An "
@@ -389,7 +389,7 @@ class DataTabMixin(object):
         self.refresh_layers_btn = QPushButton("Refresh layer lists")
         self.refresh_layers_btn.clicked.connect(self._refresh_layer_combos)
         row.addWidget(self.refresh_layers_btn)
-        self.data_sources_btn = QPushButton("Edit data sources...")
+        self.data_sources_btn = QPushButton("Edit data sources\u2026")
         self.data_sources_btn.setToolTip(
             "Opens the file with every download address (NSI, ND GIS Hub, NID, HIFLD, NBI ...). "
             "Point an entry at your work server's service when it has the same layer, then "
