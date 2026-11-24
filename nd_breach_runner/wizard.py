@@ -287,7 +287,7 @@ def _classes():
         row = W.QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
         edit = W.QLineEdit()
-        button = W.QPushButton("Browse...")
+        button = W.QPushButton("Browse\u2026")
         if folder:
             button.clicked.connect(lambda *_: browse_folder(page, edit))
         else:
@@ -1008,7 +1008,7 @@ def _classes():
         def estimate(self, *_):
             a = self.collect()
             wiz = self.wizard()
-            self.result.setText("Setting up the dam and timing a test flood...")
+            self.result.setText("Setting up the dam and timing a test flood\u2026")
             _busy(True)
             try:
                 lines = wiz.session.cache.compute(a)

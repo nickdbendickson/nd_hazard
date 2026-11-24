@@ -589,7 +589,7 @@ class PackDialog(QDialog):
         """Probe the services on a worker thread; a timer draws the rows when they arrive."""
         if self._service_thread is not None and self._service_thread.is_alive():
             return
-        self.service_note.setText("Asking the services (a few seconds)...")
+        self.service_note.setText("Asking the services (a few seconds)\u2026")
         self.service_rows = []
         box = {"rows": None}
 
