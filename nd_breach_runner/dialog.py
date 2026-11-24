@@ -218,7 +218,7 @@ class NDBreachRunnerDialog(QDialog):
         self.dams_edit.setToolTip("The Dams folder: each dam has a folder named after its ID in it "
                                   "(the Runner's own layout).")
         self.dams_edit.editingFinished.connect(self._changed)
-        b = QPushButton("Browse...")
+        b = QPushButton("Browse\u2026")
         b.clicked.connect(lambda _c=False: self._browse_folder(self.dams_edit))
         grid.addWidget(QLabel("Dams folder:"), 0, 0)
         grid.addWidget(self.dams_edit, 0, 1)
@@ -238,7 +238,7 @@ class NDBreachRunnerDialog(QDialog):
         self.dem_combo.setToolTip("The DEM filled into the model tools (a raster layer of the project "
                                   "or a file). Empty: choose it in the tool's dialog.")
         self.dem_combo.currentIndexChanged.connect(self._changed)
-        b = QPushButton("File...")
+        b = QPushButton("File\u2026")
         b.clicked.connect(lambda _c=False: self._browse_dem())
         grid.addWidget(QLabel("DEM:"), 2, 0)
         grid.addWidget(self.dem_combo, 2, 1)
@@ -419,11 +419,11 @@ class NDBreachRunnerDialog(QDialog):
             "ND DWR QL2 native: feet, EPSG:3721/2266, Erdas Imagine .img at 1 m — warped.")
         self.dem_out = QLineEdit()
         self.dem_out.setToolTip("Folder for the tiles and the standardised GeoTIFF.")
-        browse = QPushButton("Browse...")
+        browse = QPushButton("Browse\u2026")
         browse.clicked.connect(self._browse_dem_folder)
         counties = QPushButton("Counties on the map")
         counties.clicked.connect(self._show_counties)
-        go = QPushButton("Download DEM...")
+        go = QPushButton("Download DEM\u2026")
         go.clicked.connect(self._open_dem_download)
         grid.addWidget(QLabel("Source"), 0, 0)
         grid.addWidget(self.dem_source, 0, 1)
@@ -725,12 +725,12 @@ class NDBreachRunnerDialog(QDialog):
             grid.addWidget(btn, i // 2, i % 2)
         lay.addLayout(grid)
         if tab == "Results":
-            self.hazard_btn = QPushButton("Open ND Dam Hazard...")
+            self.hazard_btn = QPushButton("Open ND Dam Hazard\u2026")
             self.hazard_btn.setToolTip("The classification authority; its 'Dam suite' group reads the "
                                        "same dam.json records.")
             self.hazard_btn.clicked.connect(lambda _c=False: self._open_other(
                 "ND_Dam_Hazard_Helper", "ND Dam Hazard"))
-            self.screening_btn = QPushButton("Open ND Dam Breach Screening...")
+            self.screening_btn = QPushButton("Open ND Dam Breach Screening\u2026")
             self.screening_btn.clicked.connect(lambda _c=False: self._open_other(
                 "nd_dam_screening", "ND Dam Breach Screening"))
             row = QHBoxLayout()
@@ -740,7 +740,7 @@ class NDBreachRunnerDialog(QDialog):
             lay.addLayout(row)
         if tab == "Checks":
             row = QHBoxLayout()
-            self.paths_btn = QPushButton("Model paths (Processing options)...")
+            self.paths_btn = QPushButton("Model paths (Processing options)\u2026")
             self.paths_btn.clicked.connect(lambda _c=False: self._model_paths())
             self.help_btn = QPushButton("Help (README)")
             self.help_btn.clicked.connect(lambda _c=False: self._open_help())
@@ -928,9 +928,9 @@ class NDBreachRunnerDialog(QDialog):
             "the Runner's tools open with its values. Empty = the tools' own starting values. Edits in "
             "the grid are saved to the file at once.")
         self.settings_file_edit.editingFinished.connect(lambda: self._settings_file_edited())
-        b = QPushButton("File...")
+        b = QPushButton("File\u2026")
         b.clicked.connect(lambda _c=False: self._pick_settings_file())
-        n = QPushButton("New...")
+        n = QPushButton("New\u2026")
         n.setToolTip("Write a new settings file with the current values.")
         n.clicked.connect(lambda _c=False: self._new_settings_file())
         row.addWidget(self.settings_file_edit, 1)
